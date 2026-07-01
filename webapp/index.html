@@ -2,428 +2,802 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="theme-color" content="#080b0f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>OMNICEE Command</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="/socket.io/socket.io.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 :root {
-  --bg: #080b0f;
-  --panel: #0e141b;
-  --panel-2: #121a23;
-  --panel-3: #172231;
-  --line: #223044;
-  --line-hi: #35506d;
-  --text: #e6edf6;
-  --muted: #8a9ab0;
-  --faint: #526173;
-  --green: #18d39e;
-  --green-soft: rgba(24,211,158,.12);
-  --red: #ff5f6d;
-  --red-soft: rgba(255,95,109,.12);
-  --amber: #f2b84b;
-  --amber-soft: rgba(242,184,75,.12);
-  --blue: #6fb7ff;
-  --violet: #b7a6ff;
-  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
-  --font-ui: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --bg: #060a0f;
+  --bg-2: #0a0f16;
+  --panel: #0d131c;
+  --panel-2: #111922;
+  --panel-3: #162030;
+  --panel-hover: #1a2638;
+  --line: #1c2a3a;
+  --line-hi: #2d4460;
+  --text: #e8edf4;
+  --muted: #8a9bb2;
+  --faint: #4d6178;
+  --green: #00e68a;
+  --green-dim: #00c278;
+  --green-soft: rgba(0,230,138,.08);
+  --green-bg: rgba(0,230,138,.04);
+  --red: #ff5168;
+  --red-dim: #e03e55;
+  --red-soft: rgba(255,81,104,.08);
+  --amber: #f0b429;
+  --amber-soft: rgba(240,180,41,.08);
+  --blue: #5ea8ff;
+  --blue-soft: rgba(94,168,255,.08);
+  --violet: #a78bfa;
+  --violet-soft: rgba(167,139,250,.08);
+  --cyan: #22d3ee;
+  --font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", Consolas, monospace;
+  --font-ui: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --radius: 8px;
+  --radius-sm: 5px;
+  --shadow: 0 1px 3px rgba(0,0,0,.4), 0 4px 12px rgba(0,0,0,.2);
+  --transition: 180ms ease;
 }
-* { box-sizing: border-box; }
-html, body { height: 100%; margin: 0; }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { height: 100%; -webkit-tap-highlight-color: transparent; }
 body {
+  height: 100%;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-ui);
+  font-size: 13px;
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
 }
-button, input { font: inherit; }
+button, input, select { font: inherit; border: none; outline: none; cursor: pointer; }
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--line-hi); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--faint); }
+
+/* ── Layout ── */
 .app {
   height: 100dvh;
   display: grid;
-  grid-template-rows: 54px 1fr;
+  grid-template-rows: 52px 1fr 48px;
 }
+
+/* ── Top bar ── */
 .topbar {
-  display: grid;
-  grid-template-columns: 260px 1fr auto;
+  display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
   padding: 0 16px;
   border-bottom: 1px solid var(--line);
-  background: #0a0f15;
+  background: var(--bg-2);
+  z-index: 10;
 }
 .brand {
   font-family: var(--font-mono);
-  font-weight: 900;
-  letter-spacing: .16em;
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: .18em;
   color: var(--green);
+  flex-shrink: 0;
 }
-.brand span { color: var(--muted); font-weight: 500; }
+.brand span { color: var(--faint); font-weight: 500; font-size: 12px; letter-spacing: .12em; }
 .ticker {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   overflow: hidden;
+  flex: 1;
+  min-width: 0;
 }
 .ticker-pill {
-  display: grid;
-  grid-template-columns: auto auto auto;
-  gap: 8px;
-  align-items: center;
-  white-space: nowrap;
-  padding: 6px 10px;
-  border: 1px solid var(--line);
-  background: var(--panel);
-  font-family: var(--font-mono);
-  font-size: 11px;
-}
-.status {
   display: flex;
   align-items: center;
   gap: 8px;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  border: 1px solid var(--line);
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--muted);
+  font-weight: 500;
+  white-space: nowrap;
+  transition: border-color var(--transition);
 }
-.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
-.dot.live { background: var(--green); box-shadow: 0 0 12px var(--green); }
-.dot.error { background: var(--red); }
+.ticker-pill:hover { border-color: var(--line-hi); }
+.ticker-pill .sym { color: var(--text); }
+.ticker-pill .price { color: var(--muted); }
+.conn-badge {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.pulse {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--amber);
+  transition: all 300ms;
+}
+.pulse.live { background: var(--green); box-shadow: 0 0 8px rgba(0,230,138,.5); animation: pulse-glow 2s ease-in-out infinite; }
+.pulse.error { background: var(--red); }
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 4px rgba(0,230,138,.3); }
+  50% { box-shadow: 0 0 12px rgba(0,230,138,.6); }
+}
+
+/* ── Workspace ── */
 .workspace {
   min-height: 0;
-  display: grid;
-  grid-template-columns: 260px minmax(0, 1fr) 360px;
-  gap: 1px;
-  background: var(--line);
-}
-.rail, .main, .side {
-  min-height: 0;
-  background: var(--bg);
   overflow: hidden;
 }
-.rail, .side { display: grid; grid-template-rows: auto 1fr; }
-.nav {
-  display: grid;
-  gap: 6px;
-  padding: 12px;
-  border-bottom: 1px solid var(--line);
+.view { display: none; height: 100%; overflow: auto; }
+.view.active { display: block; }
+
+/* ── Bottom nav (mobile-first) ── */
+.bottomnav {
+  display: flex;
+  align-items: stretch;
+  border-top: 1px solid var(--line);
+  background: var(--bg-2);
+  z-index: 10;
 }
-.nav button {
-  height: 34px;
-  border: 1px solid var(--line);
-  background: var(--panel);
-  color: var(--muted);
-  text-align: left;
-  padding: 0 10px;
-  cursor: pointer;
+.nav-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  background: transparent;
+  color: var(--faint);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  transition: color var(--transition);
+  position: relative;
 }
-.nav button.active { color: var(--green); border-color: var(--green); background: var(--green-soft); }
-.metrics {
-  display: grid;
-  gap: 1px;
-  background: var(--line);
+.nav-btn svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.8; }
+.nav-btn.active { color: var(--green); }
+.nav-btn.active::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 20%; right: 20%;
+  height: 2px;
+  background: var(--green);
+  border-radius: 0 0 2px 2px;
 }
-.metric {
+.nav-btn:hover { color: var(--muted); }
+.nav-badge {
+  position: absolute;
+  top: 4px; right: calc(50% - 16px);
+  min-width: 16px; height: 16px;
+  border-radius: 8px;
+  background: var(--red);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+}
+
+/* ── Cards / Panels ── */
+.card {
   background: var(--panel);
-  padding: 14px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
 }
-.label {
+.card-head {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
   font-family: var(--font-mono);
   font-size: 10px;
-  letter-spacing: .12em;
+  font-weight: 600;
+  letter-spacing: .14em;
   text-transform: uppercase;
   color: var(--faint);
-}
-.value {
-  margin-top: 7px;
-  font-family: var(--font-mono);
-  font-size: 24px;
-  font-weight: 900;
-}
-.sub {
-  margin-top: 3px;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--muted);
-}
-.good { color: var(--green); }
-.bad { color: var(--red); }
-.warn { color: var(--amber); }
-.blue { color: var(--blue); }
-.main {
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
-}
-.command-strip {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 1px;
-  background: var(--line);
-  border-bottom: 1px solid var(--line);
-}
-.strip-cell {
-  min-width: 0;
-  background: var(--panel);
-  padding: 12px;
-}
-.strip-cell .value { font-size: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--line);
-  background: #0a0f15;
 }
-.toolbar-title {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  letter-spacing: .16em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.toolbar-actions { display: flex; gap: 6px; }
-.chip {
-  border: 1px solid var(--line);
-  background: var(--panel);
-  color: var(--muted);
-  height: 28px;
-  padding: 0 10px;
-  font-family: var(--font-mono);
-  font-size: 10px;
-}
-.chip.active { color: var(--green); border-color: var(--green); background: var(--green-soft); }
-.outcome-grid {
+.card-body { padding: 14px; }
+.card-body.flush { padding: 0; }
+
+/* ── Metrics grid ── */
+.metrics-strip {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
-  margin-top: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
 }
-.outcome-grid button {
-  height: 30px;
-  border: 1px solid var(--line);
-  background: var(--panel-2);
-  color: var(--muted);
+.metric-cell {
+  background: var(--panel);
+  padding: 14px;
+}
+.metric-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.metric-val {
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1;
+}
+.metric-sub {
+  margin-top: 4px;
   font-family: var(--font-mono);
   font-size: 10px;
-  cursor: pointer;
+  color: var(--muted);
 }
-.outcome-grid button.win { color: var(--green); border-color: rgba(24,211,158,.45); }
-.outcome-grid button.loss { color: var(--red); border-color: rgba(255,95,109,.45); }
-.outcome-grid button.be { color: var(--amber); border-color: rgba(242,184,75,.45); }
-.matrix-wrap { min-height: 0; overflow: auto; background: var(--bg); }
-table.matrix {
+
+/* ── Signal table ── */
+.signal-table {
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed;
   font-family: var(--font-mono);
+  font-size: 12px;
 }
-.matrix th {
-  position: sticky;
-  top: 0;
-  background: #0a0f15;
-  z-index: 3;
+.signal-table thead { position: sticky; top: 0; z-index: 5; }
+.signal-table th {
+  background: var(--bg-2);
   color: var(--faint);
-  font-size: 10px;
+  font-size: 9px;
+  font-weight: 700;
   letter-spacing: .12em;
   text-transform: uppercase;
   text-align: left;
-  padding: 9px 10px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--line);
 }
-.matrix td {
-  padding: 10px;
+.signal-table td {
+  padding: 10px 12px;
   border-bottom: 1px solid var(--line);
   color: var(--muted);
-  font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: background var(--transition);
 }
-.matrix tr { cursor: pointer; background: var(--panel); }
-.matrix tr:nth-child(even) { background: #0c1219; }
-.matrix tr:hover, .matrix tr.selected { background: var(--panel-3); }
-.dir {
+.signal-table tr { cursor: pointer; background: var(--panel); }
+.signal-table tr:nth-child(even) { background: var(--bg-2); }
+.signal-table tr:hover { background: var(--panel-hover); }
+.signal-table tr.selected { background: var(--panel-3); border-left: 2px solid var(--green); }
+
+/* ── Badges / chips ── */
+.dir-badge {
   display: inline-flex;
-  min-width: 54px;
+  align-items: center;
   justify-content: center;
-  padding: 3px 7px;
-  border: 1px solid var(--line);
+  min-width: 52px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .06em;
 }
-.dir.long { color: var(--green); border-color: rgba(24,211,158,.45); background: var(--green-soft); }
-.dir.short { color: var(--red); border-color: rgba(255,95,109,.45); background: var(--red-soft); }
-.scorebar {
-  height: 6px;
-  background: #243143;
-  position: relative;
+.dir-badge.long { color: var(--green); background: var(--green-soft); border: 1px solid rgba(0,230,138,.2); }
+.dir-badge.short { color: var(--red); background: var(--red-soft); border: 1px solid rgba(255,81,104,.2); }
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-weight: 600;
 }
-.scorebar span {
-  position: absolute;
-  inset: 0 auto 0 0;
-  background: var(--green);
-}
-.side-head {
-  padding: 12px;
-  border-bottom: 1px solid var(--line);
-  background: #0a0f15;
-}
-.side-body {
-  min-height: 0;
-  overflow: auto;
-  display: grid;
-  align-content: start;
-  gap: 1px;
+.status-badge.approved { color: var(--green); background: var(--green-soft); }
+.status-badge.warn { color: var(--amber); background: var(--amber-soft); }
+.status-badge.rejected { color: var(--red); background: var(--red-soft); }
+
+.score-bar {
+  height: 4px;
   background: var(--line);
+  border-radius: 2px;
+  margin-top: 4px;
+  overflow: hidden;
 }
-.panel {
+.score-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  transition: width 400ms ease;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
   background: var(--panel);
-  padding: 12px;
-}
-.kv {
-  display: grid;
-  grid-template-columns: 120px 1fr;
-  gap: 8px;
-  padding: 7px 0;
-  border-bottom: 1px solid var(--line);
+  color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 10px;
+  font-weight: 600;
+  transition: all var(--transition);
 }
-.kv:last-child { border-bottom: 0; }
-.tape-row {
-  display: grid;
-  grid-template-columns: 72px 1fr auto;
-  gap: 8px;
+.chip:hover { border-color: var(--line-hi); color: var(--text); }
+.chip.active { color: var(--green); border-color: rgba(0,230,138,.3); background: var(--green-soft); }
+
+/* ── KV rows ── */
+.kv-row {
+  display: flex;
+  justify-content: space-between;
   align-items: center;
   padding: 8px 0;
   border-bottom: 1px solid var(--line);
   font-family: var(--font-mono);
   font-size: 11px;
 }
-.reason-list {
-  margin: 8px 0 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  gap: 6px;
+.kv-row:last-child { border-bottom: none; }
+.kv-key { color: var(--faint); }
+.kv-val { color: var(--text); font-weight: 500; text-align: right; }
+
+/* ── Validation layer bars ── */
+.layer-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
 }
-.reason-list li {
+.layer-bar:last-child { border-bottom: none; }
+.layer-name {
+  width: 110px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
   color: var(--muted);
+}
+.layer-track {
+  flex: 1;
+  height: 6px;
+  background: var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.layer-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 500ms ease;
+}
+.layer-score {
+  width: 36px;
+  text-align: right;
   font-family: var(--font-mono);
   font-size: 11px;
-  line-height: 1.45;
+  font-weight: 700;
+  flex-shrink: 0;
 }
-.reason-list li::before { content: ">";
-  color: var(--green);
-  margin-right: 6px;
+
+/* ── Agent vote stack ── */
+.agent-vote {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
 }
-.empty {
-  padding: 40px;
+.agent-vote:last-child { border-bottom: none; }
+.agent-icon {
+  width: 28px; height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+.agent-info { flex: 1; min-width: 0; }
+.agent-name { font-weight: 600; font-size: 12px; }
+.agent-detail { font-size: 10px; color: var(--faint); margin-top: 1px; }
+.agent-score {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* ── Tape / event log ── */
+.tape-event {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  transition: background var(--transition);
+}
+.tape-event:hover { background: var(--panel-hover); }
+.tape-time { color: var(--faint); width: 48px; flex-shrink: 0; font-size: 10px; }
+.tape-sym { color: var(--blue); width: 70px; flex-shrink: 0; font-weight: 600; }
+.tape-msg { flex: 1; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Outcome buttons ── */
+.outcome-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-top: 10px;
+}
+.outcome-btn {
+  height: 34px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  transition: all var(--transition);
+}
+.outcome-btn.win { color: var(--green); background: var(--green-soft); border: 1px solid rgba(0,230,138,.2); }
+.outcome-btn.win:hover { background: rgba(0,230,138,.15); }
+.outcome-btn.be { color: var(--amber); background: var(--amber-soft); border: 1px solid rgba(240,180,41,.2); }
+.outcome-btn.be:hover { background: rgba(240,180,41,.15); }
+.outcome-btn.loss { color: var(--red); background: var(--red-soft); border: 1px solid rgba(255,81,104,.2); }
+.outcome-btn.loss:hover { background: rgba(255,81,104,.15); }
+
+/* ── Utility ── */
+.good { color: var(--green) !important; }
+.bad { color: var(--red) !important; }
+.warn-text { color: var(--amber) !important; }
+.blue-text { color: var(--blue) !important; }
+.violet-text { color: var(--violet) !important; }
+.text-xs { font-size: 10px; }
+.text-sm { font-size: 11px; }
+.text-mono { font-family: var(--font-mono); }
+.text-faint { color: var(--faint); }
+.text-muted { color: var(--muted); }
+.fw-600 { font-weight: 600; }
+.fw-700 { font-weight: 700; }
+.fw-800 { font-weight: 800; }
+.mt-8 { margin-top: 8px; }
+.mt-12 { margin-top: 12px; }
+.mt-16 { margin-top: 16px; }
+.gap-8 { gap: 8px; }
+.gap-12 { gap: 12px; }
+.p-16 { padding: 16px; }
+.flex { display: flex; }
+.flex-col { display: flex; flex-direction: column; }
+.items-center { align-items: center; }
+.justify-between { justify-content: space-between; }
+.empty-state {
+  padding: 48px 24px;
+  text-align: center;
   color: var(--faint);
   font-family: var(--font-mono);
-  text-align: center;
+  font-size: 12px;
 }
-@media (max-width: 980px) {
-  body { overflow: auto; }
-  .app { height: auto; min-height: 100dvh; }
-  .topbar { grid-template-columns: 1fr auto; }
+.section-gap { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+
+/* ── Desktop layout ── */
+@media (min-width: 1024px) {
+  .app { grid-template-rows: 52px 1fr; }
+  .bottomnav { display: none; }
+  .workspace { display: grid; grid-template-columns: 56px 1fr; }
+  .sidebar-rail {
+    display: flex !important;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 10px 0;
+    border-right: 1px solid var(--line);
+    background: var(--bg-2);
+  }
+  .sidebar-btn {
+    width: 40px; height: 40px;
+    border-radius: var(--radius);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    color: var(--faint);
+    transition: all var(--transition);
+    position: relative;
+  }
+  .sidebar-btn svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.8; }
+  .sidebar-btn:hover { color: var(--muted); background: var(--panel); }
+  .sidebar-btn.active { color: var(--green); background: var(--green-soft); }
+  .sidebar-btn .nav-badge { top: 2px; right: 2px; }
+  .view.active { display: grid; }
+  .view-dashboard { grid-template-columns: 1fr 380px; grid-template-rows: auto 1fr; }
+  .dash-top { grid-column: 1 / -1; }
+  .view-signals { grid-template-columns: 1fr 400px; }
+  .view-validation { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 1023px) {
+  .sidebar-rail { display: none !important; }
+  .view-dashboard { display: flex; flex-direction: column; }
+  .view-signals { display: flex; flex-direction: column; }
+  .view-validation { display: flex; flex-direction: column; }
   .ticker { display: none; }
-  .workspace { grid-template-columns: 1fr; }
-  .rail, .side { min-height: auto; }
-  .command-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .matrix th:nth-child(7), .matrix td:nth-child(7),
-  .matrix th:nth-child(8), .matrix td:nth-child(8) { display: none; }
+  .metrics-strip { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ── Animations ── */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-in { animation: fade-in 300ms ease forwards; }
 </style>
 </head>
 <body>
 <div class="app">
+
+  <!-- ── Top Bar ── -->
   <header class="topbar">
-    <div class="brand">OMNICEE<span>.COMMAND</span></div>
+    <div class="brand">OMNICEE<span> COMMAND</span></div>
     <div class="ticker" id="ticker"></div>
-    <div class="status"><span class="dot" id="status-dot"></span><span id="status-text">CONNECTING</span></div>
+    <div class="conn-badge">
+      <span class="pulse" id="status-dot"></span>
+      <span id="status-text">CONNECTING</span>
+    </div>
   </header>
 
+  <!-- ── Workspace ── -->
   <section class="workspace">
-    <aside class="rail">
-      <nav class="nav">
-        <button class="active" data-view="matrix">SIGNAL MATRIX</button>
-        <button data-view="markets">MARKET FEEDS</button>
-        <button data-view="risk">RISK STATE</button>
-        <button data-view="intel">INTEL TAPE</button>
-      </nav>
-      <div class="metrics">
-        <div class="metric"><div class="label">System Gate</div><div class="value good" id="m-gate">ARMED</div><div class="sub" id="m-gate-sub">no rejected setup</div></div>
-        <div class="metric"><div class="label">Live Symbols</div><div class="value" id="m-symbols">0</div><div class="sub">streaming now</div></div>
-        <div class="metric"><div class="label">Daily PnL</div><div class="value" id="m-pnl">0.0%</div><div class="sub" id="m-risk">risk normal</div></div>
-        <div class="metric"><div class="label">MongoDB</div><div class="value blue" id="m-db">CHECK</div><div class="sub">Atlas persistence</div></div>
-        <div class="metric"><div class="label">Learning</div><div class="value warn" id="m-learn">WARM</div><div class="sub" id="m-learn-sub">awaiting outcomes</div></div>
-      </div>
-    </aside>
 
-    <main class="main">
-      <div class="command-strip">
-        <div class="strip-cell"><div class="label">Best Regime</div><div class="value" id="c-regime">UNKNOWN</div><div class="sub" id="c-regime-sub">waiting for feed</div></div>
-        <div class="strip-cell"><div class="label">A-Grade</div><div class="value good" id="c-gradea">0</div><div class="sub">session signals</div></div>
-        <div class="strip-cell"><div class="label">Avg Score</div><div class="value" id="c-score">--</div><div class="sub">approved matrix</div></div>
-        <div class="strip-cell"><div class="label">Net Size</div><div class="value warn" id="c-size">100%</div><div class="sub">risk engine factor</div></div>
-        <div class="strip-cell"><div class="label">Transport</div><div class="value blue" id="c-transport">SOCKET.IO</div><div class="sub">REST fallback enabled</div></div>
-      </div>
-      <div class="toolbar">
-        <div class="toolbar-title" id="view-title">Approved Signal Matrix</div>
-        <div class="toolbar-actions">
-          <button class="chip active" id="filter-all">ALL</button>
-          <button class="chip" id="filter-a">A ONLY</button>
-          <button class="chip" id="filter-live">LIVE FEEDS</button>
+    <!-- Desktop sidebar -->
+    <nav class="sidebar-rail" id="sidebar">
+      <button class="sidebar-btn active" data-view="dashboard" title="Dashboard">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      </button>
+      <button class="sidebar-btn" data-view="signals" title="Signals">
+        <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      </button>
+      <button class="sidebar-btn" data-view="validation" title="Validation">
+        <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      </button>
+      <button class="sidebar-btn" data-view="tape" title="Event Tape">
+        <svg viewBox="0 0 24 24"><line x1="17" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="17" y1="18" x2="3" y2="18"/></svg>
+      </button>
+      <button class="sidebar-btn" data-view="risk" title="Risk">
+        <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      </button>
+    </nav>
+
+    <!-- Dashboard View -->
+    <div class="view active" id="view-dashboard">
+      <div class="dash-top section-gap">
+        <div class="metrics-strip" id="metrics-strip">
+          <div class="metric-cell"><div class="metric-label">System Gate</div><div class="metric-val good" id="m-gate">ARMED</div><div class="metric-sub" id="m-gate-sub">no rejected setup</div></div>
+          <div class="metric-cell"><div class="metric-label">Live Symbols</div><div class="metric-val blue-text" id="m-symbols">0</div><div class="metric-sub">streaming</div></div>
+          <div class="metric-cell"><div class="metric-label">Daily PnL</div><div class="metric-val" id="m-pnl">0.0%</div><div class="metric-sub" id="m-risk">risk normal</div></div>
+          <div class="metric-cell"><div class="metric-label">Best Regime</div><div class="metric-val" id="c-regime">UNKNOWN</div><div class="metric-sub" id="c-regime-sub">waiting for feed</div></div>
+          <div class="metric-cell"><div class="metric-label">A-Grade Signals</div><div class="metric-val good" id="c-gradea">0</div><div class="metric-sub">this session</div></div>
+          <div class="metric-cell"><div class="metric-label">Avg Score</div><div class="metric-val" id="c-score">--</div><div class="metric-sub">approved signals</div></div>
+          <div class="metric-cell"><div class="metric-label">Net Sizing</div><div class="metric-val warn-text" id="c-size">100%</div><div class="metric-sub">risk engine factor</div></div>
+          <div class="metric-cell"><div class="metric-label">Learning</div><div class="metric-val warn-text" id="m-learn">WARM</div><div class="metric-sub" id="m-learn-sub">awaiting outcomes</div></div>
+          <div class="metric-cell"><div class="metric-label">MongoDB</div><div class="metric-val blue-text" id="m-db">CHECK</div><div class="metric-sub">Atlas persistence</div></div>
         </div>
       </div>
-      <div class="matrix-wrap" id="matrix-wrap">
-        <table class="matrix">
-          <thead>
-            <tr>
-              <th style="width:84px">Time</th>
-              <th style="width:94px">Symbol</th>
-              <th style="width:82px">Side</th>
-              <th style="width:86px">Score</th>
-              <th style="width:100px">Regime</th>
-              <th style="width:92px">Gate</th>
-              <th style="width:92px">Entry</th>
-              <th style="width:92px">Stop</th>
-              <th>Execution Thesis</th>
-            </tr>
-          </thead>
-          <tbody id="signal-body">
-            <tr><td colspan="9"><div class="empty">Waiting for approved institutional signals...</div></td></tr>
-          </tbody>
-        </table>
-      </div>
-    </main>
 
-    <aside class="side">
-      <div class="side-head">
-        <div class="label">Selected Signal / Live Tape</div>
-        <div class="sub" id="selected-title">No signal selected</div>
+      <!-- Dashboard: recent signals card -->
+      <div class="section-gap" style="overflow:auto;">
+        <div class="card">
+          <div class="card-head">
+            <span>Recent Signals</span>
+            <div class="flex gap-8">
+              <button class="chip active" data-filter="ALL">ALL</button>
+              <button class="chip" data-filter="A">A ONLY</button>
+            </div>
+          </div>
+          <div class="card-body flush" style="overflow:auto;max-height:calc(100vh - 320px);">
+            <table class="signal-table">
+              <thead><tr>
+                <th style="width:52px">Time</th>
+                <th style="width:80px">Symbol</th>
+                <th style="width:68px">Side</th>
+                <th style="width:72px">Score</th>
+                <th style="width:100px">Regime</th>
+                <th style="width:90px">Gate</th>
+                <th style="width:82px">Entry</th>
+                <th style="width:82px">Stop</th>
+                <th>Thesis</th>
+              </tr></thead>
+              <tbody id="signal-body">
+                <tr><td colspan="9"><div class="empty-state">Waiting for approved institutional signals...</div></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
-      <div class="side-body">
-        <section class="panel" id="detail-panel">
-          <div class="empty">Select a row in the matrix to inspect execution quality, agent votes, risk and invalidation.</div>
-        </section>
-        <section class="panel">
-          <div class="label">Gate Tape</div>
-          <div id="gate-tape"></div>
-        </section>
-        <section class="panel">
-          <div class="label">Regime Board</div>
-          <div id="regime-board"></div>
-        </section>
+
+      <!-- Dashboard: detail sidebar -->
+      <div class="section-gap" style="overflow:auto;">
+        <div class="card">
+          <div class="card-head"><span id="detail-title">Signal Inspector</span></div>
+          <div class="card-body" id="detail-panel">
+            <div class="empty-state">Select a signal to inspect execution quality, agent votes, validation layers, and risk.</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span>Regime Board</span></div>
+          <div class="card-body" id="regime-board">
+            <div class="text-faint text-xs text-mono">No regime data yet.</div>
+          </div>
+        </div>
       </div>
-    </aside>
+    </div>
+
+    <!-- Signals View -->
+    <div class="view" id="view-signals">
+      <div class="section-gap" style="overflow:auto;">
+        <div class="card" style="flex:1;">
+          <div class="card-head">
+            <span>Full Signal Matrix</span>
+            <div class="flex gap-8">
+              <button class="chip active" data-filter-sig="ALL">ALL</button>
+              <button class="chip" data-filter-sig="A">A GRADE</button>
+              <button class="chip" data-filter-sig="LONG">LONGS</button>
+              <button class="chip" data-filter-sig="SHORT">SHORTS</button>
+            </div>
+          </div>
+          <div class="card-body flush" style="overflow:auto;">
+            <table class="signal-table">
+              <thead><tr>
+                <th style="width:52px">Time</th>
+                <th style="width:80px">Symbol</th>
+                <th style="width:68px">Side</th>
+                <th style="width:72px">Score</th>
+                <th style="width:100px">Regime</th>
+                <th style="width:90px">Gate</th>
+                <th style="width:82px">Entry</th>
+                <th style="width:82px">Stop</th>
+                <th style="width:82px">TP1</th>
+                <th>Thesis</th>
+              </tr></thead>
+              <tbody id="signal-body-full"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="section-gap" style="overflow:auto;">
+        <div class="card">
+          <div class="card-head"><span id="detail-title-full">Signal Detail</span></div>
+          <div class="card-body" id="detail-panel-full">
+            <div class="empty-state">Select a signal from the matrix.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Validation View -->
+    <div class="view" id="view-validation">
+      <div class="section-gap" style="overflow:auto;">
+        <div class="card">
+          <div class="card-head"><span>Ensemble Validation Layers</span></div>
+          <div class="card-body" id="ensemble-panel">
+            <div class="empty-state">Ensemble data populates when signals are processed. Each signal passes through 9 validation layers before approval.</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span>Statistical Tests</span></div>
+          <div class="card-body" id="stat-panel">
+            <div class="text-faint text-xs text-mono">No statistical validation data yet.</div>
+          </div>
+        </div>
+      </div>
+      <div class="section-gap" style="overflow:auto;">
+        <div class="card">
+          <div class="card-head"><span>Monte Carlo Simulation</span></div>
+          <div class="card-body" id="mc-panel">
+            <div class="text-faint text-xs text-mono">No Monte Carlo data yet.</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span>Bayesian Analysis</span></div>
+          <div class="card-body" id="bayes-panel">
+            <div class="text-faint text-xs text-mono">No Bayesian data yet.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Event Tape View -->
+    <div class="view" id="view-tape">
+      <div class="section-gap" style="overflow:auto;">
+        <div class="card" style="flex:1;">
+          <div class="card-head"><span>Gate Event Tape</span></div>
+          <div class="card-body flush" id="gate-tape">
+            <div class="empty-state">No gate events yet. Events appear here as signals are processed, approved, or rejected.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Risk View -->
+    <div class="view" id="view-risk">
+      <div class="section-gap" style="overflow:auto;">
+        <div class="card">
+          <div class="card-head"><span>Risk Dashboard</span></div>
+          <div class="card-body" id="risk-panel">
+            <div class="kv-row"><span class="kv-key">Circuit Breaker</span><span class="kv-val good" id="r-circuit">CLOSED</span></div>
+            <div class="kv-row"><span class="kv-key">Daily PnL</span><span class="kv-val" id="r-pnl">0.0%</span></div>
+            <div class="kv-row"><span class="kv-key">Max Daily Loss</span><span class="kv-val" id="r-maxdaily">3.0%</span></div>
+            <div class="kv-row"><span class="kv-key">Drawdown</span><span class="kv-val" id="r-dd">0.0%</span></div>
+            <div class="kv-row"><span class="kv-key">Max Drawdown</span><span class="kv-val" id="r-maxdd">10.0%</span></div>
+            <div class="kv-row"><span class="kv-key">Consecutive Losses</span><span class="kv-val" id="r-consec">0</span></div>
+            <div class="kv-row"><span class="kv-key">Net Sizing Factor</span><span class="kv-val" id="r-sizing">100%</span></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span>Learning Profiles</span></div>
+          <div class="card-body" id="learning-panel">
+            <div class="text-faint text-xs text-mono">No learning profiles yet.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </section>
+
+  <!-- ── Bottom Nav (mobile) ── -->
+  <nav class="bottomnav" id="bottomnav">
+    <button class="nav-btn active" data-view="dashboard">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      DASH
+    </button>
+    <button class="nav-btn" data-view="signals">
+      <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      SIGNALS
+    </button>
+    <button class="nav-btn" data-view="validation">
+      <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      VALID
+    </button>
+    <button class="nav-btn" data-view="tape">
+      <svg viewBox="0 0 24 24"><line x1="17" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="17" y1="18" x2="3" y2="18"/></svg>
+      TAPE
+    </button>
+    <button class="nav-btn" data-view="risk">
+      <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      RISK
+    </button>
+  </nav>
 </div>
 
 <script>
+'use strict';
+
 const tg = window.Telegram?.WebApp;
-if (tg) { tg.ready(); tg.expand(); }
+if (tg) {
+  tg.ready();
+  tg.expand();
+  tg.setHeaderColor('#080b0f');
+  tg.setBackgroundColor('#080b0f');
+}
 
 const state = {
   signals: [],
@@ -435,6 +809,8 @@ const state = {
   risk: { dailyPnl: 0, drawdown: 0, consecLoss: 0, netSizingFactor: 1, state: 'CLOSED' },
   selectedId: null,
   filter: 'ALL',
+  filterSig: 'ALL',
+  currentView: 'dashboard',
   connected: false,
 };
 
@@ -452,7 +828,7 @@ socket.on('connect', () => {
   hydrateFromApi();
 });
 socket.on('connect_error', err => {
-  setStatus('error', 'AUTH/API ERROR');
+  setStatus('error', 'OFFLINE');
   console.warn(err.message);
   setTimeout(loadDemo, 1200);
 });
@@ -479,7 +855,7 @@ socket.on('regime', data => {
 });
 socket.on('telemetry', data => {
   state.telemetry.unshift({ ...data, receivedAt: Date.now() });
-  state.telemetry = state.telemetry.slice(0, 40);
+  state.telemetry = state.telemetry.slice(0, 60);
   renderAll();
 });
 
@@ -488,6 +864,8 @@ async function hydrateFromApi() {
   try {
     const health = await fetch('/health').then(r => r.json());
     setText('m-db', health.mongo?.enabled ? (health.mongo.ok ? 'LIVE' : 'ERR') : 'OFF');
+    if (health.mongo?.ok) setClass('m-db', 'metric-val good');
+    else setClass('m-db', 'metric-val bad');
   } catch (_) {}
   try {
     const res = await fetch('/api/signals?limit=50', { headers }).then(r => r.json());
@@ -502,34 +880,72 @@ async function hydrateLearning() {
   try {
     const res = await fetch('/api/learning?limit=30', { headers }).then(r => r.json());
     state.learning = res.profiles || [];
-  } catch (_) {
-    state.learning = [];
-  }
+  } catch (_) { state.learning = []; }
 }
 
 function ingestSignal(sig, rerender = true) {
   if (!sig || sig.action === 'WAIT') return;
   if (state.signals.some(s => s.id === sig.id)) return;
   state.signals.unshift(sig);
-  state.signals = state.signals.slice(0, 100);
+  state.signals = state.signals.slice(0, 200);
   if (!state.selectedId) state.selectedId = sig.id;
   if (rerender) renderAll();
 }
 
+// ── Navigation ──
+
+function switchView(viewId) {
+  state.currentView = viewId;
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  const el = document.getElementById('view-' + viewId);
+  if (el) el.classList.add('active');
+  document.querySelectorAll('.sidebar-btn, .nav-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.view === viewId);
+  });
+  renderAll();
+}
+
+document.querySelectorAll('[data-view]').forEach(btn => {
+  btn.addEventListener('click', () => switchView(btn.dataset.view));
+});
+
+// Filter chips
+document.querySelectorAll('[data-filter]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    state.filter = btn.dataset.filter;
+    document.querySelectorAll('[data-filter]').forEach(b => b.classList.toggle('active', b.dataset.filter === state.filter));
+    renderSignalTable('signal-body', state.filter);
+  });
+});
+document.querySelectorAll('[data-filter-sig]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    state.filterSig = btn.dataset.filterSig;
+    document.querySelectorAll('[data-filter-sig]').forEach(b => b.classList.toggle('active', b.dataset.filterSig === state.filterSig));
+    renderSignalTable('signal-body-full', state.filterSig);
+  });
+});
+
+// ── Render ──
+
 function renderAll() {
   renderTicker();
   renderMetrics();
-  renderMatrix();
-  renderDetail();
-  renderTape();
+  renderSignalTable('signal-body', state.filter);
+  renderSignalTable('signal-body-full', state.filterSig);
+  renderDetail('detail-panel', 'detail-title');
+  renderDetail('detail-panel-full', 'detail-title-full');
   renderRegimes();
+  renderTape();
+  renderRisk();
+  renderValidation();
+  renderLearning();
 }
 
 function renderTicker() {
   const items = Object.values(state.markets).slice(0, 8);
   document.getElementById('ticker').innerHTML = items.map(m => {
     const ch = Number(m.change || 0);
-    return `<div class="ticker-pill"><span>${esc(m.symbol)}</span><span>${formatPrice(m.price)}</span><span class="${ch >= 0 ? 'good' : 'bad'}">${ch >= 0 ? '+' : ''}${ch.toFixed(2)}%</span></div>`;
+    return `<div class="ticker-pill"><span class="sym">${esc(m.symbol)}</span><span class="price">${formatPrice(m.price)}</span><span class="${ch >= 0 ? 'good' : 'bad'}">${ch >= 0 ? '+' : ''}${ch.toFixed(2)}%</span></div>`;
   }).join('');
 }
 
@@ -538,16 +954,17 @@ function renderMetrics() {
   const lastGate = state.telemetry.find(t => t.gate)?.gate;
   const rejected = lastGate?.status === 'REJECTED';
   setText('m-gate', lastGate?.status || 'ARMED');
-  setClass('m-gate', rejected ? 'value bad' : lastGate?.status?.includes('WARN') ? 'value warn' : 'value good');
+  setClass('m-gate', rejected ? 'metric-val bad' : lastGate?.status?.includes('WARN') ? 'metric-val warn-text' : 'metric-val good');
   setText('m-gate-sub', lastGate?.failures?.[0] || lastGate?.warnings?.[0] || 'no rejected setup');
   setText('m-symbols', Object.keys(state.markets).length);
-  setText('m-pnl', `${Number(state.risk.dailyPnl || 0).toFixed(1)}%`);
-  setClass('m-pnl', Number(state.risk.dailyPnl || 0) < 0 ? 'value bad' : 'value good');
+  const pnl = Number(state.risk.dailyPnl || 0);
+  setText('m-pnl', `${pnl.toFixed(1)}%`);
+  setClass('m-pnl', pnl < 0 ? 'metric-val bad' : 'metric-val good');
   setText('m-risk', `${state.risk.state || 'CLOSED'} / size ${Math.round((state.risk.netSizingFactor ?? 1) * 100)}%`);
   setText('m-learn', state.learning.length ? 'ACTIVE' : 'WARM');
-  setClass('m-learn', state.learning.length ? 'value good' : 'value warn');
+  setClass('m-learn', state.learning.length ? 'metric-val good' : 'metric-val warn-text');
   const worst = state.learning[0];
-  setText('m-learn-sub', worst ? `${(Number(worst.winRate || 0) * 100).toFixed(0)}% WR / ${Number(worst.expectancyR || 0).toFixed(2)}R worst pattern` : 'awaiting outcomes');
+  setText('m-learn-sub', worst ? `${(Number(worst.winRate || 0) * 100).toFixed(0)}% WR / ${Number(worst.expectancyR || 0).toFixed(2)}R` : 'awaiting outcomes');
   setText('c-regime', best?.regime || 'UNKNOWN');
   setText('c-regime-sub', best ? `${best.symbol} ${best.tradeability}/100` : 'waiting for feed');
   setText('c-gradea', state.signals.filter(s => s.score?.grade === 'A').length);
@@ -556,95 +973,226 @@ function renderMetrics() {
   setText('c-size', `${Math.round((state.risk.netSizingFactor ?? 1) * 100)}%`);
 }
 
-function renderMatrix() {
-  const body = document.getElementById('signal-body');
+function renderSignalTable(bodyId, filter) {
+  const body = document.getElementById(bodyId);
+  if (!body) return;
   let rows = state.signals;
-  if (state.filter === 'A') rows = rows.filter(s => s.score?.grade === 'A');
+  if (filter === 'A') rows = rows.filter(s => s.score?.grade === 'A');
+  if (filter === 'LONG') rows = rows.filter(s => s.action === 'LONG');
+  if (filter === 'SHORT') rows = rows.filter(s => s.action === 'SHORT');
   if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="9"><div class="empty">Waiting for approved institutional signals...</div></td></tr>';
+    body.innerHTML = `<tr><td colspan="10"><div class="empty-state">Waiting for approved institutional signals...</div></td></tr>`;
     return;
   }
   body.innerHTML = rows.map(sig => {
     const dir = String(sig.action || '').toLowerCase();
     const selected = sig.id === state.selectedId ? 'selected' : '';
     const score = Number(sig.score?.final || 0);
-    const thesis = (sig.allReasons || sig.reasons || [sig.reasoning || '']).join(' ').slice(0, 140);
+    const scoreColor = score >= 85 ? 'var(--green)' : score >= 75 ? 'var(--amber)' : 'var(--red)';
+    const gateStatus = sig.gate?.status || 'APPROVED';
+    const gateCls = gateStatus === 'REJECTED' ? 'rejected' : gateStatus.includes('WARN') ? 'warn' : 'approved';
+    const thesis = (sig.allReasons || sig.reasons || [sig.reasoning || '']).join(' ').slice(0, 120);
     return `<tr class="${selected}" onclick="selectSignal('${escAttr(sig.id)}')">
       <td>${time(sig.timestamp)}</td>
-      <td class="blue">${esc(sig.symbol)}</td>
-      <td><span class="dir ${dir}">${esc(sig.action)}</span></td>
-      <td><div>${score}</div><div class="scorebar"><span style="width:${Math.min(score,100)}%"></span></div></td>
-      <td>${esc(sig.regime?.regime || 'UNKNOWN')}</td>
-      <td class="${sig.gate?.status === 'REJECTED' ? 'bad' : sig.gate?.status?.includes('WARN') ? 'warn' : 'good'}">${esc(sig.gate?.status || 'APPROVED')}</td>
+      <td class="blue-text fw-600">${esc(sig.symbol)}</td>
+      <td><span class="dir-badge ${dir}">${esc(sig.action)}</span></td>
+      <td><div class="fw-700">${score}</div><div class="score-bar"><span style="width:${Math.min(score,100)}%;background:${scoreColor}"></span></div></td>
+      <td class="text-xs">${esc(sig.regime?.regime || '--')}</td>
+      <td><span class="status-badge ${gateCls}">${esc(gateStatus)}</span></td>
       <td>${formatPrice(sig.entry?.midpoint || sig.entry?.zoneHigh || sig.currentPrice)}</td>
       <td class="bad">${formatPrice(sig.stopLoss?.price)}</td>
-      <td>${esc(thesis || 'No thesis')}</td>
+      ${bodyId === 'signal-body-full' ? `<td class="good">${formatPrice(sig.targets?.tp1?.price)}</td>` : ''}
+      <td class="text-xs text-muted">${esc(thesis || '--')}</td>
     </tr>`;
   }).join('');
 }
 
-function renderDetail() {
+function renderDetail(panelId, titleId) {
   const sig = state.signals.find(s => s.id === state.selectedId);
-  const el = document.getElementById('detail-panel');
+  const el = document.getElementById(panelId);
+  const titleEl = document.getElementById(titleId);
+  if (!el) return;
   if (!sig) {
-    el.innerHTML = '<div class="empty">Select a row in the matrix to inspect execution quality, agent votes, risk and invalidation.</div>';
-    setText('selected-title', 'No signal selected');
+    el.innerHTML = '<div class="empty-state">Select a signal to inspect.</div>';
+    if (titleEl) titleEl.textContent = 'Signal Inspector';
     return;
   }
-  setText('selected-title', `${sig.symbol} ${sig.action} ${sig.timeframe || ''}`);
-  const agents = (sig.agentBreakdown || sig.agents || []).map(a => `<div class="kv"><span>${esc(a.agent || a.label)}</span><span class="${a.status === 'OPPOSES' ? 'bad' : a.status === 'NEUTRAL' ? 'warn' : 'good'}">${esc(a.direction)} / ${esc(a.score)}</span></div>`).join('');
-  const reasons = (sig.allReasons || sig.reasons || []).slice(0, 8).map(r => `<li>${esc(r)}</li>`).join('');
-  el.innerHTML = `
-    <div class="label">Execution Sheet</div>
-    <div class="kv"><span>Signal</span><span>${esc(sig.symbol)} ${esc(sig.action)} ${esc(sig.timeframe || '')}</span></div>
-    <div class="kv"><span>Score</span><span>${esc(sig.score?.final)} / Grade ${esc(sig.score?.grade || '--')}</span></div>
-    <div class="kv"><span>Gate</span><span>${esc(sig.gate?.status || 'APPROVED')} / confidence ${esc(sig.gate?.confidence ?? '--')}</span></div>
-    <div class="kv"><span>Regime</span><span>${esc(sig.regime?.regime || 'UNKNOWN')} / tradeability ${esc(sig.regime?.tradeability ?? '--')}</span></div>
-    <div class="kv"><span>Entry</span><span>${formatPrice(sig.entry?.midpoint || sig.entry?.zoneHigh || sig.currentPrice)}</span></div>
-    <div class="kv"><span>Stop</span><span class="bad">${formatPrice(sig.stopLoss?.price)}</span></div>
-    <div class="kv"><span>TP1 / TP2</span><span class="good">${formatPrice(sig.targets?.tp1?.price)} / ${formatPrice(sig.targets?.tp2?.price)}</span></div>
-    <div class="kv"><span>Effective Risk</span><span>${esc(sig.riskEvaluation?.effectiveRisk ?? sig.risk?.effectiveRisk ?? '--')}%</span></div>
-    <div class="kv"><span>Learning</span><span>${esc(sig.gate?.learning?.note || 'No matching outcome profile yet')}</span></div>
-    <div class="outcome-grid">
-      <button class="win" onclick="recordOutcome('${escAttr(sig.id)}', 1)">WIN +1R</button>
-      <button class="be" onclick="recordOutcome('${escAttr(sig.id)}', 0)">BE 0R</button>
-      <button class="loss" onclick="recordOutcome('${escAttr(sig.id)}', -1)">LOSS -1R</button>
-    </div>
-    <div class="label" style="margin-top:12px">Agent Vote Stack</div>
-    ${agents || '<div class="sub">No agent breakdown received.</div>'}
-    <div class="label" style="margin-top:12px">Thesis</div>
-    <ul class="reason-list">${reasons || '<li>No reasons received.</li>'}</ul>
-  `;
-}
+  if (titleEl) titleEl.textContent = `${sig.symbol} ${sig.action} ${sig.timeframe || ''}`;
 
-function renderTape() {
-  const el = document.getElementById('gate-tape');
-  if (!state.telemetry.length) {
-    el.innerHTML = '<div class="sub">No gate events yet.</div>';
-    return;
-  }
-  el.innerHTML = state.telemetry.slice(0, 12).map(t => {
-    const status = t.gate?.status || t.type || 'EVENT';
-    const cls = status === 'REJECTED' ? 'bad' : status.includes('WARN') ? 'warn' : 'good';
-    const text = t.gate?.failures?.[0] || t.gate?.warnings?.[0] || t.type || 'telemetry';
-    return `<div class="tape-row"><span>${time(t.receivedAt || t.timestamp)}</span><span>${esc(t.symbol || 'SYS')} ${esc(text)}</span><span class="${cls}">${esc(status)}</span></div>`;
+  const agents = (sig.agentBreakdown || sig.agents || []);
+  const agentColors = { SMC: 'var(--green)', MTF: 'var(--blue)', Momentum: 'var(--amber)', 'Volume/OI': 'var(--violet)', Microstructure: 'var(--cyan)', Fractal: 'var(--red)', Sentiment: 'var(--muted)', Pattern: 'var(--amber)' };
+
+  const agentHtml = agents.map(a => {
+    const name = a.agent || a.label || '';
+    const color = agentColors[name] || 'var(--faint)';
+    const dirCls = a.status === 'OPPOSES' ? 'bad' : a.status === 'NEUTRAL' ? 'warn-text' : 'good';
+    return `<div class="agent-vote">
+      <div class="agent-icon" style="background:${color}22;color:${color}">${name.slice(0,2).toUpperCase()}</div>
+      <div class="agent-info"><div class="agent-name">${esc(name)}</div><div class="agent-detail">${esc(a.status || a.direction || '--')}</div></div>
+      <div class="agent-score ${dirCls}">${esc(a.score)}</div>
+    </div>`;
   }).join('');
+
+  const reasons = (sig.allReasons || sig.reasons || []).slice(0, 6).map(r => `<li style="color:var(--muted);font-family:var(--font-mono);font-size:11px;line-height:1.5;list-style:none;padding:4px 0;border-bottom:1px solid var(--line);"><span style="color:var(--green);margin-right:6px;">></span>${esc(r)}</li>`).join('');
+
+  // Ensemble/validation summary
+  let validationHtml = '';
+  if (sig.validation || sig.ensemble) {
+    validationHtml = '<div class="mt-12"><div class="text-xs text-mono text-faint fw-600" style="letter-spacing:.12em;text-transform:uppercase;">Validation Summary</div>';
+    if (sig.validation?.monteCarlo) {
+      const mc = sig.validation.monteCarlo;
+      validationHtml += `<div class="kv-row"><span class="kv-key">Monte Carlo</span><span class="kv-val ${mc.approved ? 'good' : 'bad'}">${(mc.winProbability * 100).toFixed(1)}% win / ${mc.simulations} sims</span></div>`;
+    }
+    if (sig.validation?.bayesian) {
+      const b = sig.validation.bayesian;
+      validationHtml += `<div class="kv-row"><span class="kv-key">Bayesian</span><span class="kv-val ${b.approved ? 'good' : 'bad'}">${(b.posterior * 100).toFixed(1)}% posterior</span></div>`;
+    }
+    if (sig.validation?.statistical) {
+      const s = sig.validation.statistical;
+      validationHtml += `<div class="kv-row"><span class="kv-key">Statistical</span><span class="kv-val ${s.approved ? 'good' : 'bad'}">${s.passed}/${s.total} tests passed</span></div>`;
+    }
+    if (sig.ensemble) {
+      validationHtml += `<div class="kv-row"><span class="kv-key">Ensemble</span><span class="kv-val ${sig.ensemble.approved ? 'good' : 'bad'}">${sig.ensemble.ensembleScore}/100</span></div>`;
+    }
+    validationHtml += '</div>';
+  }
+
+  el.innerHTML = `
+    <div class="kv-row"><span class="kv-key">Score</span><span class="kv-val fw-800">${esc(sig.score?.final)} / Grade ${esc(sig.score?.grade || '--')}</span></div>
+    <div class="kv-row"><span class="kv-key">Gate</span><span class="kv-val ${sig.gate?.status === 'REJECTED' ? 'bad' : 'good'}">${esc(sig.gate?.status || 'APPROVED')}</span></div>
+    <div class="kv-row"><span class="kv-key">Confidence</span><span class="kv-val">${esc(sig.gate?.confidence ?? '--')}</span></div>
+    <div class="kv-row"><span class="kv-key">Regime</span><span class="kv-val">${esc(sig.regime?.regime || '--')} / ${esc(sig.regime?.tradeability ?? '--')}</span></div>
+    <div class="kv-row"><span class="kv-key">Entry</span><span class="kv-val">${formatPrice(sig.entry?.midpoint || sig.entry?.zoneHigh || sig.currentPrice)}</span></div>
+    <div class="kv-row"><span class="kv-key">Stop Loss</span><span class="kv-val bad">${formatPrice(sig.stopLoss?.price)}</span></div>
+    <div class="kv-row"><span class="kv-key">TP1 / TP2</span><span class="kv-val good">${formatPrice(sig.targets?.tp1?.price)} / ${formatPrice(sig.targets?.tp2?.price)}</span></div>
+    <div class="kv-row"><span class="kv-key">Risk</span><span class="kv-val">${esc(sig.riskEvaluation?.effectiveRisk ?? sig.risk?.effectiveRisk ?? '--')}%</span></div>
+    <div class="kv-row"><span class="kv-key">Learning</span><span class="kv-val text-xs">${esc(sig.gate?.learning?.note || 'No profile yet')}</span></div>
+    ${validationHtml}
+    <div class="outcome-row">
+      <button class="outcome-btn win" onclick="recordOutcome('${escAttr(sig.id)}', 1)">WIN +1R</button>
+      <button class="outcome-btn be" onclick="recordOutcome('${escAttr(sig.id)}', 0)">BE 0R</button>
+      <button class="outcome-btn loss" onclick="recordOutcome('${escAttr(sig.id)}', -1)">LOSS -1R</button>
+    </div>
+    <div class="mt-12"><div class="text-xs text-mono text-faint fw-600" style="letter-spacing:.12em;text-transform:uppercase;">Agent Votes (${agents.length})</div></div>
+    ${agentHtml || '<div class="text-xs text-muted mt-8">No agent breakdown.</div>'}
+    <div class="mt-12"><div class="text-xs text-mono text-faint fw-600" style="letter-spacing:.12em;text-transform:uppercase;">Thesis</div></div>
+    <ul style="margin-top:6px;">${reasons || '<li class="text-muted text-xs">No reasons.</li>'}</ul>
+  `;
 }
 
 function renderRegimes() {
   const el = document.getElementById('regime-board');
-  const rows = Object.values(state.regimes).sort((a,b) => (b.tradeability || 0) - (a.tradeability || 0)).slice(0, 8);
-  if (!rows.length) {
-    el.innerHTML = '<div class="sub">No regime telemetry yet.</div>';
+  if (!el) return;
+  const rows = Object.values(state.regimes).sort((a, b) => (b.tradeability || 0) - (a.tradeability || 0)).slice(0, 10);
+  if (!rows.length) { el.innerHTML = '<div class="text-faint text-xs text-mono">No regime data yet.</div>'; return; }
+  el.innerHTML = rows.map(r => {
+    const color = r.tradeability >= 70 ? 'good' : r.tradeability >= 50 ? 'warn-text' : 'bad';
+    return `<div class="kv-row"><span class="kv-key">${esc(r.symbol)} ${esc(r.timeframe || '')}</span><span class="kv-val ${color}">${esc(r.regime)} / ${esc(r.tradeability)}</span></div>`;
+  }).join('');
+}
+
+function renderTape() {
+  const el = document.getElementById('gate-tape');
+  if (!el) return;
+  if (!state.telemetry.length) {
+    el.innerHTML = '<div class="empty-state">No gate events yet.</div>';
     return;
   }
-  el.innerHTML = rows.map(r => `<div class="kv"><span>${esc(r.symbol)} ${esc(r.timeframe || '')}</span><span>${esc(r.regime)} / ${esc(r.tradeability)}</span></div>`).join('');
+  el.innerHTML = state.telemetry.slice(0, 30).map(t => {
+    const status = t.gate?.status || t.type || 'EVENT';
+    const cls = status === 'REJECTED' ? 'bad' : status.includes('WARN') ? 'warn-text' : 'good';
+    const text = t.gate?.failures?.[0] || t.gate?.warnings?.[0] || t.type || 'telemetry';
+    return `<div class="tape-event"><span class="tape-time">${time(t.receivedAt || t.timestamp)}</span><span class="tape-sym">${esc(t.symbol || 'SYS')}</span><span class="tape-msg">${esc(text)}</span><span class="text-xs fw-600 ${cls}">${esc(status)}</span></div>`;
+  }).join('');
 }
+
+function renderRisk() {
+  setText('r-circuit', state.risk.state || 'CLOSED');
+  setClass('r-circuit', state.risk.state === 'OPEN' ? 'kv-val bad' : 'kv-val good');
+  const pnl = Number(state.risk.dailyPnl || 0);
+  setText('r-pnl', `${pnl.toFixed(2)}%`);
+  setClass('r-pnl', pnl < 0 ? 'kv-val bad' : 'kv-val good');
+  setText('r-dd', `${Number(state.risk.drawdown || 0).toFixed(2)}%`);
+  setText('r-consec', state.risk.consecLoss || 0);
+  setText('r-sizing', `${Math.round((state.risk.netSizingFactor ?? 1) * 100)}%`);
+}
+
+function renderValidation() {
+  const sig = state.signals.find(s => s.id === state.selectedId);
+  if (!sig) return;
+
+  // Ensemble layers
+  const ensEl = document.getElementById('ensemble-panel');
+  if (ensEl && sig.ensemble?.layers) {
+    const layers = sig.ensemble.layers;
+    ensEl.innerHTML = `
+      <div class="kv-row"><span class="kv-key">Ensemble Score</span><span class="kv-val fw-800 ${sig.ensemble.approved ? 'good' : 'bad'}">${sig.ensemble.ensembleScore}/100</span></div>
+      <div class="kv-row"><span class="kv-key">Status</span><span class="kv-val ${sig.ensemble.approved ? 'good' : 'bad'}">${sig.ensemble.approved ? 'APPROVED' : 'REJECTED'}</span></div>
+      <div class="kv-row"><span class="kv-key">Penalty</span><span class="kv-val">${sig.ensemble.totalPenalty} pts</span></div>
+      <div class="mt-12">
+        ${layers.map(l => {
+          const pct = Math.min(100, Math.max(0, l.score || 0));
+          const color = l.approved ? 'var(--green)' : 'var(--red)';
+          return `<div class="layer-bar">
+            <span class="layer-name">${esc(l.name)}</span>
+            <div class="layer-track"><div class="layer-fill" style="width:${pct}%;background:${color}"></div></div>
+            <span class="layer-score" style="color:${color}">${pct}</span>
+          </div>`;
+        }).join('')}
+      </div>
+    `;
+  }
+
+  // Monte Carlo
+  const mcEl = document.getElementById('mc-panel');
+  if (mcEl && sig.validation?.monteCarlo) {
+    const mc = sig.validation.monteCarlo;
+    mcEl.innerHTML = `
+      <div class="kv-row"><span class="kv-key">Status</span><span class="kv-val ${mc.approved ? 'good' : 'bad'}">${mc.approved ? 'APPROVED' : 'REJECTED'}</span></div>
+      <div class="kv-row"><span class="kv-key">Win Probability</span><span class="kv-val fw-700">${(mc.winProbability * 100).toFixed(1)}%</span></div>
+      <div class="kv-row"><span class="kv-key">Expected R</span><span class="kv-val">${mc.expectedR}R</span></div>
+      <div class="kv-row"><span class="kv-key">Simulations</span><span class="kv-val">${mc.simulations?.toLocaleString()}</span></div>
+    `;
+  }
+
+  // Bayesian
+  const bayesEl = document.getElementById('bayes-panel');
+  if (bayesEl && sig.validation?.bayesian) {
+    const b = sig.validation.bayesian;
+    bayesEl.innerHTML = `
+      <div class="kv-row"><span class="kv-key">Status</span><span class="kv-val ${b.approved ? 'good' : 'bad'}">${b.approved ? 'APPROVED' : 'REJECTED'}</span></div>
+      <div class="kv-row"><span class="kv-key">Posterior P(Win)</span><span class="kv-val fw-700">${(b.posterior * 100).toFixed(1)}%</span></div>
+    `;
+  }
+
+  // Statistical
+  const statEl = document.getElementById('stat-panel');
+  if (statEl && sig.validation?.statistical) {
+    const s = sig.validation.statistical;
+    statEl.innerHTML = `
+      <div class="kv-row"><span class="kv-key">Status</span><span class="kv-val ${s.approved ? 'good' : 'bad'}">${s.approved ? 'APPROVED' : 'REJECTED'}</span></div>
+      <div class="kv-row"><span class="kv-key">Tests Passed</span><span class="kv-val fw-700">${s.passed}/${s.total}</span></div>
+    `;
+  }
+}
+
+function renderLearning() {
+  const el = document.getElementById('learning-panel');
+  if (!el) return;
+  if (!state.learning.length) { el.innerHTML = '<div class="text-faint text-xs text-mono">No learning profiles yet.</div>'; return; }
+  el.innerHTML = state.learning.slice(0, 10).map(p => {
+    const wr = (Number(p.winRate || 0) * 100).toFixed(0);
+    const ev = Number(p.expectancyR || 0).toFixed(2);
+    const cls = Number(p.winRate || 0) > 0.5 ? 'good' : Number(p.winRate || 0) < 0.3 ? 'bad' : 'warn-text';
+    return `<div class="kv-row"><span class="kv-key text-xs">${esc((p.patternKey || '').slice(0, 30))}</span><span class="kv-val ${cls}">${wr}% WR / ${ev}R / ${p.samples || 0} trades</span></div>`;
+  }).join('');
+}
+
+// ── Actions ──
 
 function selectSignal(id) {
   state.selectedId = id;
-  renderMatrix();
-  renderDetail();
+  renderAll();
 }
 window.selectSignal = selectSignal;
 
@@ -653,29 +1201,11 @@ async function recordOutcome(signalId, pnlR) {
   socket.emit('record_outcome', payload);
   const headers = { 'Content-Type': 'application/json' };
   if (initData) headers['x-telegram-init-data'] = initData;
-  try {
-    await fetch('/api/outcomes', { method: 'POST', headers, body: JSON.stringify(payload) });
-  } catch (_) {}
+  try { await fetch('/api/outcomes', { method: 'POST', headers, body: JSON.stringify(payload) }); } catch (_) {}
 }
 window.recordOutcome = recordOutcome;
 
-document.querySelectorAll('.nav button').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.nav button').forEach(b => b.classList.toggle('active', b === btn));
-    setText('view-title', btn.textContent.trim());
-  });
-});
-document.getElementById('filter-all').onclick = () => setFilter('ALL');
-document.getElementById('filter-a').onclick = () => setFilter('A');
-document.getElementById('filter-live').onclick = () => setFilter('LIVE');
-function setFilter(filter) {
-  state.filter = filter;
-  document.querySelectorAll('.toolbar-actions .chip').forEach(b => b.classList.remove('active'));
-  if (filter === 'A') document.getElementById('filter-a').classList.add('active');
-  else if (filter === 'LIVE') document.getElementById('filter-live').classList.add('active');
-  else document.getElementById('filter-all').classList.add('active');
-  renderMatrix();
-}
+// ── Demo data ──
 
 function loadDemo() {
   if (state.signals.length) return;
@@ -703,15 +1233,37 @@ function loadDemo() {
     agentBreakdown: [
       { agent: 'SMC', score: 90, direction: 'LONG', status: 'CONFIRMS' },
       { agent: 'MTF', score: 82, direction: 'LONG', status: 'CONFIRMS' },
-      { agent: 'Volume/OI', score: 78, direction: 'LONG', status: 'CONFIRMS' },
+      { agent: 'Momentum', score: 78, direction: 'LONG', status: 'CONFIRMS' },
+      { agent: 'Volume/OI', score: 72, direction: 'LONG', status: 'CONFIRMS' },
+      { agent: 'Microstructure', score: 68, direction: 'LONG', status: 'CONFIRMS' },
+      { agent: 'Fractal', score: 65, direction: 'LONG', status: 'NEUTRAL' },
     ],
     allReasons: ['Bullish order block defended with displacement', 'Higher-timeframe bias aligned', 'Volume expansion confirmed accumulation'],
+    ensemble: { approved: true, ensembleScore: 82, totalPenalty: 5, layers: [
+      { name: 'Monte Carlo', score: 88, approved: true },
+      { name: 'Bayesian', score: 85, approved: true },
+      { name: 'Statistical', score: 90, approved: true },
+      { name: 'Walk-Forward', score: 72, approved: true },
+      { name: 'Learning', score: 78, approved: true },
+      { name: 'Consensus', score: 85, approved: true },
+      { name: 'Regime', score: 84, approved: true },
+      { name: 'Fractal', score: 65, approved: true },
+      { name: 'Microstructure', score: 68, approved: true },
+    ]},
+    validation: {
+      monteCarlo: { approved: true, winProbability: 0.72, expectedR: 1.2, simulations: 15000 },
+      bayesian: { approved: true, posterior: 0.81 },
+      statistical: { approved: true, passed: 8, total: 10 },
+      walkForward: { sufficient: true, wfe: 0.68, robust: true },
+    },
   });
 }
 setTimeout(() => { if (!state.connected) loadDemo(); }, 2500);
 
+// ── Utilities ──
+
 function setStatus(cls, text) {
-  document.getElementById('status-dot').className = `dot ${cls}`;
+  document.getElementById('status-dot').className = `pulse ${cls}`;
   setText('status-text', text);
 }
 function setText(id, text) {
