@@ -588,8 +588,8 @@ let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, institutionalGates,
 function buildSingletons() {
   // AlertDispatcher
   if (AlertDispatcher && BOT_TOKEN) {
-    dispatcher = new AlertDispatcher({ token: BOT_TOKEN, chatIds: CHAT_IDS });
-    log.info(`AlertDispatcher created — ${CHAT_IDS.length} chat(s)`);
+    dispatcher = new AlertDispatcher({ token: BOT_TOKEN, chatIds: CHAT_IDS, store: mongoStore });
+    log.info(`AlertDispatcher created — ${CHAT_IDS.length} chat(s) + auto-subscribe enabled`);
   } else {
     log.warn('AlertDispatcher disabled — no BOT_TOKEN or module missing');
     dispatcher = null;

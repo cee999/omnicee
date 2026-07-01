@@ -297,6 +297,16 @@ async function upsertTelegramUser(user = {}) {
   return db.collection('users').findOne({ telegramId });
 }
 
+async function getSubscriberChatIds() {
+  const db = await getDB();
+  if (!db) return [];
+  const users = await db.collection('users').find(
+    { subscribed: { $ne: false } },
+    { projection: { telegramId: 1 } }
+  ).toArray();
+  return users.map(u => u.telegramId).filter(Boolean);
+}
+
 async function getStats() {
   const db = await getDB();
   if (!db) return { db: 'disabled' };
@@ -334,6 +344,7 @@ module.exports = {
   getLearningProfile,
   getLearningProfiles,
   upsertTelegramUser,
+  getSubscriberChatIds,
   getStats,
   health,
   close,
