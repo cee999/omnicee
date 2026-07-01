@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#080b0f">
+<title>OMNICEE Command</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+:root {
+  --bg: #080b0f;
+  --panel: #0e141b;
+  --panel-2: #121a23;
+  --panel-3: #172231;
+  --line: #223044;
+  --line-hi: #35506d;
+  --text: #e6edf6;
+  --muted: #8a9ab0;
+  --faint: #526173;
+  --green: #18d39e;
+  --green-soft: rgba(24,211,158,.12);
+  --red: #ff5f6d;
+  --red-soft: rgba(255,95,109,.12);
+  --amber: #f2b84b;
+  --amber-soft: rgba(242,184,75,.12);
+  --blue: #6fb7ff;
+  --violet: #b7a6ff;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  --font-ui: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  overflow: hidden;
+}
+button, input { font: inherit; }
+.app {
+  height: 100dvh;
+  display: grid;
+  grid-template-rows: 54px 1fr;
+}
+.topbar {
+  display: grid;
+  grid-template-columns: 260px 1fr auto;
+  align-items: center;
+  gap: 14px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line);
+  background: #0a0f15;
+}
+.brand {
+  font-family: var(--font-mono);
+  font-weight: 900;
+  letter-spacing: .16em;
+  color: var(--green);
+}
+.brand span { color: var(--muted); font-weight: 500; }
+.ticker {
+  display: flex;
+  gap: 8px;
+  overflow: hidden;
+}
+.ticker-pill {
+  display: grid;
+  grid-template-columns: auto auto auto;
+  gap: 8px;
+  align-items: center;
+  white-space: nowrap;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+.dot.live { background: var(--green); box-shadow: 0 0 12px var(--green); }
+.dot.error { background: var(--red); }
+.workspace {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr) 360px;
+  gap: 1px;
+  background: var(--line);
+}
+.rail, .main, .side {
+  min-height: 0;
+  background: var(--bg);
+  overflow: hidden;
+}
+.rail, .side { display: grid; grid-template-rows: auto 1fr; }
+.nav {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.nav button {
+  height: 34px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  text-align: left;
+  padding: 0 10px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.nav button.active { color: var(--green); border-color: var(--green); background: var(--green-soft); }
+.metrics {
+  display: grid;
+  gap: 1px;
+  background: var(--line);
+}
+.metric {
+  background: var(--panel);
+  padding: 14px 12px;
+}
+.label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.value {
+  margin-top: 7px;
+  font-family: var(--font-mono);
+  font-size: 24px;
+  font-weight: 900;
+}
+.sub {
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+}
+.good { color: var(--green); }
+.bad { color: var(--red); }
+.warn { color: var(--amber); }
+.blue { color: var(--blue); }
+.main {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+.command-strip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.strip-cell {
+  min-width: 0;
+  background: var(--panel);
+  padding: 12px;
+}
+.strip-cell .value { font-size: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  background: #0a0f15;
+}
+.toolbar-title {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.toolbar-actions { display: flex; gap: 6px; }
+.chip {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  height: 28px;
+  padding: 0 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.chip.active { color: var(--green); border-color: var(--green); background: var(--green-soft); }
+.outcome-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-top: 10px;
+}
+.outcome-grid button {
+  height: 30px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  cursor: pointer;
+}
+.outcome-grid button.win { color: var(--green); border-color: rgba(24,211,158,.45); }
+.outcome-grid button.loss { color: var(--red); border-color: rgba(255,95,109,.45); }
+.outcome-grid button.be { color: var(--amber); border-color: rgba(242,184,75,.45); }
+.matrix-wrap { min-height: 0; overflow: auto; background: var(--bg); }
+table.matrix {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-family: var(--font-mono);
+}
+.matrix th {
+  position: sticky;
+  top: 0;
+  background: #0a0f15;
+  z-index: 3;
+  color: var(--faint);
+  font-size: 10px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  text-align: left;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.matrix td {
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.matrix tr { cursor: pointer; background: var(--panel); }
+.matrix tr:nth-child(even) { background: #0c1219; }
+.matrix tr:hover, .matrix tr.selected { background: var(--panel-3); }
+.dir {
+  display: inline-flex;
+  min-width: 54px;
+  justify-content: center;
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+}
+.dir.long { color: var(--green); border-color: rgba(24,211,158,.45); background: var(--green-soft); }
+.dir.short { color: var(--red); border-color: rgba(255,95,109,.45); background: var(--red-soft); }
+.scorebar {
+  height: 6px;
+  background: #243143;
+  position: relative;
+}
+.scorebar span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--green);
+}
+.side-head {
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+  background: #0a0f15;
+}
+.side-body {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 1px;
+  background: var(--line);
+}
+.panel {
+  background: var(--panel);
+  padding: 12px;
+}
+.kv {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.kv:last-child { border-bottom: 0; }
+.tape-row {
+  display: grid;
+  grid-template-columns: 72px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.reason-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+.reason-list li {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.reason-list li::before { content: ">";
+  color: var(--green);
+  margin-right: 6px;
+}
+.empty {
+  padding: 40px;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  text-align: center;
+}
+@media (max-width: 980px) {
+  body { overflow: auto; }
+  .app { height: auto; min-height: 100dvh; }
+  .topbar { grid-template-columns: 1fr auto; }
+  .ticker { display: none; }
+  .workspace { grid-template-columns: 1fr; }
+  .rail, .side { min-height: auto; }
+  .command-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .matrix th:nth-child(7), .matrix td:nth-child(7),
+  .matrix th:nth-child(8), .matrix td:nth-child(8) { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">OMNICEE<span>.COMMAND</span></div>
+    <div class="ticker" id="ticker"></div>
+    <div class="status"><span class="dot" id="status-dot"></span><span id="status-text">CONNECTING</span></div>
+  </header>
+
+  <section class="workspace">
+    <aside class="rail">
+      <nav class="nav">
+        <button class="active" data-view="matrix">SIGNAL MATRIX</button>
+        <button data-view="markets">MARKET FEEDS</button>
+        <button data-view="risk">RISK STATE</button>
+        <button data-view="intel">INTEL TAPE</button>
+      </nav>
+      <div class="metrics">
+        <div class="metric"><div class="label">System Gate</div><div class="value good" id="m-gate">ARMED</div><div class="sub" id="m-gate-sub">no rejected setup</div></div>
+        <div class="metric"><div class="label">Live Symbols</div><div class="value" id="m-symbols">0</div><div class="sub">streaming now</div></div>
+        <div class="metric"><div class="label">Daily PnL</div><div class="value" id="m-pnl">0.0%</div><div class="sub" id="m-risk">risk normal</div></div>
+        <div class="metric"><div class="label">MongoDB</div><div class="value blue" id="m-db">CHECK</div><div class="sub">Atlas persistence</div></div>
+        <div class="metric"><div class="label">Learning</div><div class="value warn" id="m-learn">WARM</div><div class="sub" id="m-learn-sub">awaiting outcomes</div></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="command-strip">
+        <div class="strip-cell"><div class="label">Best Regime</div><div class="value" id="c-regime">UNKNOWN</div><div class="sub" id="c-regime-sub">waiting for feed</div></div>
+        <div class="strip-cell"><div class="label">A-Grade</div><div class="value good" id="c-gradea">0</div><div class="sub">session signals</div></div>
+        <div class="strip-cell"><div class="label">Avg Score</div><div class="value" id="c-score">--</div><div class="sub">approved matrix</div></div>
+        <div class="strip-cell"><div class="label">Net Size</div><div class="value warn" id="c-size">100%</div><div class="sub">risk engine factor</div></div>
+        <div class="strip-cell"><div class="label">Transport</div><div class="value blue" id="c-transport">SOCKET.IO</div><div class="sub">REST fallback enabled</div></div>
+      </div>
+      <div class="toolbar">
+        <div class="toolbar-title" id="view-title">Approved Signal Matrix</div>
+        <div class="toolbar-actions">
+          <button class="chip active" id="filter-all">ALL</button>
+          <button class="chip" id="filter-a">A ONLY</button>
+          <button class="chip" id="filter-live">LIVE FEEDS</button>
+        </div>
+      </div>
+      <div class="matrix-wrap" id="matrix-wrap">
+        <table class="matrix">
+          <thead>
+            <tr>
+              <th style="width:84px">Time</th>
+              <th style="width:94px">Symbol</th>
+              <th style="width:82px">Side</th>
+              <th style="width:86px">Score</th>
+              <th style="width:100px">Regime</th>
+              <th style="width:92px">Gate</th>
+              <th style="width:92px">Entry</th>
+              <th style="width:92px">Stop</th>
+              <th>Execution Thesis</th>
+            </tr>
+          </thead>
+          <tbody id="signal-body">
+            <tr><td colspan="9"><div class="empty">Waiting for approved institutional signals...</div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
+
+    <aside class="side">
+      <div class="side-head">
+        <div class="label">Selected Signal / Live Tape</div>
+        <div class="sub" id="selected-title">No signal selected</div>
+      </div>
+      <div class="side-body">
+        <section class="panel" id="detail-panel">
+          <div class="empty">Select a row in the matrix to inspect execution quality, agent votes, risk and invalidation.</div>
+        </section>
+        <section class="panel">
+          <div class="label">Gate Tape</div>
+          <div id="gate-tape"></div>
+        </section>
+        <section class="panel">
+          <div class="label">Regime Board</div>
+          <div id="regime-board"></div>
+        </section>
+      </div>
+    </aside>
+  </section>
+</div>
+
+<script>
+const tg = window.Telegram?.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+
+const state = {
+  signals: [],
+  markets: {},
+  regimes: {},
+  telemetry: [],
+  learning: [],
+  stats: { total: 0, gradeA: 0, avgScore: 0 },
+  risk: { dailyPnl: 0, drawdown: 0, consecLoss: 0, netSizingFactor: 1, state: 'CLOSED' },
+  selectedId: null,
+  filter: 'ALL',
+  connected: false,
+};
+
+const initData = tg?.initData || '';
+const socket = io({
+  path: '/socket.io',
+  auth: { initData },
+  transports: ['websocket', 'polling'],
+});
+
+socket.on('connect', () => {
+  state.connected = true;
+  setStatus('live', 'LIVE');
+  socket.emit('get_history', { limit: 50 });
+  hydrateFromApi();
+});
+socket.on('connect_error', err => {
+  setStatus('error', 'AUTH/API ERROR');
+  console.warn(err.message);
+  setTimeout(loadDemo, 1200);
+});
+socket.on('disconnect', () => {
+  state.connected = false;
+  setStatus('', 'RECONNECTING');
+});
+socket.on('history', msg => {
+  for (const sig of msg.signals || []) ingestSignal(sig, false);
+  renderAll();
+});
+socket.on('outcome_saved', msg => {
+  state.telemetry.unshift({ type: 'outcome_saved', symbol: msg.symbol, payload: msg, receivedAt: Date.now() });
+  hydrateLearning();
+  renderAll();
+});
+socket.on('signal', sig => ingestSignal(sig));
+socket.on('market', data => { state.markets[data.symbol] = data; renderAll(); });
+socket.on('risk', data => { Object.assign(state.risk, data); renderAll(); });
+socket.on('stats', data => { Object.assign(state.stats, data); renderAll(); });
+socket.on('regime', data => {
+  if (data?.symbol) state.regimes[`${data.symbol}:${data.timeframe || ''}`] = data;
+  renderAll();
+});
+socket.on('telemetry', data => {
+  state.telemetry.unshift({ ...data, receivedAt: Date.now() });
+  state.telemetry = state.telemetry.slice(0, 40);
+  renderAll();
+});
+
+async function hydrateFromApi() {
+  const headers = initData ? { 'x-telegram-init-data': initData } : {};
+  try {
+    const health = await fetch('/health').then(r => r.json());
+    setText('m-db', health.mongo?.enabled ? (health.mongo.ok ? 'LIVE' : 'ERR') : 'OFF');
+  } catch (_) {}
+  try {
+    const res = await fetch('/api/signals?limit=50', { headers }).then(r => r.json());
+    for (const sig of res.signals || []) ingestSignal(sig, false);
+  } catch (_) {}
+  await hydrateLearning();
+  renderAll();
+}
+
+async function hydrateLearning() {
+  const headers = initData ? { 'x-telegram-init-data': initData } : {};
+  try {
+    const res = await fetch('/api/learning?limit=30', { headers }).then(r => r.json());
+    state.learning = res.profiles || [];
+  } catch (_) {
+    state.learning = [];
+  }
+}
+
+function ingestSignal(sig, rerender = true) {
+  if (!sig || sig.action === 'WAIT') return;
+  if (state.signals.some(s => s.id === sig.id)) return;
+  state.signals.unshift(sig);
+  state.signals = state.signals.slice(0, 100);
+  if (!state.selectedId) state.selectedId = sig.id;
+  if (rerender) renderAll();
+}
+
+function renderAll() {
+  renderTicker();
+  renderMetrics();
+  renderMatrix();
+  renderDetail();
+  renderTape();
+  renderRegimes();
+}
+
+function renderTicker() {
+  const items = Object.values(state.markets).slice(0, 8);
+  document.getElementById('ticker').innerHTML = items.map(m => {
+    const ch = Number(m.change || 0);
+    return `<div class="ticker-pill"><span>${esc(m.symbol)}</span><span>${formatPrice(m.price)}</span><span class="${ch >= 0 ? 'good' : 'bad'}">${ch >= 0 ? '+' : ''}${ch.toFixed(2)}%</span></div>`;
+  }).join('');
+}
+
+function renderMetrics() {
+  const best = Object.values(state.regimes).sort((a, b) => (b.tradeability || 0) - (a.tradeability || 0))[0];
+  const lastGate = state.telemetry.find(t => t.gate)?.gate;
+  const rejected = lastGate?.status === 'REJECTED';
+  setText('m-gate', lastGate?.status || 'ARMED');
+  setClass('m-gate', rejected ? 'value bad' : lastGate?.status?.includes('WARN') ? 'value warn' : 'value good');
+  setText('m-gate-sub', lastGate?.failures?.[0] || lastGate?.warnings?.[0] || 'no rejected setup');
+  setText('m-symbols', Object.keys(state.markets).length);
+  setText('m-pnl', `${Number(state.risk.dailyPnl || 0).toFixed(1)}%`);
+  setClass('m-pnl', Number(state.risk.dailyPnl || 0) < 0 ? 'value bad' : 'value good');
+  setText('m-risk', `${state.risk.state || 'CLOSED'} / size ${Math.round((state.risk.netSizingFactor ?? 1) * 100)}%`);
+  setText('m-learn', state.learning.length ? 'ACTIVE' : 'WARM');
+  setClass('m-learn', state.learning.length ? 'value good' : 'value warn');
+  const worst = state.learning[0];
+  setText('m-learn-sub', worst ? `${(Number(worst.winRate || 0) * 100).toFixed(0)}% WR / ${Number(worst.expectancyR || 0).toFixed(2)}R worst pattern` : 'awaiting outcomes');
+  setText('c-regime', best?.regime || 'UNKNOWN');
+  setText('c-regime-sub', best ? `${best.symbol} ${best.tradeability}/100` : 'waiting for feed');
+  setText('c-gradea', state.signals.filter(s => s.score?.grade === 'A').length);
+  const avg = state.signals.length ? state.signals.reduce((s, x) => s + Number(x.score?.final || 0), 0) / state.signals.length : 0;
+  setText('c-score', avg ? avg.toFixed(0) : '--');
+  setText('c-size', `${Math.round((state.risk.netSizingFactor ?? 1) * 100)}%`);
+}
+
+function renderMatrix() {
+  const body = document.getElementById('signal-body');
+  let rows = state.signals;
+  if (state.filter === 'A') rows = rows.filter(s => s.score?.grade === 'A');
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="9"><div class="empty">Waiting for approved institutional signals...</div></td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map(sig => {
+    const dir = String(sig.action || '').toLowerCase();
+    const selected = sig.id === state.selectedId ? 'selected' : '';
+    const score = Number(sig.score?.final || 0);
+    const thesis = (sig.allReasons || sig.reasons || [sig.reasoning || '']).join(' ').slice(0, 140);
+    return `<tr class="${selected}" onclick="selectSignal('${escAttr(sig.id)}')">
+      <td>${time(sig.timestamp)}</td>
+      <td class="blue">${esc(sig.symbol)}</td>
+      <td><span class="dir ${dir}">${esc(sig.action)}</span></td>
+      <td><div>${score}</div><div class="scorebar"><span style="width:${Math.min(score,100)}%"></span></div></td>
+      <td>${esc(sig.regime?.regime || 'UNKNOWN')}</td>
+      <td class="${sig.gate?.status === 'REJECTED' ? 'bad' : sig.gate?.status?.includes('WARN') ? 'warn' : 'good'}">${esc(sig.gate?.status || 'APPROVED')}</td>
+      <td>${formatPrice(sig.entry?.midpoint || sig.entry?.zoneHigh || sig.currentPrice)}</td>
+      <td class="bad">${formatPrice(sig.stopLoss?.price)}</td>
+      <td>${esc(thesis || 'No thesis')}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderDetail() {
+  const sig = state.signals.find(s => s.id === state.selectedId);
+  const el = document.getElementById('detail-panel');
+  if (!sig) {
+    el.innerHTML = '<div class="empty">Select a row in the matrix to inspect execution quality, agent votes, risk and invalidation.</div>';
+    setText('selected-title', 'No signal selected');
+    return;
+  }
+  setText('selected-title', `${sig.symbol} ${sig.action} ${sig.timeframe || ''}`);
+  const agents = (sig.agentBreakdown || sig.agents || []).map(a => `<div class="kv"><span>${esc(a.agent || a.label)}</span><span class="${a.status === 'OPPOSES' ? 'bad' : a.status === 'NEUTRAL' ? 'warn' : 'good'}">${esc(a.direction)} / ${esc(a.score)}</span></div>`).join('');
+  const reasons = (sig.allReasons || sig.reasons || []).slice(0, 8).map(r => `<li>${esc(r)}</li>`).join('');
+  el.innerHTML = `
+    <div class="label">Execution Sheet</div>
+    <div class="kv"><span>Signal</span><span>${esc(sig.symbol)} ${esc(sig.action)} ${esc(sig.timeframe || '')}</span></div>
+    <div class="kv"><span>Score</span><span>${esc(sig.score?.final)} / Grade ${esc(sig.score?.grade || '--')}</span></div>
+    <div class="kv"><span>Gate</span><span>${esc(sig.gate?.status || 'APPROVED')} / confidence ${esc(sig.gate?.confidence ?? '--')}</span></div>
+    <div class="kv"><span>Regime</span><span>${esc(sig.regime?.regime || 'UNKNOWN')} / tradeability ${esc(sig.regime?.tradeability ?? '--')}</span></div>
+    <div class="kv"><span>Entry</span><span>${formatPrice(sig.entry?.midpoint || sig.entry?.zoneHigh || sig.currentPrice)}</span></div>
+    <div class="kv"><span>Stop</span><span class="bad">${formatPrice(sig.stopLoss?.price)}</span></div>
+    <div class="kv"><span>TP1 / TP2</span><span class="good">${formatPrice(sig.targets?.tp1?.price)} / ${formatPrice(sig.targets?.tp2?.price)}</span></div>
+    <div class="kv"><span>Effective Risk</span><span>${esc(sig.riskEvaluation?.effectiveRisk ?? sig.risk?.effectiveRisk ?? '--')}%</span></div>
+    <div class="kv"><span>Learning</span><span>${esc(sig.gate?.learning?.note || 'No matching outcome profile yet')}</span></div>
+    <div class="outcome-grid">
+      <button class="win" onclick="recordOutcome('${escAttr(sig.id)}', 1)">WIN +1R</button>
+      <button class="be" onclick="recordOutcome('${escAttr(sig.id)}', 0)">BE 0R</button>
+      <button class="loss" onclick="recordOutcome('${escAttr(sig.id)}', -1)">LOSS -1R</button>
+    </div>
+    <div class="label" style="margin-top:12px">Agent Vote Stack</div>
+    ${agents || '<div class="sub">No agent breakdown received.</div>'}
+    <div class="label" style="margin-top:12px">Thesis</div>
+    <ul class="reason-list">${reasons || '<li>No reasons received.</li>'}</ul>
+  `;
+}
+
+function renderTape() {
+  const el = document.getElementById('gate-tape');
+  if (!state.telemetry.length) {
+    el.innerHTML = '<div class="sub">No gate events yet.</div>';
+    return;
+  }
+  el.innerHTML = state.telemetry.slice(0, 12).map(t => {
+    const status = t.gate?.status || t.type || 'EVENT';
+    const cls = status === 'REJECTED' ? 'bad' : status.includes('WARN') ? 'warn' : 'good';
+    const text = t.gate?.failures?.[0] || t.gate?.warnings?.[0] || t.type || 'telemetry';
+    return `<div class="tape-row"><span>${time(t.receivedAt || t.timestamp)}</span><span>${esc(t.symbol || 'SYS')} ${esc(text)}</span><span class="${cls}">${esc(status)}</span></div>`;
+  }).join('');
+}
+
+function renderRegimes() {
+  const el = document.getElementById('regime-board');
+  const rows = Object.values(state.regimes).sort((a,b) => (b.tradeability || 0) - (a.tradeability || 0)).slice(0, 8);
+  if (!rows.length) {
+    el.innerHTML = '<div class="sub">No regime telemetry yet.</div>';
+    return;
+  }
+  el.innerHTML = rows.map(r => `<div class="kv"><span>${esc(r.symbol)} ${esc(r.timeframe || '')}</span><span>${esc(r.regime)} / ${esc(r.tradeability)}</span></div>`).join('');
+}
+
+function selectSignal(id) {
+  state.selectedId = id;
+  renderMatrix();
+  renderDetail();
+}
+window.selectSignal = selectSignal;
+
+async function recordOutcome(signalId, pnlR) {
+  const payload = { signalId, outcome: { pnlR, notes: 'Mini App quick outcome' } };
+  socket.emit('record_outcome', payload);
+  const headers = { 'Content-Type': 'application/json' };
+  if (initData) headers['x-telegram-init-data'] = initData;
+  try {
+    await fetch('/api/outcomes', { method: 'POST', headers, body: JSON.stringify(payload) });
+  } catch (_) {}
+}
+window.recordOutcome = recordOutcome;
+
+document.querySelectorAll('.nav button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.nav button').forEach(b => b.classList.toggle('active', b === btn));
+    setText('view-title', btn.textContent.trim());
+  });
+});
+document.getElementById('filter-all').onclick = () => setFilter('ALL');
+document.getElementById('filter-a').onclick = () => setFilter('A');
+document.getElementById('filter-live').onclick = () => setFilter('LIVE');
+function setFilter(filter) {
+  state.filter = filter;
+  document.querySelectorAll('.toolbar-actions .chip').forEach(b => b.classList.remove('active'));
+  if (filter === 'A') document.getElementById('filter-a').classList.add('active');
+  else if (filter === 'LIVE') document.getElementById('filter-live').classList.add('active');
+  else document.getElementById('filter-all').classList.add('active');
+  renderMatrix();
+}
+
+function loadDemo() {
+  if (state.signals.length) return;
+  state.markets = {
+    XAUUSD: { symbol: 'XAUUSD', price: 2342.5, change: 0.34 },
+    BTCUSDT: { symbol: 'BTCUSDT', price: 67840, change: 1.22 },
+    EURUSD: { symbol: 'EURUSD', price: 1.0882, change: -0.18 },
+  };
+  state.regimes['XAUUSD:H1'] = { symbol: 'XAUUSD', timeframe: 'H1', regime: 'BULL_TREND', tradeability: 84 };
+  state.telemetry.unshift({ symbol: 'XAUUSD', type: 'signal_approved', gate: { status: 'APPROVED', confidence: 91, failures: [], warnings: [] }, receivedAt: Date.now() });
+  ingestSignal({
+    id: 'demo-xau',
+    symbol: 'XAUUSD',
+    timeframe: 'H1',
+    action: 'LONG',
+    timestamp: Date.now(),
+    currentPrice: 2342.5,
+    score: { final: 88, grade: 'A' },
+    gate: { status: 'APPROVED', confidence: 91 },
+    regime: { regime: 'BULL_TREND', tradeability: 84 },
+    entry: { midpoint: 2338, zoneHigh: 2340 },
+    stopLoss: { price: 2328 },
+    targets: { tp1: { price: 2352, rr: 1.5 }, tp2: { price: 2366, rr: 3 } },
+    riskEvaluation: { effectiveRisk: 1 },
+    agentBreakdown: [
+      { agent: 'SMC', score: 90, direction: 'LONG', status: 'CONFIRMS' },
+      { agent: 'MTF', score: 82, direction: 'LONG', status: 'CONFIRMS' },
+      { agent: 'Volume/OI', score: 78, direction: 'LONG', status: 'CONFIRMS' },
+    ],
+    allReasons: ['Bullish order block defended with displacement', 'Higher-timeframe bias aligned', 'Volume expansion confirmed accumulation'],
+  });
+}
+setTimeout(() => { if (!state.connected) loadDemo(); }, 2500);
+
+function setStatus(cls, text) {
+  document.getElementById('status-dot').className = `dot ${cls}`;
+  setText('status-text', text);
+}
+function setText(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text == null ? '--' : String(text);
+}
+function setClass(id, className) {
+  const el = document.getElementById(id);
+  if (el) el.className = className;
+}
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch]));
+}
+function escAttr(value) { return esc(value).replace(/`/g, '&#96;'); }
+function time(ts) {
+  if (!ts) return '--:--';
+  return new Date(ts).toTimeString().slice(0, 5);
+}
+function formatPrice(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n === 0) return '--';
+  if (Math.abs(n) >= 1000) return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (Math.abs(n) >= 10) return n.toFixed(3);
+  return n.toFixed(5);
+}
+renderAll();
+</script>
+</body>
+</html>

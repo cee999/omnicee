@@ -1,0 +1,747 @@
+'use strict';
+
+/**
+ * ============================================================
+ *  OMNICEE — Entry Point
+ *  Boots the entire system in the correct order and wires
+ *  all modules together.
+ *
+ *  Boot sequence:
+ *    1. Load .env config
+ *    2. Create AlertDispatcher (Telegram)
+ *    3. Create data feeds (BinanceFeed + TwelveData)
+ *    4. Create all 5 agents per symbol
+ *    5. Create ConflictResolver + SignalScorer
+ *    6. Create RiskEngine (DrawdownGuard + PositionSizer + SessionFilter)
+ *    7. Create TaskPlanner (orchestrates agents → scorer → dispatcher)
+ *    8. Wire event listeners
+ *    9. Connect feeds, init dispatcher, start planner
+ * ============================================================
+ */
+
+// ── 0. Config ──────────────────────────────────────────────────────────────
+
+try { require('dotenv').config(); } catch (_) { /* dotenv optional */ }
+
+const LOG_LEVEL = (process.env.LOG_LEVEL || 'info').toLowerCase();
+const log = {
+  debug: (...a) => LOG_LEVEL === 'debug' && console.log('[DEBUG]', ...a),
+  info:  (...a) => ['debug','info'].includes(LOG_LEVEL) && console.log('[INFO] ', ...a),
+  warn:  (...a) => console.warn('[WARN] ', ...a),
+  error: (...a) => console.error('[ERROR]', ...a),
+};
+
+// ── 1. Validate critical env vars ─────────────────────────────────────────
+
+function requireEnv(name, fallback) {
+  const val = process.env[name] || fallback;
+  if (!val) {
+    log.warn(`${name} not set in .env — some features will be disabled`);
+  }
+  return val;
+}
+
+const BOT_TOKEN       = requireEnv('TELEGRAM_BOT_TOKEN', '');
+const CHAT_IDS        = (requireEnv('TELEGRAM_CHAT_IDS', '') || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
+const SYMBOLS         = (requireEnv('SYMBOLS', 'BTCUSDT,XAUUSD,EURUSD') || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
+const TIMEFRAMES_STR  = (requireEnv('TIMEFRAMES', 'H1,H4') || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
+const MIN_SCORE       = parseFloat(requireEnv('MIN_SIGNAL_SCORE', '75'));
+const RISK_PCT        = parseFloat(requireEnv('RISK_PCT_PER_TRADE', '1.0'));
+const MAX_DAILY_LOSS  = parseFloat(requireEnv('MAX_DAILY_LOSS_PCT', '3.0'));
+const MAX_DRAWDOWN    = parseFloat(requireEnv('MAX_DRAWDOWN_PCT', '10.0'));
+const ACCOUNT_BALANCE = parseFloat(requireEnv('ACCOUNT_BALANCE', '10000'));
+const REQUIRE_KZ      = requireEnv('REQUIRE_KILLZONE', 'false') === 'true';
+const TWELVE_KEY      = requireEnv('TWELVE_DATA_API_KEY', '');
+
+// ── 2. Load modules ────────────────────────────────────────────────────────
+
+const path = require('path');
+const mongoStore = loadModule('./db', 'MongoStore') || {};
+
+function loadModule(relPath, label) {
+  try {
+    return require(path.join(__dirname, relPath));
+  } catch (err) {
+    log.error(`Failed to load ${label}: ${err.message}`);
+    return null;
+  }
+}
+
+// ── WebSocket bus (optional — only if ws-server.js is running) ─────────────
+let wsBus = null;
+try {
+  wsBus = require('./webapp/ws-server').bus;
+  log.info('WebSocket bus connected — signals will stream to Mini App');
+} catch (_) {
+  log.info('WebSocket bus not available — start webapp/ws-server.js to enable Mini App streaming');
+}
+
+const { AlertDispatcher }    = loadModule('./signal-pipeline/alert-dispatcher',  'AlertDispatcher')    || {};
+const { BinanceFeed }        = loadModule('./feeds/binance-ws',                  'BinanceFeed')        || {};
+const { TwelveDataFeed }     = loadModule('./feeds/twelve-data',                 'TwelveDataFeed')     || {};
+const { SMCAgent }           = loadModule('./agents/smc-agent',                  'SMCAgent')           || {};
+const { MTFAgent }           = loadModule('./agents/mtf-agent',                  'MTFAgent')           || {};
+const { MomentumAgent }      = loadModule('./agents/momentum-agent',             'MomentumAgent')      || {};
+const { SentimentAgent }     = loadModule('./agents/sentiment-agent',            'SentimentAgent')     || {};
+const { PatternAgent }       = loadModule('./agents/pattern-agent',              'PatternAgent')       || {};
+const { VolumeOIAgent }      = loadModule('./agents/volume-oi-agent',            'VolumeOIAgent')      || {};
+const { SignalScorer }       = loadModule('./signal-pipeline/signal-scorer',     'SignalScorer')       || {};
+const { SLTPEngine }         = loadModule('./signal-pipeline/sl-tp-engine',      'SLTPEngine')        || {};
+const { EntryOptimizer }     = loadModule('./signal-pipeline/entry-optimizer',   'EntryOptimizer')    || {};
+const { RegimeEngine }       = loadModule('./signal-pipeline/regime-engine',     'RegimeEngine')      || {};
+const { InstitutionalGates } = loadModule('./signal-pipeline/institutional-gates','InstitutionalGates') || {};
+const { AdaptiveLearningEngine } = loadModule('./signal-pipeline/adaptive-learning-engine','AdaptiveLearningEngine') || {};
+const { DrawdownGuard }      = loadModule('./risk-engine/drawdown-guard',        'DrawdownGuard')     || {};
+const { RiskEngine }         = loadModule('./risk-engine/position-sizer',        'RiskEngine')        || {};
+const { SessionFilter }      = loadModule('./risk-engine/session-filter',        'SessionFilter')     || {};
+const { CorrelationFilter }  = loadModule('./risk-engine/correlation',           'CorrelationFilter') || {};
+const { ConflictResolver: ConflictResolverClass } = loadModule('./orchestrator/conflict-resolver', 'ConflictResolver') || {};
+const { MemoryManager }      = loadModule('./orchestrator/memory-manager',       'MemoryManager')     || {};
+
+// ConflictResolver is instantiated (not static) — create one singleton
+const conflictResolver = ConflictResolverClass ? new ConflictResolverClass() : null;
+
+// ── 3. System state ────────────────────────────────────────────────────────
+
+/** Per-symbol candle stores — { symbol: { TF: candle[] } } */
+const candleStores = {};
+
+/** Per-symbol agent instances */
+const agentPool = {};
+
+/** Track last vote per symbol for signal assembly */
+const lastVotes = {};
+
+// In-flight analysis guard — prevents duplicate concurrent analyses per symbol+TF
+const inFlight = new Set();
+
+// ── 4. Initialise per-symbol agent pool ────────────────────────────────────
+
+function initAgentsForSymbol(symbol) {
+  agentPool[symbol] = {
+    smc:      SMCAgent      ? new SMCAgent({ symbol, timeframe: 'H1', lookback: 30, pivotStrength: 3, minScore: 60 }) : null,
+    mtf:      MTFAgent      ? new MTFAgent({ symbol, requireHTFAlign: true }) : null,
+    momentum: MomentumAgent ? new MomentumAgent({ symbol, timeframe: 'H1' }) : null,
+    sentiment:SentimentAgent ? new SentimentAgent({ symbol }) : null,
+    pattern:  PatternAgent  ? new PatternAgent({ symbol }) : null,
+    volumeOI: VolumeOIAgent ? new VolumeOIAgent({ symbol, timeframe: 'H1' }) : null,
+  };
+
+  candleStores[symbol] = {};
+  lastVotes[symbol]    = {};
+
+  for (const tf of TIMEFRAMES_STR) {
+    candleStores[symbol][tf] = [];
+  }
+
+  log.info(`Agents initialised for ${symbol}`);
+}
+
+// ── 5. Signal pipeline ─────────────────────────────────────────────────────
+
+/**
+ * Runs the full signal pipeline for one symbol on one timeframe.
+ * Called when a candle closes.
+ */
+async function runAnalysisCycle(symbol, timeframe) {
+  const key = `${symbol}:${timeframe}`;
+  if (inFlight.has(key)) {
+    log.debug(`Analysis already in flight for ${key} — skipping`);
+    return;
+  }
+  inFlight.add(key);
+
+  try {
+    const candles = candleStores[symbol]?.[timeframe];
+    if (!candles || candles.length < 50) {
+      log.debug(`${key}: not enough candles (${candles?.length || 0}/50) — waiting`);
+      return;
+    }
+
+    const agents  = agentPool[symbol];
+    if (!agents) return;
+
+    log.info(`[Analysis] ${key} — ${candles.length} candles`);
+
+    // ── Run agents in parallel ──
+    const [smcResult, mtfResult, momResult, volumeResult] = await Promise.all([
+      agents.smc?.analyze(candles)
+        .catch(e => { log.warn(`SMC error [${key}]: ${e.message}`); return null; }),
+
+      agents.mtf?.analyze({ [timeframe]: candles, ...buildMTFData(symbol) })
+        .catch(e => { log.warn(`MTF error [${key}]: ${e.message}`); return null; }),
+
+      agents.momentum?.analyze(candles)
+        .catch(e => { log.warn(`Momentum error [${key}]: ${e.message}`); return null; }),
+
+      agents.volumeOI?.analyze(candles)
+        .catch(e => { log.warn(`Volume/OI error [${key}]: ${e.message}`); return null; }),
+    ]);
+
+    // Sentiment/Pattern run less frequently (every 3rd cycle per symbol)
+    const sentResult = agents.sentiment && Math.random() > 0.66
+      ? await agents.sentiment.analyze(candles).catch(() => null)
+      : lastVotes[symbol]?.macroSent || null;
+
+    // Store votes for next cycle reuse
+    if (smcResult)   lastVotes[symbol].smc       = smcResult;
+    if (mtfResult)   lastVotes[symbol].mtf        = mtfResult;
+    if (momResult)   lastVotes[symbol].momentum   = momResult;
+    if (sentResult)  lastVotes[symbol].macroSent  = sentResult;
+    if (volumeResult) lastVotes[symbol].volumeOI  = volumeResult;
+
+    // ── Check we have the three minimum votes ──
+    const votes = lastVotes[symbol];
+    if (!votes.smc || !votes.mtf || !votes.momentum) {
+      log.debug(`${key}: incomplete votes — smc:${!!votes.smc} mtf:${!!votes.mtf} mom:${!!votes.momentum}`);
+      return;
+    }
+
+    const agentVotes = {
+      smc:       votes.smc,
+      mtf:       votes.mtf,
+      momentum:  votes.momentum,
+      macroSent: votes.macroSent || null,
+      volumeOI:  votes.volumeOI || null,
+    };
+
+    const regime = regimeEngine?.classify
+      ? regimeEngine.classify(candles)
+      : { regime: 'UNKNOWN', tradeability: 50, reasons: [] };
+
+    if (wsBus) {
+      wsBus.emit('regime_update', { symbol, timeframe, ...regime });
+    }
+
+    // ── Conflict resolution ──
+    const currentPrice = candles[candles.length - 1].close;
+    const conflictCtx  = { symbol, timeframe, currentPrice };
+
+    let resolvedVotes = agentVotes;
+    if (conflictResolver?.resolve) {
+      const resolved = conflictResolver.resolve(agentVotes, conflictCtx);
+      if (!resolved.resolved) {
+        log.debug(`${key}: conflict resolver blocked — ${resolved.note}`);
+        return;
+      }
+      resolvedVotes = resolved.votes;
+    }
+
+    // ── Score ──
+    if (!scorer) { log.warn('SignalScorer not available'); return; }
+
+    let signal = await scorer.score(resolvedVotes, {
+      symbol,
+      timeframe,
+      currentPrice,
+      timestamp: Date.now(),
+    });
+
+    if (!signal || signal.action === 'WAIT') {
+      log.debug(`${key}: score=${signal?.score?.final || 0} — no signal`);
+      return;
+    }
+
+    log.info(`[SIGNAL] ${signal.action} ${symbol} @ ${currentPrice} | Score: ${signal.score?.final} | Grade: ${signal.score?.grade}`);
+
+    // ── Refine entry, build SL/TP, then gate the setup ──
+    let fullSignal = { ...signal, regime };
+    let entryOptimization = null;
+    let tradePlan = null;
+    let riskEvaluation = null;
+
+    if (entryOptimizer && signal.action !== 'WAIT') {
+      entryOptimization = entryOptimizer.optimize(signal, candles);
+      if (!entryOptimization?.rejected && entryOptimization?.entryZone) {
+        signal = {
+          ...signal,
+          entry: {
+            zoneHigh: entryOptimization.entryZone.high,
+            zoneLow: entryOptimization.entryZone.low,
+            midpoint: entryOptimization.entryPrice,
+            type: entryOptimization.entryType,
+            note: entryOptimization.entryReason,
+          },
+          entryOptimization,
+        };
+      }
+    }
+
+    if (sltp && signal.action !== 'WAIT') {
+      try {
+        const sltpResult = sltp.calculate(signal, candles, {
+          accountBalance: ACCOUNT_BALANCE,
+          riskPct: RISK_PCT,
+        });
+        if (sltpResult?.error) {
+          log.warn(`SL/TP rejected ${key}: ${sltpResult.error}`);
+        } else {
+          tradePlan = sltpResult.plan;
+          riskEvaluation = riskEngine?.evaluate
+            ? riskEngine.evaluate({
+                ...signal,
+                currentPrice: tradePlan.entry.midPoint,
+                stopLoss: tradePlan.stopLoss,
+                risk: { atr: tradePlan.risk.atr },
+              })
+            : { approved: true, reason: 'RiskEngine unavailable' };
+        }
+      } catch (e) {
+        log.warn(`SL/TP calculation error: ${e.message}`);
+      }
+    }
+
+    const learning = adaptiveLearning?.evaluateSetup
+      ? await adaptiveLearning.evaluateSetup({
+          signal,
+          tradePlan,
+          entryOptimization,
+          riskEvaluation,
+          regime,
+        }).catch(e => ({ action: 'ALLOW', penalty: 0, note: `Learning unavailable: ${e.message}` }))
+      : { action: 'ALLOW', penalty: 0, note: 'Adaptive learning disabled' };
+
+    if (learning?.penalty && signal.score?.final != null) {
+      signal.score = {
+        ...signal.score,
+        preLearning: signal.score.final,
+        final: Math.max(0, Math.round(signal.score.final - learning.penalty)),
+        learningPenalty: learning.penalty,
+      };
+    }
+
+    const gate = institutionalGates?.evaluate
+      ? institutionalGates.evaluate({
+          signal,
+          tradePlan,
+          entryOptimization,
+          riskEvaluation,
+          regime,
+          votes: resolvedVotes,
+      })
+      : { approved: true, status: 'APPROVED', failures: [], warnings: [], confidence: signal.score?.final || 0 };
+
+    gate.learning = learning;
+    if (learning?.action === 'BLOCK') {
+      gate.approved = false;
+      gate.status = 'REJECTED';
+      gate.failures = [...(gate.failures || []), `Adaptive learning blocked repeat pattern: ${learning.note}`];
+    } else if (learning?.action === 'WARN') {
+      gate.status = gate.status === 'APPROVED' ? 'APPROVED_WITH_WARNINGS' : gate.status;
+      gate.warnings = [...(gate.warnings || []), `Adaptive learning warning: ${learning.note}`];
+    }
+
+    if (!gate.approved) {
+      log.warn(`[GATE BLOCK] ${symbol} ${timeframe}: ${gate.failures.join(' | ')}`);
+      mongoStore.saveTelemetry?.({
+        symbol,
+        timeframe,
+        type: 'gate_block',
+        gate,
+        regime,
+        timestamp: Date.now(),
+      }).catch(e => log.warn(`Mongo telemetry save error: ${e.message}`));
+      if (wsBus) {
+        wsBus.emit('telemetry_update', {
+          symbol,
+          timeframe,
+          type: 'gate_block',
+          gate,
+          regime,
+          timestamp: Date.now(),
+        });
+      }
+      return;
+    }
+
+    fullSignal = {
+      ...signal,
+      tradePlan,
+      riskEvaluation,
+      entryOptimization,
+      gate,
+      regime,
+    };
+
+    if (tradePlan) {
+      fullSignal.entry = {
+        ...fullSignal.entry,
+        midpoint: tradePlan.entry.midPoint,
+        zoneHigh: tradePlan.entry.zoneHigh,
+        zoneLow: tradePlan.entry.zoneLow,
+      };
+      fullSignal.stopLoss = tradePlan.stopLoss;
+      fullSignal.targets = tradePlan.targets;
+      fullSignal.management = {
+        ...fullSignal.management,
+        summary: tradePlan.management?.summary,
+      };
+    }
+
+    // ── Store in memory ──
+    if (memory?.saveSignal) {
+      memory.saveSignal(fullSignal).catch(e => log.warn(`Memory save error: ${e.message}`));
+    }
+    if (mongoStore.saveSignal) {
+      mongoStore.saveSignal(fullSignal).catch(e => log.warn(`Mongo signal save error: ${e.message}`));
+    }
+
+    // ── Dispatch to Telegram ──
+    if (dispatcher?.sendSignal) {
+      await dispatcher.sendSignal(fullSignal).catch(e => {
+        log.error(`Dispatch error: ${e.message}`);
+      });
+    }
+
+    // ── Emit to Mini App via WebSocket bus ──
+    if (wsBus) {
+      wsBus.emit('signal', fullSignal);
+      // Also emit updated stats
+      wsBus.emit('stats_update', {
+        total:    Object.values(lastVotes).reduce((s, v) => s + (v._signalCount || 0), 0),
+        gradeA:   fullSignal.score?.grade === 'A' ? 1 : 0,
+      });
+      if (drawdownGuard?.getStatus) {
+        const status = drawdownGuard.getStatus();
+        wsBus.emit('risk_update', {
+          state: status.circuitBreaker?.state,
+          dailyPnl: status.daily?.pnl,
+          drawdown: status.drawdown?.current,
+          consecLoss: status.consecLoss,
+          maxDailyLoss: status.daily?.limit,
+          maxDrawdown: status.drawdown?.limit,
+          netSizingFactor: status.netSizingFactor,
+        });
+      }
+      wsBus.emit('telemetry_update', {
+        symbol,
+        timeframe,
+        type: 'signal_approved',
+        gate,
+        regime,
+        risk: riskEvaluation,
+        timestamp: Date.now(),
+      });
+    }
+
+    // Update drawdown guard on signal fire
+    if (drawdownGuard?.recordSignal) {
+      drawdownGuard.recordSignal(fullSignal);
+    }
+
+  } catch (err) {
+    log.error(`Analysis cycle error [${symbol}:${timeframe}]: ${err.message}`);
+    if (LOG_LEVEL === 'debug') console.error(err.stack);
+  } finally {
+    inFlight.delete(key);
+  }
+}
+
+/** Build multi-TF data object for MTFAgent from current candle stores */
+function buildMTFData(symbol) {
+  const store = candleStores[symbol] || {};
+  const data  = {};
+  for (const tf of TIMEFRAMES_STR) {
+    if (store[tf] && store[tf].length > 0) data[tf] = store[tf];
+  }
+  return data;
+}
+
+// ── 6. Candle ingestion ────────────────────────────────────────────────────
+
+const MAX_CANDLES_PER_TF = 500;
+
+function onCandle({ symbol, timeframe, candle, isClosed }) {
+  if (!SYMBOLS.includes(symbol)) return;
+  if (!TIMEFRAMES_STR.includes(timeframe)) return;
+
+  const store = candleStores[symbol];
+  if (!store) return;
+
+  if (!store[timeframe]) store[timeframe] = [];
+
+  const arr = store[timeframe];
+
+  // Update or push
+  if (arr.length && arr[arr.length - 1].timestamp === candle.timestamp) {
+    arr[arr.length - 1] = candle;  // update in-progress candle
+  } else {
+    arr.push(candle);
+    if (arr.length > MAX_CANDLES_PER_TF) arr.shift();
+  }
+
+  // Only run analysis on closed candles to avoid noise
+  if (isClosed) {
+    // Stream latest price to Mini App
+    if (wsBus && candle) {
+      wsBus.emit('market_update', {
+        symbol,
+        price:  candle.close,
+        change: candle.open ? ((candle.close - candle.open) / candle.open * 100) : 0,
+        bias:   lastVotes[symbol]?.smc?.direction?.toLowerCase() || 'wait',
+      });
+    }
+    setImmediate(() => runAnalysisCycle(symbol, timeframe));
+  }
+}
+
+// ── 7. Instantiate singletons ──────────────────────────────────────────────
+
+let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, institutionalGates,
+    adaptiveLearning, drawdownGuard, riskEngine, sessionFilter, correlationFilter, memory;
+
+function buildSingletons() {
+  // AlertDispatcher
+  if (AlertDispatcher && BOT_TOKEN) {
+    dispatcher = new AlertDispatcher({ token: BOT_TOKEN, chatIds: CHAT_IDS });
+    log.info(`AlertDispatcher created — ${CHAT_IDS.length} chat(s)`);
+  } else {
+    log.warn('AlertDispatcher disabled — no BOT_TOKEN or module missing');
+    dispatcher = null;
+  }
+
+  // DrawdownGuard
+  if (DrawdownGuard) {
+    drawdownGuard = new DrawdownGuard({
+      maxDailyLossPct:  MAX_DAILY_LOSS,
+      maxDrawdownPct:   MAX_DRAWDOWN,
+      accountBalance:ACCOUNT_BALANCE,
+    });
+    drawdownGuard.on('circuit_open', (data) => {
+      log.warn(`CIRCUIT BREAKER OPEN: ${data.reason}`);
+      dispatcher?.sendMessage?.(`🛑 *CIRCUIT BREAKER OPEN*\n${data.reason}`)?.catch(() => {});
+    });
+    log.info('DrawdownGuard created');
+  }
+
+  // SignalScorer — pass circuit breaker state check
+  if (SignalScorer) {
+    scorer = new SignalScorer({
+      minScore:      MIN_SCORE,
+      sessionFilter: true,
+      newsBlackout:  true,
+      requireKillzone: REQUIRE_KZ,
+      circuitBreaker: {
+        maxDailyLoss:  MAX_DAILY_LOSS,
+        maxDrawdown:   MAX_DRAWDOWN,
+      },
+    });
+
+    scorer.on('signal', (sig) => {
+      log.info(`[Scorer signal event] ${sig.action} ${sig.symbol} score=${sig.score?.final}`);
+    });
+    log.info('SignalScorer created');
+  } else {
+    log.error('SignalScorer module missing — signals cannot be scored');
+  }
+
+  // SL/TP Engine
+  if (SLTPEngine) {
+    sltp = new SLTPEngine();
+    log.info('SLTPEngine created');
+  }
+
+  // EntryOptimizer
+  if (EntryOptimizer) {
+    entryOptimizer = new EntryOptimizer();
+    log.info('EntryOptimizer created');
+  }
+
+  if (RegimeEngine) {
+    regimeEngine = new RegimeEngine({ lookback: 120 });
+    log.info('RegimeEngine created');
+  }
+
+  if (InstitutionalGates) {
+    institutionalGates = new InstitutionalGates({
+      minScore: MIN_SCORE,
+      minRR: 1.5,
+      maxRiskPct: Math.min(RISK_PCT, 2.0),
+      minRegimeTradeability: 50,
+    });
+    log.info('InstitutionalGates created');
+  }
+
+  if (AdaptiveLearningEngine) {
+    adaptiveLearning = new AdaptiveLearningEngine({ store: mongoStore });
+    log.info('AdaptiveLearningEngine created');
+  }
+
+  // PositionSizer (exported as RiskEngine in position-sizer.js)
+  if (RiskEngine) {
+    riskEngine = new RiskEngine({
+      accountBalance: ACCOUNT_BALANCE,
+      riskPct:        RISK_PCT,
+      sizingMethod:   'ATR',
+    });
+    log.info('RiskEngine (position sizer) created');
+  }
+
+  // SessionFilter
+  if (SessionFilter) {
+    sessionFilter = new SessionFilter();
+    log.info('SessionFilter created');
+  }
+
+  // CorrelationFilter
+  if (CorrelationFilter) {
+    correlationFilter = new CorrelationFilter({ maxOpenPositions: 5 });
+    log.info('CorrelationFilter created');
+  }
+
+  // MemoryManager (in-memory fallback is built into it)
+  if (MemoryManager) {
+    memory = new MemoryManager({
+      redisUrl:    process.env.REDIS_URL    || null,
+      databaseUrl: process.env.DATABASE_URL || null,
+    });
+    log.info('MemoryManager created (in-memory fallback active if no Redis/PG)');
+  }
+}
+
+// ── 8. Build feeds ─────────────────────────────────────────────────────────
+
+function buildFeeds() {
+  const feeds = [];
+
+  // Separate crypto vs forex/commodity symbols
+  const cryptoSymbols = SYMBOLS.filter(s => s.endsWith('USDT') || s.endsWith('USDC') || s.endsWith('BTC'));
+  const fxSymbols     = SYMBOLS.filter(s => !cryptoSymbols.includes(s));
+
+  // Binance feed for crypto
+  if (BinanceFeed && cryptoSymbols.length) {
+    const binanceFeed = new BinanceFeed({
+      symbols:    cryptoSymbols,
+      timeframes: TIMEFRAMES_STR,
+    });
+    binanceFeed.on('candle',        onCandle);
+    binanceFeed.on('candle_update', onCandle);
+    binanceFeed.on('error', (err) => log.error(`BinanceFeed error: ${err.message}`));
+    binanceFeed.on('connected', () => log.info(`BinanceFeed connected for: ${cryptoSymbols.join(', ')}`));
+    feeds.push({ name: 'BinanceFeed', instance: binanceFeed, symbols: cryptoSymbols });
+    log.info(`BinanceFeed configured for: ${cryptoSymbols.join(', ')}`);
+  }
+
+  // TwelveData feed for forex/commodities
+  if (TwelveDataFeed && fxSymbols.length && TWELVE_KEY) {
+    const tdFeed = new TwelveDataFeed({
+      apiKey:     TWELVE_KEY,
+      symbols:    fxSymbols,
+      timeframes: TIMEFRAMES_STR,
+    });
+    tdFeed.on('candle',        onCandle);
+    tdFeed.on('candle_update', onCandle);
+    tdFeed.on('error', (err) => log.error(`TwelveData error: ${err.message}`));
+    tdFeed.on('connected', () => log.info(`TwelveDataFeed connected for: ${fxSymbols.join(', ')}`));
+    feeds.push({ name: 'TwelveDataFeed', instance: tdFeed, symbols: fxSymbols });
+    log.info(`TwelveDataFeed configured for: ${fxSymbols.join(', ')}`);
+  } else if (fxSymbols.length && !TWELVE_KEY) {
+    log.warn(`Forex symbols ${fxSymbols.join(',')} configured but TWELVE_DATA_API_KEY is missing`);
+  }
+
+  return feeds;
+}
+
+// ── 9. Graceful shutdown ───────────────────────────────────────────────────
+
+function setupShutdown(feeds) {
+  async function shutdown(signal) {
+    log.info(`Received ${signal} — shutting down...`);
+
+    for (const f of feeds) {
+      try { await f.instance.disconnect?.(); } catch (_) {}
+      log.info(`${f.name} disconnected`);
+    }
+
+    try { memory?.flush?.(); } catch (_) {}
+    log.info('OMNICEE shutdown complete');
+    process.exit(0);
+  }
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT',  () => shutdown('SIGINT'));
+  process.on('uncaughtException', (err) => {
+    log.error(`Uncaught exception: ${err.message}`);
+    if (LOG_LEVEL === 'debug') console.error(err.stack);
+  });
+  process.on('unhandledRejection', (reason) => {
+    log.error(`Unhandled rejection: ${reason}`);
+  });
+}
+
+// ── 10. Main boot ──────────────────────────────────────────────────────────
+
+async function main() {
+  log.info('╔══════════════════════════════════════╗');
+  log.info('║      OMNICEE  — Starting up          ║');
+  log.info('╚══════════════════════════════════════╝');
+  log.info(`Symbols:    ${SYMBOLS.join(', ')}`);
+  log.info(`Timeframes: ${TIMEFRAMES_STR.join(', ')}`);
+  log.info(`Min score:  ${MIN_SCORE} | Risk: ${RISK_PCT}% | Max DD: ${MAX_DRAWDOWN}%`);
+
+  // a. Build all singletons (scorer, dispatcher, risk, memory)
+  buildSingletons();
+
+  // b. Init agents per symbol
+  for (const sym of SYMBOLS) {
+    initAgentsForSymbol(sym);
+  }
+
+  // c. Init Telegram bot
+  if (dispatcher) {
+    try {
+      await dispatcher.init();
+      log.info('Telegram bot initialised');
+      await dispatcher.sendMessage?.('🚀 *OMNICEE Online*\nSystem initialized. Monitoring markets...');
+    } catch (err) {
+      log.error(`Telegram init failed: ${err.message}. Signals will still run — just no Telegram output.`);
+    }
+  }
+
+  // d. Init memory
+  if (memory?.init) {
+    try { await memory.init(); } catch (e) { log.warn(`Memory init: ${e.message}`); }
+  }
+
+  // e. Build and connect feeds
+  const feeds = buildFeeds();
+  setupShutdown(feeds);
+
+  let connected = 0;
+  for (const f of feeds) {
+    try {
+      await f.instance.connect();
+      log.info(`${f.name} connected`);
+      connected++;
+    } catch (err) {
+      log.error(`${f.name} connection failed: ${err.message}`);
+    }
+  }
+
+  if (connected === 0 && feeds.length > 0) {
+    log.error('No feeds connected — check your API keys and network connection');
+  }
+
+  if (feeds.length === 0) {
+    log.warn('No feeds configured. Add BINANCE_API_KEY and/or TWELVE_DATA_API_KEY to .env');
+    log.info('Running in dry-run mode — use the test script to inject synthetic candles');
+  }
+
+  log.info('OMNICEE boot complete. Waiting for market data...');
+  log.info('─────────────────────────────────────────────────');
+}
+
+if (require.main === module) {
+  main().catch(err => {
+    console.error('[FATAL] Boot failed:', err.message);
+    console.error(err.stack);
+    process.exit(1);
+  });
+}
+
+// ── Exports for testing ────────────────────────────────────────────────────
+
+module.exports = { main, onCandle, runAnalysisCycle, candleStores, agentPool, lastVotes };

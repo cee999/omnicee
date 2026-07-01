@@ -1,0 +1,37 @@
+{
+  "name": "omnicee",
+  "version": "1.0.0",
+  "description": "OMNICEE — Institutional-Grade AI Trading Assistant",
+  "main": "index.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "start:api": "node api/server.js",
+    "start:ws": "node api/server.js",
+    "start:all": "node -e \"require('./api/server').startServer(); require('./index.js').main()\"",
+    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:reload": "pm2 reload ecosystem.config.js",
+    "dev": "node --watch index.js",
+    "test": "node test/smoke-test.js",
+    "check": "node test/syntax-check.js"
+  },
+  "dependencies": {
+    "@twa-dev/sdk": "^8.0.1",
+    "compression": "^1.8.1",
+    "cors": "^2.8.6",
+    "dotenv": "^16.6.1",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.5.2",
+    "finnhub": "^2.0.15",
+    "helmet": "^8.2.0",
+    "mongodb": "^7.4.0",
+    "socket.io": "^4.8.3",
+    "ws": "^8.21.0"
+  },
+  "optionalDependencies": {
+    "ioredis": "^5.3.2",
+    "pg": "^8.11.5"
+  }
+}
