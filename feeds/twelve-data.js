@@ -255,7 +255,7 @@ class TDSymbolResolver {
     }
 
     if (type === 'commodity') {
-      const map = { XAUUSD: 'XAU/USD', XAGUSD: 'XAG/USD', WTIUSD: 'WTI/USD', BRENTUSD: 'BRENT/USD' };
+      const map = { XAUUSD: 'XAU/USD', XAGUSD: 'XAG/USD', WTIUSD: 'WTI/USD', USOIL: 'WTI/USD', BRENTUSD: 'BRENT/USD' };
       return map[symbol] || symbol;
     }
 
@@ -268,7 +268,7 @@ class TDSymbolResolver {
       forexCurrencies.some(c => symbol.endsWith(c)) && symbol.length === 6;
 
     if (isForexPair) return 'forex';
-    if (['XAUUSD','XAGUSD','WTIUSD','BRENTUSD','NATGASUSD'].includes(symbol)) return 'commodity';
+    if (['XAUUSD','XAGUSD','WTIUSD','USOIL','BRENTUSD','NATGASUSD'].includes(symbol)) return 'commodity';
     if (['SPX','NDX','DJI','UK100','GER40','US500','US30','US100'].includes(symbol)) return 'index';
     return 'stock';
   }
