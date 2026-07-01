@@ -94,6 +94,13 @@ const { EntryOptimizer }     = loadModule('./signal-pipeline/entry-optimizer',  
 const { RegimeEngine }       = loadModule('./signal-pipeline/regime-engine',     'RegimeEngine')      || {};
 const { InstitutionalGates } = loadModule('./signal-pipeline/institutional-gates','InstitutionalGates') || {};
 const { AdaptiveLearningEngine } = loadModule('./signal-pipeline/adaptive-learning-engine','AdaptiveLearningEngine') || {};
+const { MonteCarloEngine }   = loadModule('./signal-pipeline/monte-carlo-engine', 'MonteCarloEngine')  || {};
+const { BayesianEngine }     = loadModule('./signal-pipeline/bayesian-engine',    'BayesianEngine')    || {};
+const { StatisticalValidator }= loadModule('./signal-pipeline/statistical-validator','StatisticalValidator') || {};
+const { WalkForwardOptimizer }= loadModule('./signal-pipeline/walk-forward-optimizer','WalkForwardOptimizer') || {};
+const { EnsembleEngine }     = loadModule('./signal-pipeline/ensemble-engine',    'EnsembleEngine')    || {};
+const { MicrostructureAgent }= loadModule('./agents/microstructure-agent',        'MicrostructureAgent') || {};
+const { FractalAgent }       = loadModule('./agents/fractal-agent',               'FractalAgent')      || {};
 const { DrawdownGuard }      = loadModule('./risk-engine/drawdown-guard',        'DrawdownGuard')     || {};
 const { RiskEngine }         = loadModule('./risk-engine/position-sizer',        'RiskEngine')        || {};
 const { SessionFilter }      = loadModule('./risk-engine/session-filter',        'SessionFilter')     || {};
@@ -122,12 +129,14 @@ const inFlight = new Set();
 
 function initAgentsForSymbol(symbol) {
   agentPool[symbol] = {
-    smc:      SMCAgent      ? new SMCAgent({ symbol, timeframe: 'H1', lookback: 30, pivotStrength: 3, minScore: 60 }) : null,
-    mtf:      MTFAgent      ? new MTFAgent({ symbol, requireHTFAlign: true }) : null,
-    momentum: MomentumAgent ? new MomentumAgent({ symbol, timeframe: 'H1' }) : null,
-    sentiment:SentimentAgent ? new SentimentAgent({ symbol }) : null,
-    pattern:  PatternAgent  ? new PatternAgent({ symbol }) : null,
-    volumeOI: VolumeOIAgent ? new VolumeOIAgent({ symbol, timeframe: 'H1' }) : null,
+    smc:            SMCAgent           ? new SMCAgent({ symbol, timeframe: 'H1', lookback: 30, pivotStrength: 3, minScore: 60 }) : null,
+    mtf:            MTFAgent           ? new MTFAgent({ symbol, requireHTFAlign: true }) : null,
+    momentum:       MomentumAgent      ? new MomentumAgent({ symbol, timeframe: 'H1' }) : null,
+    sentiment:      SentimentAgent     ? new SentimentAgent({ symbol }) : null,
+    pattern:        PatternAgent       ? new PatternAgent({ symbol }) : null,
+    volumeOI:       VolumeOIAgent      ? new VolumeOIAgent({ symbol, timeframe: 'H1' }) : null,
+    microstructure: MicrostructureAgent? new MicrostructureAgent({ symbol, timeframe: 'H1' }) : null,
+    fractal:        FractalAgent       ? new FractalAgent({ symbol, timeframe: 'H1' }) : null,
   };
 
   candleStores[symbol] = {};
@@ -166,8 +175,8 @@ async function runAnalysisCycle(symbol, timeframe) {
 
     log.info(`[Analysis] ${key} — ${candles.length} candles`);
 
-    // ── Run agents in parallel ──
-    const [smcResult, mtfResult, momResult, volumeResult] = await Promise.all([
+    // ── Run agents in parallel (including new institutional agents) ──
+    const [smcResult, mtfResult, momResult, volumeResult, microResult, fractalResult] = await Promise.all([
       agents.smc?.analyze(candles)
         .catch(e => { log.warn(`SMC error [${key}]: ${e.message}`); return null; }),
 
@@ -179,6 +188,12 @@ async function runAnalysisCycle(symbol, timeframe) {
 
       agents.volumeOI?.analyze(candles)
         .catch(e => { log.warn(`Volume/OI error [${key}]: ${e.message}`); return null; }),
+
+      agents.microstructure?.analyze(candles)
+        .catch(e => { log.warn(`Microstructure error [${key}]: ${e.message}`); return null; }),
+
+      agents.fractal?.analyze(candles)
+        .catch(e => { log.warn(`Fractal error [${key}]: ${e.message}`); return null; }),
     ]);
 
     // Sentiment/Pattern run less frequently (every 3rd cycle per symbol)
@@ -191,7 +206,9 @@ async function runAnalysisCycle(symbol, timeframe) {
     if (mtfResult)   lastVotes[symbol].mtf        = mtfResult;
     if (momResult)   lastVotes[symbol].momentum   = momResult;
     if (sentResult)  lastVotes[symbol].macroSent  = sentResult;
-    if (volumeResult) lastVotes[symbol].volumeOI  = volumeResult;
+    if (volumeResult)  lastVotes[symbol].volumeOI       = volumeResult;
+    if (microResult)   lastVotes[symbol].microstructure  = microResult;
+    if (fractalResult) lastVotes[symbol].fractal         = fractalResult;
 
     // ── Check we have the three minimum votes ──
     const votes = lastVotes[symbol];
@@ -201,11 +218,13 @@ async function runAnalysisCycle(symbol, timeframe) {
     }
 
     const agentVotes = {
-      smc:       votes.smc,
-      mtf:       votes.mtf,
-      momentum:  votes.momentum,
-      macroSent: votes.macroSent || null,
-      volumeOI:  votes.volumeOI || null,
+      smc:            votes.smc,
+      mtf:            votes.mtf,
+      momentum:       votes.momentum,
+      macroSent:      votes.macroSent || null,
+      volumeOI:       votes.volumeOI || null,
+      microstructure: votes.microstructure || null,
+      fractal:        votes.fractal || null,
     };
 
     const regime = regimeEngine?.classify
@@ -313,6 +332,53 @@ async function runAnalysisCycle(symbol, timeframe) {
       };
     }
 
+    // ── Run institutional-grade validation engines in parallel ──
+    const [mcResult, bayesianResult, statResult] = await Promise.all([
+      monteCarlo?.simulate
+        ? monteCarlo.simulate({ candles, signal, tradePlan, regime })
+        : null,
+      bayesianEng?.evaluate
+        ? bayesianEng.evaluate({ signal, tradePlan, regime, entryOptimization, riskEvaluation, votes: resolvedVotes, session: signal.session })
+        : null,
+      statValidator?.validate
+        ? statValidator.validate({ candles, signal, tradePlan, regime })
+        : null,
+    ]).catch(e => {
+      log.warn(`Validation engine error: ${e.message}`);
+      return [null, null, null];
+    });
+
+    // Walk-forward check (uses cached analysis, fast)
+    const wfResult = walkForward?.analyze ? walkForward.analyze() : null;
+
+    // Ensemble validation — combines all layers
+    let ensembleResult = null;
+    if (ensembleEng?.evaluate) {
+      ensembleResult = ensembleEng.evaluate({
+        monteCarlo:     mcResult,
+        bayesian:       bayesianResult,
+        statistical:    statResult,
+        walkForward:    wfResult,
+        learning,
+        agentVotes:     resolvedVotes,
+        regime,
+        fractal:        votes.fractal || null,
+        microstructure: votes.microstructure || null,
+      }, signal);
+
+      // Apply ensemble penalty to score
+      if (ensembleResult?.totalPenalty && signal.score?.final != null) {
+        signal.score = {
+          ...signal.score,
+          preEnsemble: signal.score.final,
+          final: Math.max(0, Math.round(signal.score.final - ensembleResult.totalPenalty)),
+          ensemblePenalty: ensembleResult.totalPenalty,
+        };
+      }
+
+      log.info(`[ENSEMBLE] ${symbol} ${timeframe}: score=${ensembleResult.ensembleScore} approved=${ensembleResult.approved} layers=${ensembleResult.approvedLayers}/${ensembleResult.layerCount}`);
+    }
+
     const gate = institutionalGates?.evaluate
       ? institutionalGates.evaluate({
           signal,
@@ -321,6 +387,8 @@ async function runAnalysisCycle(symbol, timeframe) {
           riskEvaluation,
           regime,
           votes: resolvedVotes,
+          ensemble: ensembleResult,
+          learning,
       })
       : { approved: true, status: 'APPROVED', failures: [], warnings: [], confidence: signal.score?.final || 0 };
 
@@ -364,6 +432,29 @@ async function runAnalysisCycle(symbol, timeframe) {
       entryOptimization,
       gate,
       regime,
+      ensemble: ensembleResult,
+      validation: {
+        monteCarlo: mcResult ? {
+          approved: mcResult.approved,
+          winProbability: mcResult.winProbability,
+          expectedR: mcResult.expectedR,
+          simulations: mcResult.simulations,
+        } : null,
+        bayesian: bayesianResult ? {
+          approved: bayesianResult.approved,
+          posterior: bayesianResult.posterior,
+        } : null,
+        statistical: statResult ? {
+          approved: statResult.approved,
+          passed: statResult.passed,
+          total: statResult.total,
+        } : null,
+        walkForward: wfResult ? {
+          sufficient: wfResult.sufficient,
+          wfe: wfResult.wfe,
+          robust: wfResult.robust,
+        } : null,
+      },
     };
 
     if (tradePlan) {
@@ -491,7 +582,8 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
 // ── 7. Instantiate singletons ──────────────────────────────────────────────
 
 let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, institutionalGates,
-    adaptiveLearning, drawdownGuard, riskEngine, sessionFilter, correlationFilter, memory;
+    adaptiveLearning, drawdownGuard, riskEngine, sessionFilter, correlationFilter, memory,
+    monteCarlo, bayesianEng, statValidator, walkForward, ensembleEng;
 
 function buildSingletons() {
   // AlertDispatcher
@@ -567,7 +659,52 @@ function buildSingletons() {
 
   if (AdaptiveLearningEngine) {
     adaptiveLearning = new AdaptiveLearningEngine({ store: mongoStore });
-    log.info('AdaptiveLearningEngine created');
+    log.info('AdaptiveLearningEngine created (with RL + Mistake Blacklist)');
+  }
+
+  // Monte Carlo Simulation Engine
+  if (MonteCarloEngine) {
+    monteCarlo = new MonteCarloEngine({
+      simulations: parseInt(process.env.MC_SIMULATIONS || '5000', 10),
+      minWinProb: parseFloat(process.env.MC_MIN_WIN_PROB || '0.55'),
+      minExpectedR: parseFloat(process.env.MC_MIN_EXPECTED_R || '0.3'),
+    });
+    log.info('MonteCarloEngine created (5000 sims × 3 methods = 15000 paths)');
+  }
+
+  // Bayesian Probability Engine
+  if (BayesianEngine) {
+    bayesianEng = new BayesianEngine({
+      basePrior: parseFloat(process.env.BAYES_PRIOR || '0.50'),
+      minPosterior: parseFloat(process.env.BAYES_MIN_POSTERIOR || '0.52'),
+    });
+    log.info('BayesianEngine created (LR + NaiveBayes + BetaBinomial)');
+  }
+
+  // Statistical Validator
+  if (StatisticalValidator) {
+    statValidator = new StatisticalValidator({
+      minTestsPassed: parseInt(process.env.STAT_MIN_TESTS || '5', 10),
+      significanceLevel: parseFloat(process.env.STAT_SIGNIFICANCE || '0.05'),
+    });
+    log.info('StatisticalValidator created (10 hypothesis tests)');
+  }
+
+  // Walk-Forward Optimizer
+  if (WalkForwardOptimizer) {
+    walkForward = new WalkForwardOptimizer({
+      minSamples: parseInt(process.env.WF_MIN_SAMPLES || '20', 10),
+      minWFE: parseFloat(process.env.WF_MIN_WFE || '0.35'),
+    });
+    log.info('WalkForwardOptimizer created');
+  }
+
+  // Ensemble Validation Engine
+  if (EnsembleEngine) {
+    ensembleEng = new EnsembleEngine({
+      minConfidence: parseFloat(process.env.ENSEMBLE_MIN_CONFIDENCE || '60'),
+    });
+    log.info('EnsembleEngine created (9-layer consensus validation)');
   }
 
   // PositionSizer (exported as RiskEngine in position-sizer.js)
@@ -676,7 +813,8 @@ function setupShutdown(feeds) {
 
 async function main() {
   log.info('╔══════════════════════════════════════╗');
-  log.info('║      OMNICEE  — Starting up          ║');
+  log.info('║  OMNICEE  — Institutional Grade v2   ║');
+  log.info('║  Monte Carlo · Bayesian · Ensemble   ║');
   log.info('╚══════════════════════════════════════╝');
   log.info(`Symbols:    ${SYMBOLS.join(', ')}`);
   log.info(`Timeframes: ${TIMEFRAMES_STR.join(', ')}`);

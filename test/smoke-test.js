@@ -282,9 +282,61 @@ async function runTests() {
     } catch (e) { fail('SLTPEngine', e); }
   }
 
-  // ── 11. Syntax check all modules ──────────────────────────────────────
+  // ── 11. New Institutional-Grade Engines ────────────────────────────────
 
-  console.log('\n11. index.js syntax check');
+  console.log('\n11. Institutional-Grade Validation Engines');
+
+  try {
+    const { MonteCarloEngine } = require(path.join(ROOT, 'signal-pipeline/monte-carlo-engine'));
+    const mc = new MonteCarloEngine({ simulations: 100 });
+    const mcResult = mc.simulate({ candles, signal: { action: 'LONG', score: { final: 80 }, targets: { tp1: { price: 2100 } }, stopLoss: { price: 1950 } }, tradePlan: { entry: { midPoint: 2000 }, stopLoss: { price: 1950 }, targets: { tp1: { price: 2100, rr: 2 } } }, regime: {} });
+    pass(`MonteCarloEngine: ${mcResult.simulations} sims, winProb=${mcResult.winProbability}`);
+  } catch (e) { fail('MonteCarloEngine', e); }
+
+  try {
+    const { BayesianEngine } = require(path.join(ROOT, 'signal-pipeline/bayesian-engine'));
+    const be = new BayesianEngine();
+    const beResult = be.evaluate({ signal: { action: 'LONG', score: { final: 82, grade: 'B' } }, regime: { tradeability: 70, structure: 'DIRECTIONAL' }, votes: { smc: { direction: 'LONG' }, mtf: { direction: 'LONG' } } });
+    pass(`BayesianEngine: posterior=${beResult.posterior}, approved=${beResult.approved}`);
+  } catch (e) { fail('BayesianEngine', e); }
+
+  try {
+    const { StatisticalValidator } = require(path.join(ROOT, 'signal-pipeline/statistical-validator'));
+    const sv = new StatisticalValidator({ bootstrapIterations: 200 });
+    const svResult = sv.validate({ candles, signal: { action: 'LONG', score: { final: 80 } } });
+    pass(`StatisticalValidator: ${svResult.passed}/${svResult.total} tests passed`);
+  } catch (e) { fail('StatisticalValidator', e); }
+
+  try {
+    const { WalkForwardOptimizer } = require(path.join(ROOT, 'signal-pipeline/walk-forward-optimizer'));
+    const wf = new WalkForwardOptimizer();
+    const wfResult = wf.analyze();
+    pass(`WalkForwardOptimizer: sufficient=${wfResult.sufficient}`);
+  } catch (e) { fail('WalkForwardOptimizer', e); }
+
+  try {
+    const { EnsembleEngine } = require(path.join(ROOT, 'signal-pipeline/ensemble-engine'));
+    const ee = new EnsembleEngine();
+    pass('EnsembleEngine loaded');
+  } catch (e) { fail('EnsembleEngine', e); }
+
+  try {
+    const { MicrostructureAgent } = require(path.join(ROOT, 'agents/microstructure-agent'));
+    const micro = new MicrostructureAgent({ symbol: 'BTCUSDT' });
+    const microResult = await micro.analyze(candles);
+    pass(`MicrostructureAgent: direction=${microResult.direction} score=${microResult.score}`);
+  } catch (e) { fail('MicrostructureAgent', e); }
+
+  try {
+    const { FractalAgent } = require(path.join(ROOT, 'agents/fractal-agent'));
+    const fractal = new FractalAgent({ symbol: 'BTCUSDT' });
+    const fractalResult = await fractal.analyze(candles);
+    pass(`FractalAgent: direction=${fractalResult.direction} score=${fractalResult.score}`);
+  } catch (e) { fail('FractalAgent', e); }
+
+  // ── 12. Syntax check all modules ──────────────────────────────────────
+
+  console.log('\n12. index.js syntax check');
   try {
     require(path.join(ROOT, 'index.js'));
     pass('index.js loads without crash');
