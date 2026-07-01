@@ -53,7 +53,7 @@ function compactSignal(signal = {}) {
     })),
     reasons: (signal.allReasons || []).slice(0, 8),
     createdAt: new Date(),
-    expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * Number(process.env.MONGODB_SIGNAL_TTL_DAYS || 45)),
+    expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * Number(process.env.MONGODB_SIGNAL_TTL_DAYS || 14)),
   };
 }
 
@@ -76,7 +76,7 @@ function compactTelemetry(event = {}) {
     payload: event.payload || null,
     timestamp: event.timestamp || Date.now(),
     createdAt: new Date(),
-    expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * Number(process.env.MONGODB_TELEMETRY_TTL_DAYS || 7)),
+    expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * Number(process.env.MONGODB_TELEMETRY_TTL_DAYS || 3)),
   };
 }
 
@@ -85,12 +85,15 @@ async function getDB() {
   if (dbConnection) return dbConnection;
 
   client = new MongoClient(MONGODB_URI, {
-    maxPoolSize: Number(process.env.MONGODB_MAX_POOL || 5),
+    maxPoolSize: Number(process.env.MONGODB_MAX_POOL || 3),
     minPoolSize: 0,
-    serverSelectionTimeoutMS: 5000,
-    connectTimeoutMS: 6000,
-    socketTimeoutMS: 20000,
+    maxIdleTimeMS: 30000,
+    serverSelectionTimeoutMS: 8000,
+    connectTimeoutMS: 8000,
+    socketTimeoutMS: 25000,
     retryWrites: true,
+    retryReads: true,
+    compressors: ['zstd', 'snappy'],
   });
 
   await client.connect();
@@ -144,7 +147,15 @@ async function saveSignal(signal) {
   return { saved: true };
 }
 
+// Throttle telemetry to save free-tier storage (max 1 regime per symbol per min)
+const _lastTelemetrySave = {};
 async function saveTelemetry(event) {
+  const key = `${event.type}:${event.symbol}`;
+  const now = Date.now();
+  if (event.type === 'regime_update' && _lastTelemetrySave[key] && now - _lastTelemetrySave[key] < 60 * 1000) {
+    return { skipped: true, reason: 'throttled regime telemetry' };
+  }
+  _lastTelemetrySave[key] = now;
   const db = await getDB();
   if (!db) return { skipped: true, reason: 'MONGODB_URI not configured' };
   await indexPromise;
@@ -152,12 +163,22 @@ async function saveTelemetry(event) {
   return { saved: true };
 }
 
+// Throttle market snapshots to save free-tier storage (1 per symbol per 5 min)
+const _lastMarketSave = {};
 async function saveMarketSnapshot(snapshot) {
   const db = await getDB();
   if (!db) return { skipped: true, reason: 'MONGODB_URI not configured' };
+  const key = snapshot.symbol || 'unknown';
+  const now = Date.now();
+  if (_lastMarketSave[key] && now - _lastMarketSave[key] < 5 * 60 * 1000) {
+    return { skipped: true, reason: 'throttled (free tier optimization)' };
+  }
+  _lastMarketSave[key] = now;
   await db.collection('market_snapshots').insertOne({
-    ...snapshot,
-    timestamp: snapshot.timestamp || Date.now(),
+    symbol: snapshot.symbol,
+    price: snapshot.price,
+    change: snapshot.change,
+    timestamp: snapshot.timestamp || now,
     createdAt: new Date(),
   });
   return { saved: true };
