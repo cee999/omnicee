@@ -92,6 +92,8 @@ const BOT_COMMANDS = [
   { command: 'setsize',   description: 'Set risk % per trade (e.g. /setsize 1.5)' },
   { command: 'calc',      description: 'Position size calculator' },
   { command: 'markets',   description: 'Active market sessions right now' },
+  { command: 'sub',       description: 'Subscribe to signal alerts' },
+  { command: 'unsub',     description: 'Unsubscribe from signal alerts' },
   { command: 'help',      description: 'Full command reference' },
 ];
 
@@ -957,6 +959,7 @@ class AlertDispatcher extends EventEmitter {
    * @param {Object}   config.scorer         - reference to SignalScorer instance
    * @param {Object}   config.feed           - reference to BinanceFeed instance
    * @param {Object}   config.riskEngine     - reference to RiskEngine instance
+   * @param {Object}   config.store          - reference to MongoDB store (db.js) for subscriber persistence
    */
   constructor(config = {}) {
     super();
@@ -975,6 +978,7 @@ class AlertDispatcher extends EventEmitter {
     this.scorer         = config.scorer         || null;
     this.feed           = config.feed           || null;
     this.riskEngine     = config.riskEngine     || null;
+    this._store         = config.store          || null;
 
     // Internal state
     this._client        = new TelegramClient(this.token);
@@ -983,6 +987,7 @@ class AlertDispatcher extends EventEmitter {
     this._delivery      = new DeliveryTracker();
     this._paused        = false;
     this._pendingSignals = new Map(); // signalId → signal (for callback resolution)
+    this._subscribers   = new Set();  // auto-registered chat IDs from /start
     this._bot           = null;      // bot info from getMe()
 
     // Queue processor interval
@@ -1054,11 +1059,14 @@ class AlertDispatcher extends EventEmitter {
     // Dedup cleanup every 10 minutes
     setInterval(() => this._dedup.cleanup(), 10 * 60 * 1000);
 
+    // Load subscribers from MongoDB
+    await this._loadSubscribers();
+
     // Send startup notification
     await this._broadcastToAdmins(
       `${EMOJI.ROCKET} <b>AI Trading Assistant Online</b>\n\n` +
       `Bot: @${this._bot.username}\n` +
-      `Chats: ${this.chatIds.length} configured\n` +
+      `Subscribers: ${this._subscribers.size + this.chatIds.length}\n` +
       `Mode: ${this.useLongPoll ? 'Long Poll' : 'Webhook'}\n` +
       `Risk: ${this.riskPct}% per trade\n\n` +
       `<i>System ready. Waiting for signals...</i>`
@@ -1113,8 +1121,9 @@ class AlertDispatcher extends EventEmitter {
       posCalcText = `\n\n${EMOJI.CHART} <b>Suggested size:</b> ${calc.lotSize} lots / $${calc.riskUSD} risk`;
     }
 
-    // Queue delivery to all configured chats
-    for (const chatId of this.chatIds) {
+    // Queue delivery to all configured chats + subscribers
+    const allChatIds = this._getAllChatIds();
+    for (const chatId of allChatIds) {
       this._queue.push({
         priority,
         fn: async () => {
@@ -1159,7 +1168,7 @@ class AlertDispatcher extends EventEmitter {
   async sendLiquidationCascade(data) {
     const text = MessageFormatter.formatLiquidationCascade(data);
 
-    for (const chatId of this.chatIds) {
+    for (const chatId of this._getAllChatIds()) {
       this._queue.push({
         priority: PRIORITY.EMERGENCY,
         fn: async () => {
@@ -1179,7 +1188,7 @@ class AlertDispatcher extends EventEmitter {
     if (trade.usdtValue < 500000) return;
 
     const text = MessageFormatter.formatWhaleTrade(trade);
-    for (const chatId of this.chatIds) {
+    for (const chatId of this._getAllChatIds()) {
       this._queue.push({
         priority: PRIORITY.NORMAL,
         fn: async () => this._client.sendMessage(chatId, text),
@@ -1192,7 +1201,7 @@ class AlertDispatcher extends EventEmitter {
    */
   async sendFundingExtreme(extremes) {
     const text = MessageFormatter.formatFundingExtreme(extremes);
-    for (const chatId of this.chatIds) {
+    for (const chatId of this._getAllChatIds()) {
       this._queue.push({
         priority: PRIORITY.NORMAL,
         fn: async () => this._client.sendMessage(chatId, text),
@@ -1204,7 +1213,7 @@ class AlertDispatcher extends EventEmitter {
    * Broadcast a plain text message to all chats
    */
   async broadcast(text, priority = PRIORITY.NORMAL) {
-    for (const chatId of this.chatIds) {
+    for (const chatId of this._getAllChatIds()) {
       this._queue.push({
         priority,
         fn: async () => this._client.sendMessage(chatId, text),
@@ -1247,11 +1256,14 @@ class AlertDispatcher extends EventEmitter {
 
     switch (command) {
       case '/start':
+        await this._registerSubscriber(chatId, message.from);
         await this._client.sendMessage(
           chatId,
-          `${EMOJI.ROCKET} <b>Welcome to AI Trading Assistant!</b>\n\n` +
+          `${EMOJI.ROCKET} <b>Welcome to OMNICEE AI Trading!</b>\n\n` +
+          `${EMOJI.SIGNAL} You are now subscribed to live trading signals.\n` +
           `I monitor markets 24/7 and send you institutional-grade signals.\n\n` +
-          `Use /help to see all commands.`,
+          `Use /help to see all commands.\n` +
+          `Use /unsub to stop receiving signals.`,
           { replyMarkup: KeyboardBuilder.mainMenu() }
         );
         break;
@@ -1372,7 +1384,25 @@ class AlertDispatcher extends EventEmitter {
         break;
       }
 
+      case '/unsub':
+        this._subscribers.delete(String(chatId));
+        await this._client.sendMessage(chatId,
+          `${EMOJI.WARNING} You have unsubscribed from signals. Send /start to resubscribe.`
+        );
+        break;
+
+      case '/sub':
+        await this._registerSubscriber(chatId, message.from);
+        await this._client.sendMessage(chatId,
+          `${EMOJI.SIGNAL} You are now subscribed to live trading signals!`
+        );
+        break;
+
       default:
+        // Auto-register any user who messages the bot
+        if (!this._subscribers.has(String(chatId)) && !this.chatIds.includes(String(chatId))) {
+          await this._registerSubscriber(chatId, message.from);
+        }
         // Unknown command — show quick help
         if (text.startsWith('/')) {
           await this._client.sendMessage(chatId,
@@ -1602,6 +1632,45 @@ class AlertDispatcher extends EventEmitter {
   // ─────────────────────────────────────────────
   //  INTERNAL UTILITIES
   // ─────────────────────────────────────────────
+
+  /**
+   * Get all chat IDs to broadcast to (configured + subscribers)
+   */
+  _getAllChatIds() {
+    const all = new Set(this.chatIds.map(String));
+    for (const id of this._subscribers) all.add(id);
+    return [...all];
+  }
+
+  /**
+   * Register a subscriber and persist to MongoDB
+   */
+  async _registerSubscriber(chatId, fromUser) {
+    const id = String(chatId);
+    this._subscribers.add(id);
+    if (this._store?.upsertTelegramUser && fromUser) {
+      try {
+        await this._store.upsertTelegramUser({ ...fromUser, id: chatId });
+      } catch (e) {
+        console.warn('[AlertDispatcher] Failed to save subscriber:', e.message);
+      }
+    }
+    console.log(`[AlertDispatcher] Subscriber registered: ${id} (total: ${this._subscribers.size})`);
+  }
+
+  /**
+   * Load subscribers from MongoDB on startup
+   */
+  async _loadSubscribers() {
+    if (!this._store?.getSubscriberChatIds) return;
+    try {
+      const ids = await this._store.getSubscriberChatIds();
+      for (const id of ids) this._subscribers.add(String(id));
+      console.log(`[AlertDispatcher] Loaded ${ids.length} subscribers from database`);
+    } catch (e) {
+      console.warn('[AlertDispatcher] Failed to load subscribers:', e.message);
+    }
+  }
 
   async _broadcastToAdmins(text) {
     for (const chatId of this.adminChatIds) {
