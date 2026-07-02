@@ -987,6 +987,7 @@ class AlertDispatcher extends EventEmitter {
     this._delivery      = new DeliveryTracker();
     this._paused        = false;
     this._pendingSignals = new Map(); // signalId → signal (for callback resolution)
+    this._approvedSignals = new Map(); // signalId → signal (approved, waiting for EA execution)
     this._subscribers   = new Set();  // auto-registered chat IDs from /start
     this._bot           = null;      // bot info from getMe()
 
@@ -1430,11 +1431,12 @@ class AlertDispatcher extends EventEmitter {
         case 'APPROVE': {
           await this._client.answerCallback(callbackQueryId, '✅ Signal approved!', false);
           if (signal) {
+            this._approvedSignals.set(signalId, { ...signal, approvedAt: Date.now(), executed: false });
             this.emit('signal_approved', { signal, chatId });
             await this._client.editMessage(
               chatId, messageId,
               `✅ <b>APPROVED</b> — ${signal.action} ${signal.symbol}\n` +
-              `<i>Signal accepted. Manage your risk carefully.</i>`
+              `<i>Signal sent to MT5 for execution. Waiting for EA...</i>`
             );
           }
           break;
@@ -1713,6 +1715,33 @@ class AlertDispatcher extends EventEmitter {
 
   pause()  { this._paused = true;  console.log('[AlertDispatcher] Paused'); }
   resume() { this._paused = false; console.log('[AlertDispatcher] Resumed'); }
+
+  getApprovedSignals() {
+    const approved = [];
+    for (const [id, sig] of this._approvedSignals) {
+      if (!sig.executed) approved.push({ id, ...sig });
+    }
+    return approved;
+  }
+
+  markSignalExecuted(signalId, executionDetails = {}) {
+    const sig = this._approvedSignals.get(signalId);
+    if (!sig) return false;
+    sig.executed = true;
+    sig.executedAt = Date.now();
+    sig.executionDetails = executionDetails;
+    this.emit('signal_executed', { signalId, signal: sig, executionDetails });
+    // Notify via Telegram
+    const text = `${EMOJI.LIGHTNING} <b>TRADE EXECUTED</b>\n\n` +
+      `${sig.action === 'LONG' ? EMOJI.LONG : EMOJI.SHORT} ${sig.action} <code>${sig.symbol}</code>\n` +
+      `Lot: <b>${executionDetails.lotSize || '?'}</b>\n` +
+      `Entry: <code>${executionDetails.entryPrice || sig.currentPrice}</code>\n` +
+      `SL: <code>${executionDetails.sl || sig.stopLoss?.price}</code>\n` +
+      `TP: <code>${executionDetails.tp || sig.targets?.tp1?.price}</code>\n\n` +
+      `<i>Executed by MT5 EA</i>`;
+    this.broadcast(text, PRIORITY.HIGH);
+    return true;
+  }
 
   getStats() {
     const uptime = this._stats.startTime

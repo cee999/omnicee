@@ -834,6 +834,8 @@ async function main() {
       await dispatcher.init();
       log.info('Telegram bot initialised');
       await dispatcher.sendMessage?.('🚀 *OMNICEE Online*\nSystem initialized. Monitoring markets...');
+      // Share dispatcher with API server for EA endpoints
+      try { require('./api/realtime').setDispatcher(dispatcher); } catch (_) {}
     } catch (err) {
       log.error(`Telegram init failed: ${err.message}. Signals will still run — just no Telegram output.`);
     }
