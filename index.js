@@ -107,6 +107,11 @@ const { SessionFilter }      = loadModule('./risk-engine/session-filter',       
 const { CorrelationFilter }  = loadModule('./risk-engine/correlation',           'CorrelationFilter') || {};
 const { ConflictResolver: ConflictResolverClass } = loadModule('./orchestrator/conflict-resolver', 'ConflictResolver') || {};
 const { MemoryManager }      = loadModule('./orchestrator/memory-manager',       'MemoryManager')     || {};
+const { ExecutionManager }   = loadModule('./orchestrator/execution-algorithms',  'ExecutionManager')  || {};
+const { SignalMonitor }      = loadModule('./signal-pipeline/signal-monitor',     'SignalMonitor')     || {};
+const { InstitutionalRiskManager } = loadModule('./risk-engine/institutional-risk-manager', 'InstitutionalRiskManager') || {};
+const { MyfxbookFeed }       = loadModule('./feeds/myfxbook-feed',               'MyfxbookFeed')      || {};
+const { OpenInsiderFeed }    = loadModule('./feeds/openinsider-feed',            'OpenInsiderFeed')   || {};
 
 // ConflictResolver is instantiated (not static) — create one singleton
 const conflictResolver = ConflictResolverClass ? new ConflictResolverClass() : null;
@@ -583,7 +588,8 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
 
 let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, institutionalGates,
     adaptiveLearning, drawdownGuard, riskEngine, sessionFilter, correlationFilter, memory,
-    monteCarlo, bayesianEng, statValidator, walkForward, ensembleEng;
+    monteCarlo, bayesianEng, statValidator, walkForward, ensembleEng,
+    signalMonitor, institutionalRiskManager, executionManager, myfxbookFeed, openInsiderFeed;
 
 function buildSingletons() {
   // AlertDispatcher
@@ -737,6 +743,83 @@ function buildSingletons() {
     });
     log.info('MemoryManager created (in-memory fallback active if no Redis/PG)');
   }
+
+  // Signal Monitor - Real-time signal strength tracking
+  if (SignalMonitor) {
+    signalMonitor = new SignalMonitor({
+      checkIntervalMs: 60000, // Check every minute
+    });
+    signalMonitor.on('signal_weakening', (data) => {
+      log.warn(`[SignalMonitor] Signal weakening: ${data.signalId} - ${data.alert.message}`);
+      dispatcher?.sendMessage?.(`⚠️ *Signal Weakening*\n${data.signalId}\n${data.alert.message}`)?.catch(() => {});
+    });
+    signalMonitor.on('reversal_risk', (data) => {
+      log.warn(`[SignalMonitor] Reversal risk: ${data.signalId} - ${data.alert.message}`);
+      dispatcher?.sendMessage?.(`🔄 *Reversal Risk*\n${data.signalId}\n${data.alert.message}`)?.catch(() => {});
+    });
+    signalMonitor.on('signal_failed', (data) => {
+      log.warn(`[SignalMonitor] Signal failed: ${data.signalId} - ${data.alert.message}`);
+      dispatcher?.sendMessage?.(`❌ *Signal Failed*\n${data.signalId}\n${data.alert.message}`)?.catch(() => {});
+    });
+    log.info('SignalMonitor created');
+  }
+
+  // Institutional Risk Manager - Jane Street/Wall Street grade risk management
+  if (InstitutionalRiskManager) {
+    institutionalRiskManager = new InstitutionalRiskManager({
+      accountBalance: ACCOUNT_BALANCE,
+      maxDailyLossPct: MAX_DAILY_LOSS,
+      maxDrawdownPct: MAX_DRAWDOWN,
+    });
+    institutionalRiskManager.on('regime_change', (data) => {
+      log.info(`[InstitutionalRisk] Regime change: ${data.regime} (risk multiplier: ${data.riskMultiplier})`);
+    });
+    log.info('InstitutionalRiskManager created (Kelly Criterion, Correlation Analysis, Tail Risk)');
+  }
+
+  // Execution Manager - TWAP/VWAP/POV execution algorithms
+  if (ExecutionManager) {
+    executionManager = new ExecutionManager();
+    log.info('ExecutionManager created (TWAP, VWAP, POV algorithms)');
+  }
+
+  // Myfxbook Feed - Economic calendar and community sentiment
+  if (MyfxbookFeed && process.env.MYFXBOOK_EMAIL && process.env.MYFXBOOK_PASSWORD) {
+    myfxbookFeed = new MyfxbookFeed({
+      email: process.env.MYFXBOOK_EMAIL,
+      password: process.env.MYFXBOOK_PASSWORD,
+      pollIntervalMs: 5 * 60000,
+    });
+    myfxbookFeed.on('economic_surprise', (data) => {
+      log.info(`[Myfxbook] Economic surprise: ${data.event.name} - ${data.impact}`);
+      dispatcher?.sendMessage?.(`📊 *Economic Surprise*\n${data.event.name}\nImpact: ${data.impact}\nCurrencies: ${data.affectedCurrencies.join(', ')}`)?.catch(() => {});
+    });
+    myfxbookFeed.on('extreme_retail_positioning', (data) => {
+      log.warn(`[Myfxbook] Extreme retail positioning: ${data.symbol} - ${data.data.contrarianReason}`);
+    });
+    myfxbookFeed.on('upcoming_events', (data) => {
+      log.info(`[Myfxbook] ${data.count} high-impact events upcoming`);
+    });
+    log.info('MyfxbookFeed created');
+  } else {
+    log.warn('MyfxbookFeed disabled - missing credentials or module');
+  }
+
+  // OpenInsider Feed - SEC Form 4 insider trading data
+  if (OpenInsiderFeed) {
+    openInsiderFeed = new OpenInsiderFeed({
+      apiKey: process.env.PARSE_API_KEY || null,
+      pollIntervalMs: 10 * 60000,
+    });
+    openInsiderFeed.on('cluster_buy', (data) => {
+      log.info(`[OpenInsider] Cluster buy detected: ${data.ticker} - ${data.insiderCount} insiders`);
+      dispatcher?.sendMessage?.(`💼 *Cluster Buy*\n${data.ticker}\n${data.insiderCount} insiders in ${data.windowDays} days\nConfidence: ${data.confidence}%`)?.catch(() => {});
+    });
+    openInsiderFeed.on('executive_activity', (data) => {
+      log.info(`[OpenInsider] Executive activity: ${data.ticker} - ${data.signal}`);
+    });
+    log.info('OpenInsiderFeed created');
+  }
 }
 
 // ── 8. Build feeds ─────────────────────────────────────────────────────────
@@ -858,6 +941,55 @@ async function main() {
       connected++;
     } catch (err) {
       log.error(`${f.name} connection failed: ${err.message}`);
+    }
+  }
+
+  // f. Connect external data feeds
+  if (myfxbookFeed) {
+    try {
+      await myfxbookFeed.connect();
+      log.info('MyfxbookFeed connected');
+    } catch (err) {
+      log.error(`MyfxbookFeed connection failed: ${err.message}`);
+    }
+  }
+
+  if (openInsiderFeed) {
+    try {
+      await openInsiderFeed.connect();
+      log.info('OpenInsiderFeed connected');
+    } catch (err) {
+      log.error(`OpenInsiderFeed connection failed: ${err.message}`);
+    }
+  }
+
+  // g. Connect signal monitor
+  if (signalMonitor) {
+    try {
+      await signalMonitor.connect();
+      log.info('SignalMonitor connected');
+    } catch (err) {
+      log.error(`SignalMonitor connection failed: ${err.message}`);
+    }
+  }
+
+  // h. Connect institutional risk manager
+  if (institutionalRiskManager) {
+    try {
+      await institutionalRiskManager.connect();
+      log.info('InstitutionalRiskManager connected');
+    } catch (err) {
+      log.error(`InstitutionalRiskManager connection failed: ${err.message}`);
+    }
+  }
+
+  // i. Connect execution manager
+  if (executionManager) {
+    try {
+      await executionManager.connect();
+      log.info('ExecutionManager connected');
+    } catch (err) {
+      log.error(`ExecutionManager connection failed: ${err.message}`);
     }
   }
 
