@@ -10,7 +10,7 @@ const cors = require('cors');
 const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const { Server } = require('socket.io');
-const { bus } = require('./realtime');
+const { bus, getDispatcher } = require('./realtime');
 const db = require('../db');
 const { telegramAuthMiddleware, validateTelegramInitData } = require('./telegram-auth');
 const { FinnhubFeed } = require('../feeds/finnhub-feed');
@@ -123,6 +123,68 @@ function createApp() {
       timestamp: Date.now(),
     });
     res.json({ ok: true, outcome: saved });
+  });
+
+  // ── EA (MetaTrader 5) API endpoints ──
+
+  const EA_SECRET = process.env.EA_SECRET || '';
+  function eaAuth(req, res, next) {
+    const token = req.headers['x-ea-secret'] || req.query.secret;
+    if (!EA_SECRET) return next(); // no secret configured = open access
+    if (token === EA_SECRET) return next();
+    return res.status(401).json({ ok: false, error: 'Invalid EA secret' });
+  }
+
+  app.get('/api/ea/signals', eaAuth, (_req, res) => {
+    const dispatcher = getDispatcher();
+    if (!dispatcher) return res.json({ ok: true, signals: [] });
+    const approved = dispatcher.getApprovedSignals();
+    const mapped = approved.map(sig => ({
+      id: sig.id,
+      symbol: sig.symbol,
+      action: sig.action,
+      timeframe: sig.timeframe,
+      currentPrice: sig.currentPrice,
+      entry: sig.entry,
+      stopLoss: sig.stopLoss,
+      targets: sig.targets,
+      score: sig.score,
+      riskPct: Number(process.env.RISK_PCT_PER_TRADE || 1),
+      approvedAt: sig.approvedAt,
+    }));
+    res.json({ ok: true, signals: mapped });
+  });
+
+  app.post('/api/ea/executed', eaAuth, (req, res) => {
+    const { signalId, lotSize, entryPrice, sl, tp, ticket } = req.body || {};
+    if (!signalId) return res.status(400).json({ ok: false, error: 'signalId required' });
+    const dispatcher = getDispatcher();
+    if (!dispatcher) return res.status(503).json({ ok: false, error: 'Dispatcher not ready' });
+    const marked = dispatcher.markSignalExecuted(signalId, { lotSize, entryPrice, sl, tp, ticket });
+    if (!marked) return res.status(404).json({ ok: false, error: 'Signal not found or already executed' });
+    res.json({ ok: true });
+  });
+
+  app.post('/api/ea/balance', eaAuth, (req, res) => {
+    const { balance, equity, margin, freeMargin } = req.body || {};
+    if (balance == null) return res.status(400).json({ ok: false, error: 'balance required' });
+    const dispatcher = getDispatcher();
+    if (dispatcher) {
+      dispatcher.accountBalance = Number(balance);
+    }
+    bus.emit('balance_update', { balance, equity, margin, freeMargin, updatedAt: Date.now() });
+    res.json({ ok: true, balance });
+  });
+
+  app.get('/api/ea/config', eaAuth, (_req, res) => {
+    res.json({
+      ok: true,
+      riskPct: Number(process.env.RISK_PCT_PER_TRADE || 1),
+      maxDailyLoss: Number(process.env.MAX_DAILY_LOSS_PCT || 3),
+      maxDrawdown: Number(process.env.MAX_DRAWDOWN_PCT || 10),
+      symbols: (process.env.SYMBOLS || '').split(',').filter(Boolean),
+      timeframes: (process.env.TIMEFRAMES || 'H1,H4').split(','),
+    });
   });
 
   app.use(express.static(STATIC_ROOT, {
