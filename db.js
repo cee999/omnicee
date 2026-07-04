@@ -369,6 +369,22 @@ async function getSubscriberChatIds() {
   }
 }
 
+async function unsubscribeTelegramUser(chatId) {
+  try {
+    const db = await getDB();
+    if (!db) return false;
+    const telegramId = String(chatId);
+    await db.collection('users').updateOne(
+      { telegramId },
+      { $set: { subscribed: false, lastUnsubAt: new Date() } }
+    );
+    return true;
+  } catch (err) {
+    console.error('[MongoDB] unsubscribeTelegramUser error:', err.message);
+    return false;
+  }
+}
+
 async function getStats() {
   try {
     const db = await getDB();
@@ -423,6 +439,7 @@ module.exports = {
   getLearningProfiles,
   upsertTelegramUser,
   getSubscriberChatIds,
+  unsubscribeTelegramUser,
   getStats,
   health,
   close,

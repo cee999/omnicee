@@ -1100,6 +1100,11 @@ class AlertDispatcher extends EventEmitter {
       return;
     }
 
+    // Ensure signal has a unique ID
+    if (!signal.id) {
+      signal.id = `${signal.symbol}-${signal.action}-${Date.now()}`;
+    }
+
     this._pendingSignals.set(signal.id, signal);
     this._stats.signalsSent++;
 
@@ -1387,6 +1392,9 @@ class AlertDispatcher extends EventEmitter {
 
       case '/unsub':
         this._subscribers.delete(String(chatId));
+        if (this._store?.unsubscribeTelegramUser) {
+          await this._store.unsubscribeTelegramUser(chatId);
+        }
         await this._client.sendMessage(chatId,
           `${EMOJI.WARNING} You have unsubscribed from signals. Send /start to resubscribe.`
         );
@@ -1650,9 +1658,11 @@ class AlertDispatcher extends EventEmitter {
   async _registerSubscriber(chatId, fromUser) {
     const id = String(chatId);
     this._subscribers.add(id);
-    if (this._store?.upsertTelegramUser && fromUser) {
+    if (this._store?.upsertTelegramUser) {
       try {
-        await this._store.upsertTelegramUser({ ...fromUser, id: chatId });
+        // Ensure user is marked as subscribed in DB
+        const userUpdate = fromUser ? { ...fromUser, id: chatId } : { id: chatId };
+        await this._store.upsertTelegramUser({ ...userUpdate, subscribed: true });
       } catch (e) {
         console.warn('[AlertDispatcher] Failed to save subscriber:', e.message);
       }

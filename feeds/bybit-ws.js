@@ -918,6 +918,8 @@ class BybitFeed extends EventEmitter {
   disconnect() {
     console.log('[BybitFeed] Disconnecting...');
     this._conn?.close();
+    this._stopHeartbeat();
+    this._stopPeriodicPolling();
     this.emit('closed');
   }
 }
