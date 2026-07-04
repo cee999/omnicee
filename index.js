@@ -278,16 +278,21 @@ async function runAnalysisCycle(symbol, timeframe) {
     let riskEvaluation = null;
 
     if (entryOptimizer && signal.action !== 'WAIT') {
-      entryOptimization = entryOptimizer.optimize(signal, candles);
-      if (!entryOptimization?.rejected && entryOptimization?.entryZone) {
+      entryOptimization = entryOptimizer.optimize({ 
+        smcAnalysis: smcResult?.analysis || lastVotes[symbol].smc?.analysis, 
+        signal, 
+        candles 
+      });
+      if (!entryOptimization?.rejected && entryOptimization?.entry) {
+        const e = entryOptimization.entry;
         signal = {
           ...signal,
           entry: {
-            zoneHigh: entryOptimization.entryZone.high,
-            zoneLow: entryOptimization.entryZone.low,
-            midpoint: entryOptimization.entryPrice,
-            type: entryOptimization.entryType,
-            note: entryOptimization.entryReason,
+            zoneHigh: e.zoneHigh,
+            zoneLow: e.zoneLow,
+            midpoint: e.midPoint,
+            type: e.type,
+            note: e.note,
           },
           entryOptimization,
         };
@@ -307,9 +312,9 @@ async function runAnalysisCycle(symbol, timeframe) {
           riskEvaluation = riskEngine?.evaluate
             ? riskEngine.evaluate({
                 ...signal,
-                currentPrice: tradePlan.entry.midPoint,
+                entry: { midPoint: tradePlan.entry.midPoint },
                 stopLoss: tradePlan.stopLoss,
-                risk: { atr: tradePlan.risk.atr },
+                atr: tradePlan.risk.atr,
               })
             : { approved: true, reason: 'RiskEngine unavailable' };
         }

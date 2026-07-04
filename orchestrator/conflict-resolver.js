@@ -38,6 +38,10 @@ class ConflictResolver {
    * @param {Object} context - { symbol, timeframe, currentPrice, liquidationAlert }
    * @returns {Object} { resolved: bool, votes, conflicts, direction, note }
    */
+  resolve(votes, context = {}) {
+    return ConflictResolver.resolve(votes, context);
+  }
+
   static resolve(votes, context = {}) {
     try {
       const conflicts  = [];

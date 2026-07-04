@@ -517,6 +517,10 @@ class RiskEngine extends EventEmitter {
     return Number.isFinite(atr) ? atr : 0;
   }
 
+  size(signal) {
+    return this.evaluate(signal);
+  }
+
   getStats() {
     return {
       balance: this._balance,
