@@ -24,11 +24,43 @@ const INITIAL_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 60000;  // FIX: Add max limit to prevent infinite delays
 const MAX_BACKOFF_MULTIPLIER = 2;
 
+// FIX: OMNICEE uses MetaTrader-style timeframe labels internally (M1, M5, M15,
+// M30, H1, H4, D1, W1) — e.g. agents are configured with timeframe: 'H1'.
+// Binance's WebSocket kline streams require their own interval format
+// (1m, 5m, 15m, 30m, 1h, 4h, 1d, 1w). Previously these were never translated,
+// so passing the default/.env TIMEFRAMES ("H1,H4,D1") straight into BinanceFeed
+// produced invalid stream names like "btcusdt@kline_H1" that Binance silently
+// ignores — meaning no candles were ever received for those timeframes.
+const MT_TO_BINANCE_INTERVAL = {
+  M1: '1m', M3: '3m', M5: '5m', M15: '15m', M30: '30m',
+  H1: '1h', H2: '2h', H4: '4h', H6: '6h', H8: '8h', H12: '12h',
+  D1: '1d', W1: '1w', MN: '1M', MN1: '1M',
+};
+
+/** Normalize a timeframe label (MT-style or already Binance-style) to a valid Binance kline interval. */
+function toBinanceInterval(tf) {
+  if (!tf || typeof tf !== 'string') return null;
+  const upper = tf.toUpperCase();
+  if (MT_TO_BINANCE_INTERVAL[upper]) return MT_TO_BINANCE_INTERVAL[upper];
+  // Already Binance-style (e.g. '1h', '15m', '1d') — Binance intervals are lowercase.
+  return tf.toLowerCase();
+}
+
 class BinanceFeed extends EventEmitter {
   constructor(config = {}) {
     super();
     this.symbols = config.symbols || [];
+    // FIX: keep original (possibly MT-style) labels so emitted candle events
+    // stay consistent with the labels the rest of the system (agents,
+    // candleStores, onCandle) is keyed on.
     this.timeframes = config.timeframes || ['1m', '5m', '15m', '1h', '4h', '1d'];
+    // Binance interval -> original label, so incoming messages can be tagged
+    // back with whatever label the caller configured (e.g. 'H1' not '1h').
+    this._intervalToLabel = new Map();
+    for (const tf of this.timeframes) {
+      const interval = toBinanceInterval(tf);
+      if (interval) this._intervalToLabel.set(interval, tf);
+    }
     this.candleStore = new Map();
     this.ws = null;
     this.subscribed = new Set();
@@ -69,10 +101,12 @@ class BinanceFeed extends EventEmitter {
     for (const symbol of this.symbols) {
       if (!symbol || typeof symbol !== 'string') continue;
       const lower = symbol.toLowerCase();
-      // FIX: Only add valid timeframes
+      // FIX: Translate MT-style timeframe labels (H1, H4, D1...) to valid
+      // Binance kline intervals (1h, 4h, 1d...) before building stream names.
       for (const tf of this.timeframes) {
-        if (tf && typeof tf === 'string') {
-          streams.push(`${lower}@kline_${tf}`);
+        const interval = toBinanceInterval(tf);
+        if (interval) {
+          streams.push(`${lower}@kline_${interval}`);
         }
       }
     }
@@ -95,7 +129,11 @@ class BinanceFeed extends EventEmitter {
         if (!s || !k) return;
 
         const symbol = s;
-        const tf = k.i;
+        // FIX: k.i is the raw Binance interval (e.g. '1h'); translate it back
+        // to whatever label the caller originally configured (e.g. 'H1') so
+        // downstream consumers (candleStores, onCandle's TIMEFRAMES_STR check)
+        // recognize it.
+        const tf = this._intervalToLabel.get(k.i) || k.i;
         
         // FIX: Validate all numeric values
         const candle = {
