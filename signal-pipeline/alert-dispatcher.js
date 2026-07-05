@@ -1127,6 +1127,12 @@ class AlertDispatcher extends EventEmitter {
       posCalcText = `\n\n${EMOJI.CHART} <b>Suggested size:</b> ${calc.lotSize} lots / $${calc.riskUSD} risk`;
     }
 
+    // FIX: chartUrl was computed but never attached to the outgoing message —
+    // the chart link feature was silently dead. Append it now.
+    const chartLinkText = chartUrl
+      ? `\n\n${EMOJI.CHART} <a href="${chartUrl}">View ${signal.symbol} chart on TradingView</a>`
+      : '';
+
     // Queue delivery to all configured chats + subscribers
     const allChatIds = this._getAllChatIds();
     for (const chatId of allChatIds) {
@@ -1136,7 +1142,7 @@ class AlertDispatcher extends EventEmitter {
           try {
             const msg = await this._client.sendMessage(
               chatId,
-              text + posCalcText,
+              text + posCalcText + chartLinkText,
               { replyMarkup: keyboard }
             );
             this._delivery.record(signal.id, chatId, msg.message_id);
