@@ -304,7 +304,13 @@ class SignalQueue {
   }
 
   /**
-   * Get next item if rate limit allows
+   * Get next item if rate limit allows.
+   * FIX: RATE_LIMIT_PER_CHAT_MS and this._chatTimes were declared but never
+   * consulted — nothing stopped multiple messages from firing at the same
+   * chat within Telegram's ~1 msg/sec-per-chat limit, risking 429s/bans on
+   * bursts (e.g. many signals firing at once). Now scans for the first
+   * queued item that satisfies both the global and per-chat cooldown,
+   * instead of only ever looking at the front of the queue.
    */
   next() {
     if (this._queue.length === 0) return null;
@@ -313,11 +319,21 @@ class SignalQueue {
     const globalOk = now - this._lastSent >= RATE_LIMIT_GLOBAL_MS;
     if (!globalOk) return null;
 
-    return this._queue.shift() || null;
+    for (let i = 0; i < this._queue.length; i++) {
+      const item = this._queue[i];
+      const lastForChat = item.chatId != null ? (this._chatTimes.get(item.chatId) || 0) : 0;
+      const chatOk = item.chatId == null || (now - lastForChat >= RATE_LIMIT_PER_CHAT_MS);
+      if (chatOk) {
+        this._queue.splice(i, 1);
+        return item;
+      }
+    }
+    return null; // every queued item is still within its per-chat cooldown
   }
 
   async execute(item) {
     this._lastSent = Date.now();
+    if (item.chatId != null) this._chatTimes.set(item.chatId, Date.now());
     try {
       await item.fn();
     } catch (err) {
@@ -1138,6 +1154,7 @@ class AlertDispatcher extends EventEmitter {
     for (const chatId of allChatIds) {
       this._queue.push({
         priority,
+        chatId,
         fn: async () => {
           try {
             const msg = await this._client.sendMessage(
@@ -1159,6 +1176,7 @@ class AlertDispatcher extends EventEmitter {
     if (signal.score?.grade === 'A' && this.gradeAChatId) {
       this._queue.push({
         priority: PRIORITY.HIGH,
+        chatId: this.gradeAChatId,
         fn: async () => {
           await this._client.sendMessage(
             this.gradeAChatId,
@@ -1183,6 +1201,7 @@ class AlertDispatcher extends EventEmitter {
     for (const chatId of this._getAllChatIds()) {
       this._queue.push({
         priority: PRIORITY.EMERGENCY,
+        chatId,
         fn: async () => {
           await this._client.sendMessage(chatId, text);
         },
@@ -1203,6 +1222,7 @@ class AlertDispatcher extends EventEmitter {
     for (const chatId of this._getAllChatIds()) {
       this._queue.push({
         priority: PRIORITY.NORMAL,
+        chatId,
         fn: async () => this._client.sendMessage(chatId, text),
       });
     }
@@ -1216,6 +1236,7 @@ class AlertDispatcher extends EventEmitter {
     for (const chatId of this._getAllChatIds()) {
       this._queue.push({
         priority: PRIORITY.NORMAL,
+        chatId,
         fn: async () => this._client.sendMessage(chatId, text),
       });
     }
@@ -1228,6 +1249,7 @@ class AlertDispatcher extends EventEmitter {
     for (const chatId of this._getAllChatIds()) {
       this._queue.push({
         priority,
+        chatId,
         fn: async () => this._client.sendMessage(chatId, text),
       });
     }
