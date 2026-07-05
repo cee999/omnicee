@@ -207,7 +207,13 @@ class Position {
 
     const actions  = [];
     const isLong   = this.direction === 'LONG';
-    const riskPts  = Math.abs(this.entryPrice - this.currentSL);
+    // FIX: was computed from this.currentSL, which moves to breakeven/TP1 as
+    // the trade progresses. That collapsed the R-multiple denominator toward
+    // 0 (masked by `|| 1`, which then silently divided by 1 raw price unit
+    // instead of the real risk, producing wildly wrong mfe/mae/pnlR). Use the
+    // fixed initial risk distance instead, matching the pattern already used
+    // elsewhere in this file (see initialSL usage below).
+    const riskPts  = Math.abs(this.entryPrice - this.initialSL);
 
     this.currentPrice = price;
 
