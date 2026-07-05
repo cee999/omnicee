@@ -72,13 +72,13 @@ function _rsi(closes, period = RSI_PERIOD) {
   }
   const avgGain = gains  / period;
   const avgLoss = losses / period;
-  if (avgLoss === 0) return 100;
+  if (avgLoss === 0) return (avgGain === 0 ? 50 : 100);
   const rs = avgGain / avgLoss;
   return _round(100 - 100 / (1 + rs));
 }
 
 function _atr(candles, period = 14) {
-  if (candles.length < period) return null;
+  if (candles.length < period + 1) return null;
   const slice = candles.slice(-period - 1);
   let sum = 0;
   for (let i = 1; i < slice.length; i++) {

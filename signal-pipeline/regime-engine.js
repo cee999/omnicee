@@ -77,6 +77,7 @@ class RegimeTransitionModel {
     if (!transitions) return {};
 
     const total = Object.values(transitions).reduce((s, v) => s + v, 0);
+    if (total === 0) return {};
     const probs = {};
     for (const [to, count] of Object.entries(transitions)) {
       probs[to] = round(count / total, 4);
@@ -88,9 +89,10 @@ class RegimeTransitionModel {
   expectedDuration(regime) {
     const durations = this._durations[regime];
     if (!durations || durations.length < 3) return null;
+    const sorted = [...durations].sort((a, b) => a - b);
     return {
       mean: round(avg(durations) / (60 * 60 * 1000), 2),      // hours
-      median: round(durations.sort((a, b) => a - b)[Math.floor(durations.length / 2)] / (60 * 60 * 1000), 2),
+      median: round(sorted[Math.floor(sorted.length / 2)] / (60 * 60 * 1000), 2),
       samples: durations.length,
     };
   }

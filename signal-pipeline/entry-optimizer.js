@@ -168,7 +168,7 @@ class EntryOptimizer {
       if (currentPrice) {
         const zoneSpread = Math.abs(best.zoneHigh - best.zoneLow);
         const distToMid = Math.abs(currentPrice - best.midPoint);
-        if (distToMid < zoneSpread * 0.5) qualityScore += 10;
+        if (zoneSpread > 0 && distToMid < zoneSpread * 0.5) qualityScore += 10;
       }
 
       return {

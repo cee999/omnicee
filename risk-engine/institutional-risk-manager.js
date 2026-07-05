@@ -61,7 +61,8 @@ class KellyCriterionCalculator {
     const winRateDec = winRate / 100;
     const lossRateDec = 1 - winRateDec;
     
-    if (avgLoss === 0) return { kellyPercent: 0, positionSize: 0, riskAdjusted: false };
+    if (avgLoss === 0 || isNaN(avgLoss)) return { kellyPercent: 0, positionSize: 0, riskAdjusted: false };
+    if (avgWin === 0 || isNaN(avgWin)) return { kellyPercent: 0, positionSize: 0, riskAdjusted: false };
     
     const kellyPercent = (winRateDec * avgWin - lossRateDec * avgLoss) / avgWin;
     const quarterKelly = kellyPercent * KELLY_FRACTION;
@@ -159,7 +160,8 @@ class CorrelationAnalyzer {
     }
 
     const denominator = Math.sqrt(denom1 * denom2);
-    return denominator === 0 ? 0 : numerator / denominator;
+    if (denominator === 0 || isNaN(denominator)) return 0;
+    return numerator / denominator;
   }
 
   getCorrelation(symbol1, symbol2) {

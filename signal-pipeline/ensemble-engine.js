@@ -184,8 +184,8 @@ class EnsembleEngine {
     const votes = results.agentVotes || {};
     const voteEntries = Object.values(votes).filter(v => v?.direction);
     const agreeing = voteEntries.filter(v => v.direction?.toUpperCase() === direction).length;
-    const total = voteEntries.length || 1;
-    const agreement = agreeing / total;
+    const total = voteEntries.length;
+    const agreement = total > 0 ? agreeing / total : 0;
     const agentScore = 40 + agreement * 60;
     layers.push({
       name: 'Agent Consensus',

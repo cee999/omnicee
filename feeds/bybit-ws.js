@@ -157,7 +157,7 @@ class BybitOrderBookEngine {
 
     const bidVolume = sortedBids.reduce((s, [, q]) => s + q, 0);
     const askVolume = sortedAsks.reduce((s, [, q]) => s + q, 0);
-    const imbalance = bidVolume + askVolume > 0
+    const imbalance = (bidVolume + askVolume > 0 && !isNaN(bidVolume + askVolume))
       ? ((bidVolume - askVolume) / (bidVolume + askVolume)) * 100
       : 0;
 
@@ -326,7 +326,9 @@ class BybitLiquidationEngine {
 
   _priceToBucket(symbol, price) {
     // Bucket size scales with price magnitude (rough heuristic)
+    if (price <= 0 || !Number.isFinite(price)) return 0;
     const magnitude = Math.pow(10, Math.floor(Math.log10(price)) - 2);
+    if (magnitude === 0) return price;
     return Math.round(price / magnitude) * magnitude;
   }
 

@@ -167,7 +167,8 @@ class BinanceFeed extends EventEmitter {
     );
     this.reconnectAttempts++;
     console.log(`[BinanceFeed] Reconnecting in ${this.backoffMs}ms (attempt ${this.reconnectAttempts})`);
-    setTimeout(() => this.connect(), this.backoffMs);
+    if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
+    this._reconnectTimer = setTimeout(() => this.connect(), this.backoffMs);
   }
 
   _startHeartbeat() {
@@ -197,7 +198,12 @@ class BinanceFeed extends EventEmitter {
 
   close() {
     this._stopHeartbeat();
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
     if (this.ws) {
+      this.ws.removeAllListeners(); // Prevent close event from triggering reconnect
       this.ws.close();
       this.ws = null;
     }

@@ -76,6 +76,7 @@ class ATRCalculator {
     if (candles.length < period + 1) {
       // Fallback: simple high-low average
       const recent = candles.slice(-10);
+      if (recent.length === 0) return 0;
       return recent.reduce((s, c) => s + (c.high - c.low), 0) / recent.length;
     }
 

@@ -125,8 +125,8 @@ class EquityCurveTracker {
     const yMean    = _avg(balances);
     let num = 0, den = 0;
     balances.forEach((y, x) => { num += (x - xMean) * (y - yMean); den += (x - xMean) ** 2; });
-    const rawSlope  = den !== 0 ? num / den : 0;
-    const normSlope = yMean !== 0 ? rawSlope / yMean : 0;
+    const rawSlope  = (den !== 0 && !isNaN(den)) ? num / den : 0;
+    const normSlope = (yMean !== 0 && !isNaN(yMean)) ? rawSlope / yMean : 0;
     const yhat      = balances.map((_, x) => rawSlope * x + (yMean - rawSlope * xMean));
     const ssTot     = balances.reduce((s, y) => s + (y - yMean) ** 2, 0);
     const ssRes     = balances.reduce((s, y, i) => s + (y - yhat[i]) ** 2, 0);
@@ -158,7 +158,8 @@ class EquityCurveTracker {
     const returns = this._points.map(p => p.pnlPct / 100);
     const mean    = _avg(returns);
     const std     = Math.sqrt(_avg(returns.map(r => (r - mean) ** 2)));
-    return std === 0 ? null : _round((mean - riskFreeRate) / std, 3);
+    if (std === 0 || isNaN(std)) return null;
+    return _round((mean - riskFreeRate) / std, 3);
   }
 
   recoveryFactor() {

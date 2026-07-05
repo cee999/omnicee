@@ -351,16 +351,16 @@ class SignalHistoryTracker {
       : 0;
 
     const avgWin  = wins.length > 0
-      ? wins.reduce((s, t) => s + (t.pnlPct || 0), 0) / wins.length
+      ? wins.reduce((s, t) => s + (parseFloat(t.pnlPct) || 0), 0) / wins.length
       : 0;
 
     const avgLoss = losses.length > 0
-      ? losses.reduce((s, t) => s + (t.pnlPct || 0), 0) / losses.length
+      ? losses.reduce((s, t) => s + (parseFloat(t.pnlPct) || 0), 0) / losses.length
       : 0;
 
-    const profitFactor = avgLoss !== 0
+    const profitFactor = (avgLoss !== 0 && !isNaN(avgLoss))
       ? parseFloat(Math.abs(avgWin / avgLoss).toFixed(2))
-      : 0;
+      : (avgWin > 0 ? 999 : 0); // Handle zero loss as infinite PF
 
     // Per-symbol breakdown
     const bySymbol = {};

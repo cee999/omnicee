@@ -401,6 +401,8 @@ class MarketStructureDetector {
     const highs = [];
     const lows  = [];
 
+    if (candles.length < (strength * 2 + 1)) return { highs, lows };
+
     for (let i = strength; i < candles.length - strength; i++) {
       const window  = candles.slice(i - strength, i + strength + 1);
       const current = candles[i];
@@ -727,6 +729,8 @@ class PremiumDiscountCalculator {
    */
   static pricePosition(currentPrice, swingHigh, swingLow) {
     const range    = swingHigh - swingLow;
+    if (range <= 0) return { percentage: 50, zone: 'NEUTRAL', inOTE: false };
+    
     const position = (currentPrice - swingLow) / range;
 
     return {

@@ -283,7 +283,7 @@ class Indicators {
 
     const dxs = plusDIs.map((v, i) => {
       const sum = v + minusDIs[i];
-      return sum === 0 ? 0 : (Math.abs(v - minusDIs[i]) / sum) * 100;
+      return (sum === 0 || isNaN(sum)) ? 0 : (Math.abs(v - minusDIs[i]) / sum) * 100;
     });
 
     let adx = average(dxs.slice(0, period));
@@ -319,7 +319,7 @@ class Indicators {
     const std    = stdDev(slice);
     const upper  = middle + multiplier * std;
     const lower  = middle - multiplier * std;
-    const width  = (upper - lower) / middle * 100;
+    const width  = middle !== 0 ? (upper - lower) / middle * 100 : 0;
     const current = closes[closes.length - 1];
     const percentB = (current - lower) / (upper - lower);
 
