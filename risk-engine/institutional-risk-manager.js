@@ -618,13 +618,45 @@ class InstitutionalRiskManager extends EventEmitter {
       sizing.warning = 'Approaching max drawdown - position size reduced';
     }
 
+    // FIX: MAX_PORTFOLIO_RISK and MAX_CORRELATION_EXPOSURE were defined at the top
+    // of this file but never referenced anywhere — the intended portfolio-wide
+    // exposure cap and correlated-exposure cap were silently unenforced. Wired up here.
+    const exposure = this.portfolioManager.getTotalExposure();
+    const projectedGross = exposure.grossExposure + (sizing.adjustedSize * currentPrice);
+    if (this.accountBalance > 0 && (projectedGross / this.accountBalance) > MAX_PORTFOLIO_RISK) {
+      const allowedValue = Math.max(0, (MAX_PORTFOLIO_RISK * this.accountBalance) - exposure.grossExposure);
+      sizing.adjustedSize = Math.max(0, Math.min(sizing.adjustedSize, allowedValue / currentPrice));
+      sizing.portfolioRiskCapped = true;
+      sizing.warning = sizing.warning
+        ? `${sizing.warning} | Portfolio exposure capped at ${(MAX_PORTFOLIO_RISK * 100).toFixed(0)}% of account`
+        : `Portfolio exposure capped at ${(MAX_PORTFOLIO_RISK * 100).toFixed(0)}% of account`;
+      this._stats.riskAdjustments++;
+    }
+
+    const correlatedPositions = this.portfolioManager.correlationAnalyzer.getHighlyCorrelated(signal.symbol, 0.7);
+    if (correlatedPositions.length > 0) {
+      const correlatedValue = correlatedPositions.reduce((sum, c) => {
+        const pos = this.portfolioManager.positions.get(c.symbol);
+        return sum + (pos ? pos.size * pos.currentPrice : 0);
+      }, 0);
+      const projectedCorrValue = correlatedValue + (sizing.adjustedSize * currentPrice);
+      if (this.accountBalance > 0 && (projectedCorrValue / this.accountBalance) > MAX_CORRELATION_EXPOSURE) {
+        const allowedCorrValue = Math.max(0, (MAX_CORRELATION_EXPOSURE * this.accountBalance) - correlatedValue);
+        sizing.adjustedSize = Math.max(0, Math.min(sizing.adjustedSize, allowedCorrValue / currentPrice));
+        sizing.correlationExposureCapped = true;
+        sizing.warning = sizing.warning
+          ? `${sizing.warning} | Correlated exposure capped at ${(MAX_CORRELATION_EXPOSURE * 100).toFixed(0)}% of account`
+          : `Correlated exposure capped at ${(MAX_CORRELATION_EXPOSURE * 100).toFixed(0)}% of account`;
+      }
+    }
+
     // Track liquidity rejections
     if (!sizing.liquidityCheck.sufficient) {
       this._stats.liquidityRejections++;
     }
 
     // Track correlation rejections
-    if (sizing.correlationPenalty < 1) {
+    if (sizing.correlationPenalty < 1 || sizing.correlationExposureCapped) {
       this._stats.correlationRejections++;
     }
 
