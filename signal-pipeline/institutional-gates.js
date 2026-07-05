@@ -181,7 +181,7 @@ class InstitutionalGates {
 
   _countGatesPassed(failures, warnings) {
     const totalGates = 9;
-    return totalGates - failures.length;
+    return Math.max(0, totalGates - failures.length);
   }
 
   _confidence({ score, rr, regime, entryOptimization, riskEvaluation, ensemble, warnings, failures }) {
