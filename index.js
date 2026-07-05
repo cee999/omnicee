@@ -533,6 +533,20 @@ async function runAnalysisCycle(symbol, timeframe) {
       drawdownGuard.recordSignal(fullSignal);
     }
 
+    // FIX: SignalMonitor was instantiated and connected but createSignal() was
+    // never called anywhere, so its weakening/reversal-risk tracking never
+    // actually monitored any live signal. Register the fired signal here.
+    if (signalMonitor?.createSignal && fullSignal.id) {
+      signalMonitor.createSignal(fullSignal.id, {
+        score: fullSignal.score?.final,
+        direction: fullSignal.action || fullSignal.direction,
+        symbol: fullSignal.symbol,
+        entryPrice: fullSignal.entry?.midpoint,
+        stopLoss: fullSignal.stopLoss?.price,
+        takeProfit: fullSignal.targets?.tp1?.price,
+      }, { timeframe: fullSignal.timeframe });
+    }
+
   } catch (err) {
     log.error(`Analysis cycle error [${symbol}:${timeframe}]: ${err.message}`);
     if (LOG_LEVEL === 'debug') console.error(err.stack);
@@ -765,6 +779,29 @@ function buildSingletons() {
     signalMonitor.on('signal_failed', (data) => {
       log.warn(`[SignalMonitor] Signal failed: ${data.signalId} - ${data.alert.message}`);
       dispatcher?.sendMessage?.(`❌ *Signal Failed*\n${data.signalId}\n${data.alert.message}`)?.catch(() => {});
+    });
+    // FIX: without this handler, SignalMonitor's periodic check_signal ticks
+    // had nothing to act on — no market data was ever fed back in, so
+    // weakening/reversal detection could never actually fire.
+    signalMonitor.on('check_signal', ({ signalId }) => {
+      const status = signalMonitor.getSignalStatus(signalId);
+      const meta = status?.metadata;
+      if (!meta?.symbol) return;
+      const tf = meta.timeframe || TIMEFRAMES_STR[0];
+      const candles = candleStores[meta.symbol]?.[tf];
+      if (!candles || candles.length < 2) return;
+
+      const last = candles[candles.length - 1];
+      const prev = candles[candles.length - 2];
+      const priceDirection = last.close >= prev.close ? 'bullish' : 'bearish';
+      const volumeConfirmation = Number(last.volume || 0) >= Number(prev.volume || 0);
+
+      signalMonitor.updateSignal(signalId, {
+        priceConfirmation: true,
+        priceDirection,
+        volumeConfirmation,
+        regime: lastVotes[meta.symbol]?.smc?.direction || null,
+      });
     });
     log.info('SignalMonitor created');
   }
