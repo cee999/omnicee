@@ -28,7 +28,7 @@ class BinanceFeed extends EventEmitter {
   constructor(config = {}) {
     super();
     this.symbols = config.symbols || [];
-    this.timeframes = config.timeframes || ['1m', '5m', '15m', '1h', '4h', 'd1'];
+    this.timeframes = config.timeframes || ['1m', '5m', '15m', '1h', '4h', '1d'];
     this.candleStore = new Map();
     this.ws = null;
     this.subscribed = new Set();
@@ -72,7 +72,7 @@ class BinanceFeed extends EventEmitter {
       // FIX: Only add valid timeframes
       for (const tf of this.timeframes) {
         if (tf && typeof tf === 'string') {
-          streams.push(`${lower}@klines_${tf}`);
+          streams.push(`${lower}@kline_${tf}`);
         }
       }
     }
