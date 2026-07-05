@@ -841,23 +841,23 @@ class TaskPlanner extends EventEmitter {
   // Default agent constructors (when no factory provided)
   _createDefaultSMC(symbol) {
     try {
-      const { SMCAgent } = require('./smc-agent');
+      const { SMCAgent } = require('../agents/smc-agent');
       return new SMCAgent({ symbol, timeframe: 'H1', lookback: 30, pivotStrength: 3, minScore: 70 });
-    } catch { return null; }
+    } catch (err) { console.error('[TaskPlanner] Failed to create default SMCAgent:', err.message); return null; }
   }
 
   _createDefaultMTF(symbol) {
     try {
-      const { MTFAgent } = require('./mtf-agent');
+      const { MTFAgent } = require('../agents/mtf-agent');
       return new MTFAgent({ symbol, requireHTFAlign: true });
-    } catch { return null; }
+    } catch (err) { console.error('[TaskPlanner] Failed to create default MTFAgent:', err.message); return null; }
   }
 
   _createDefaultMomentum(symbol) {
     try {
-      const { MomentumAgent } = require('./momentum-agent');
+      const { MomentumAgent } = require('../agents/momentum-agent');
       return new MomentumAgent({ symbol, timeframe: 'H1' });
-    } catch { return null; }
+    } catch (err) { console.error('[TaskPlanner] Failed to create default MomentumAgent:', err.message); return null; }
   }
 
   // ─────────────────────────────────────────────
