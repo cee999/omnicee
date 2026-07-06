@@ -230,9 +230,15 @@ class BetaBinomialModel {
     }
     const integralAbove = (h / 3) * sum;
 
-    // Normalize by total integral
+    // FIX: betaPDF() is explicitly documented as unnormalized (x^(a-1)*(1-x)^(b-1)
+    // without dividing by B(a,b)). To get a true probability, the integral of the
+    // unnormalized density must be DIVIDED by B(a,b) = exp(logBeta(a,b)), not
+    // multiplied by it. The old code did `integralAbove * total`, which for any
+    // non-trivial alpha/beta (i.e. after real trade history accumulates) collapses
+    // toward ~0 regardless of the true win rate — verified numerically: a 50-10
+    // win/loss record produced probAbove50 ≈ 1e-27 instead of the correct ≈ 0.9999999.
     const total = Math.exp(logBeta(this._alpha, this._beta));
-    return round(total > 0 ? integralAbove * total : 0.5, 4);
+    return round(total > 0 ? integralAbove / total : 0.5, 4);
   }
 
   getStats() {
