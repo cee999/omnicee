@@ -299,6 +299,10 @@ class MyfxbookFeed extends EventEmitter {
       // Initial data fetch
       await this._fetchEconomicCalendar();
       await this._fetchCommunitySentiment();
+      // FIX: _fetchTopTraders() was fully implemented but never called
+      // anywhere — topTradersTracker stayed permanently empty, so
+      // getTraderConsensus()/getTopPerformers() always returned null.
+      await this._fetchTopTraders();
       
       // Start polling
       this._pollTimer = setInterval(() => this._poll(), this.pollIntervalMs);
@@ -319,6 +323,7 @@ class MyfxbookFeed extends EventEmitter {
       await Promise.all([
         this._fetchEconomicCalendar(),
         this._fetchCommunitySentiment(),
+        this._fetchTopTraders(),
       ]);
     } catch (err) {
       this._stats.errors++;
