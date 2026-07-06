@@ -311,6 +311,11 @@ class OpenInsiderFeed extends EventEmitter {
       errors: 0,
       startTime: null,
     };
+    // FIX: cluster novelty was tracked by array length/position, but
+    // getAllClusters() re-sorts by confidence every call — so a previously
+    // emitted cluster could shift position and get re-emitted as "new"
+    // while an actually-new cluster could be skipped. Track by ticker instead.
+    this._emittedClusters = new Set();
   }
 
   async connect() {
@@ -373,13 +378,18 @@ class OpenInsiderFeed extends EventEmitter {
 
       // Check for new clusters
       const clusters = this.clusterDetector.getAllClusters();
-      if (clusters.length > this._stats.clustersDetected) {
-        const newClusters = clusters.slice(this._stats.clustersDetected);
-        this._stats.clustersDetected = clusters.length;
-        
-        for (const cluster of newClusters) {
-          this.emit('cluster_buy', cluster);
-        }
+      const currentTickers = new Set(clusters.map(c => c.ticker));
+      const newClusters = clusters.filter(c => !this._emittedClusters.has(c.ticker));
+      this._stats.clustersDetected = clusters.length;
+
+      for (const cluster of newClusters) {
+        this._emittedClusters.add(cluster.ticker);
+        this.emit('cluster_buy', cluster);
+      }
+      // Prune tickers whose cluster has dissolved so a future re-formed
+      // cluster on the same ticker is treated as new again.
+      for (const ticker of this._emittedClusters) {
+        if (!currentTickers.has(ticker)) this._emittedClusters.delete(ticker);
       }
 
       // Check executive activity
