@@ -350,9 +350,24 @@ class VWAPExecutor {
       ? ((execution.achievedVWAP - execution.targetVWAP) / execution.targetVWAP) * 100 
       : 0;
 
+    // FIX: MAX_SLIPPAGE_TOLERANCE was defined but never checked against actual
+    // slippage anywhere — an execution could drift arbitrarily far from its
+    // target VWAP with no signal to the caller. Flag it explicitly now.
+    const excessiveSlippage = Math.abs(slippage / 100) > MAX_SLIPPAGE_TOLERANCE;
+    if (excessiveSlippage && execution.status === 'ACTIVE' && !execution._slippageWarned) {
+      execution._slippageWarned = true;
+      this.emit?.('excessive_slippage', {
+        executionId,
+        slippage: round(slippage, 3),
+        toleranceBps: round(MAX_SLIPPAGE_TOLERANCE * 10000, 1),
+      });
+    }
+
     return {
       ...execution,
       slippage: round(slippage, 3),
+      excessiveSlippage,
+      slippageTolerancePct: round(MAX_SLIPPAGE_TOLERANCE * 100, 3),
       completionPct: round((execution.filledQuantity / execution.totalQuantity) * 100, 1),
     };
   }

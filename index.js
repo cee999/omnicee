@@ -254,6 +254,31 @@ async function runAnalysisCycle(symbol, timeframe) {
       resolvedVotes = resolved.votes;
     }
 
+    // FIX: sessionFilter (holiday/weekend/liquidity/killzone/rollover/news-blackout
+    // gate) was instantiated in buildSingletons() but its .check() method was never
+    // called anywhere in the pipeline — it was silently doing nothing. Wired in here.
+    let sessionQuality = null;
+    if (sessionFilter?.check) {
+      sessionQuality = sessionFilter.check(symbol, Date.now());
+      if (!sessionQuality.allowed) {
+        log.debug(`${key}: session filter blocked — ${sessionQuality.reason}`);
+        return;
+      }
+    }
+
+    // FIX: drawdownGuard.evaluate() — the actual pre-trade circuit-breaker /
+    // daily-loss / recovery-mode gate — was never called. Only getStatus()
+    // (read-only) and recordSignal() (post-hoc logging) were used, so the
+    // circuit breaker never actually stopped a new trade from firing.
+    let drawdownEval = null;
+    if (drawdownGuard?.evaluate) {
+      drawdownEval = drawdownGuard.evaluate({ price: currentPrice });
+      if (!drawdownEval.allowed) {
+        log.warn(`${key}: drawdown guard blocked — ${drawdownEval.reason}`);
+        return;
+      }
+    }
+
     // ── Score ──
     if (!scorer) { log.warn('SignalScorer not available'); return; }
 
@@ -270,6 +295,17 @@ async function runAnalysisCycle(symbol, timeframe) {
     }
 
     log.info(`[SIGNAL] ${signal.action} ${symbol} @ ${currentPrice} | Score: ${signal.score?.final} | Grade: ${signal.score?.grade}`);
+
+    // FIX: correlationFilter was instantiated but its .check() method was
+    // never called — nothing prevented stacking correlated/duplicate/
+    // over-limit positions before a signal fired. Wired in here.
+    if (correlationFilter?.check) {
+      const corrCheck = correlationFilter.check(symbol, signal.action, RISK_PCT);
+      if (!corrCheck.allowed) {
+        log.debug(`${key}: correlation filter blocked — ${corrCheck.reason}`);
+        return;
+      }
+    }
 
     // ── Refine entry, build SL/TP, then gate the setup ──
     let fullSignal = { ...signal, regime };
@@ -317,6 +353,20 @@ async function runAnalysisCycle(symbol, timeframe) {
                 atr: tradePlan.risk.atr,
               })
             : { approved: true, reason: 'RiskEngine unavailable' };
+
+          // FIX: sessionQuality.multiplier and drawdownEval.sizingFactor were
+          // computed above but nothing ever applied them to the actual
+          // position size — they were pure dead weight. Fold them in now.
+          if (riskEvaluation?.approved && riskEvaluation.positionSize > 0) {
+            const combinedFactor =
+              (sessionQuality?.multiplier ?? 1) * (drawdownEval?.sizingFactor ?? 1);
+            if (combinedFactor < 1) {
+              riskEvaluation.positionSize = riskEvaluation.positionSize * combinedFactor;
+              riskEvaluation.sessionMultiplier = sessionQuality?.multiplier ?? 1;
+              riskEvaluation.drawdownSizingFactor = drawdownEval?.sizingFactor ?? 1;
+              riskEvaluation.note = `${riskEvaluation.note || ''} | Size scaled ${(combinedFactor * 100).toFixed(0)}% (session/drawdown)`;
+            }
+          }
         }
       } catch (e) {
         log.warn(`SL/TP calculation error: ${e.message}`);

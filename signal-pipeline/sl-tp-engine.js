@@ -528,6 +528,12 @@ class PositionLifecycle {
     this.sizeRemaining = 1.0; // as fraction of original size (1.0 = 100%)
     this.log        = [];
     this.pnlR       = 0;
+    // FIX: riskPts used to be recomputed from entryPrice vs currentSL on every
+    // update() call. Once BreakevenManager/TP1 moves currentSL to entryPrice,
+    // that distance collapses to 0, turning every subsequent pnlR calculation
+    // (and the SL-hit R multiple) into NaN/Infinity for the rest of the trade.
+    // The R-multiple denominator must stay fixed at the ORIGINAL risk taken.
+    this.initialRiskPts = null;
   }
 
   /**
@@ -551,6 +557,7 @@ class PositionLifecycle {
         this.state      = 'ENTERED';
         this.entryPrice = currentPrice;
         this.openTime   = Date.now();
+        this.initialRiskPts = Math.abs(this.entryPrice - this.currentSL);
         actions.push({ type: 'ENTER', price: currentPrice, note: 'Price entered trade zone' });
         this._log('ENTERED', currentPrice);
       }
@@ -559,7 +566,7 @@ class PositionLifecycle {
 
     if (this.state === 'CLOSED') return actions;
 
-    const riskPts = Math.abs(this.entryPrice - this.currentSL);
+    const riskPts = this.initialRiskPts || Math.abs(this.entryPrice - this.currentSL);
 
     // ── SL Hit ──
     const slHit = isLong ? currentPrice <= this.currentSL : currentPrice >= this.currentSL;

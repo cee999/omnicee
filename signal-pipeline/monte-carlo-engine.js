@@ -91,7 +91,7 @@ class MonteCarloEngine {
     this.minExpectedR = config.minExpectedR || 0.3;
     this.maxRiskOfRuin = config.maxRiskOfRuin || 0.15;
     this.blockSize = config.blockSize || 5;
-    this.seed = config.seed || null;
+    this.seed = config.seed ?? null;
   }
 
   /**
@@ -121,7 +121,7 @@ class MonteCarloEngine {
     const returns = this._logReturns(closes);
     const calibration = this._calibrate(returns, candles, regime);
 
-    const prng = new PRNG(this.seed || Date.now());
+    const prng = new PRNG(this.seed ?? Date.now());
 
     // Run GBM simulation
     const gbmResults = this._runGBM(entry, sl, targets, direction, calibration, prng);
@@ -157,6 +157,21 @@ class MonteCarloEngine {
       reasons.push(`MC approved: ${round(combined.winProb * 100, 1)}% win prob, ${round(combined.expectedR, 2)}R expected`);
     }
 
+    // FIX: penalty used to be Math.min(20, Math.round((this.minWinProb - combined.winProb) * 40))
+    // even when approved === false. If the signal was actually rejected for a
+    // low expectedR or a high riskOfRuin (not a winProb shortfall), that
+    // expression could go negative — which downstream (ensemble-engine.js,
+    // index.js) gets SUBTRACTED from the signal's score, silently *increasing*
+    // the score of a rejected signal instead of penalizing it. Penalty is now
+    // the max of all three shortfalls, clamped to a sane non-negative range.
+    let penalty = 0;
+    if (!approved) {
+      const winProbGap    = Math.max(0, (this.minWinProb - combined.winProb) * 40);
+      const expectedRGap  = Math.max(0, (this.minExpectedR - combined.expectedR) * 30);
+      const riskOfRuinGap = Math.max(0, (riskOfRuin.probability - this.maxRiskOfRuin) * 60);
+      penalty = Math.min(20, Math.max(5, Math.round(winProbGap + expectedRGap + riskOfRuinGap)));
+    }
+
     return {
       approved,
       simulations: this.simulations * 3,
@@ -186,7 +201,7 @@ class MonteCarloEngine {
         kurtosis: round(calibration.kurtosis, 4),
       },
       reasons,
-      penalty: approved ? 0 : Math.min(20, Math.round((this.minWinProb - combined.winProb) * 40)),
+      penalty,
     };
   }
 
@@ -287,6 +302,12 @@ class MonteCarloEngine {
           } else {
             outcome = (entry - targets[bestTarget]) / entry;
           }
+          // FIX: was missing this break (present in _runBlockBootstrap but not
+          // here or in _runBootstrap). Without it, the path kept simulating
+          // after "winning", and a later SL-hit check could overwrite a
+          // profitable outcome with a full-loss outcome — understating the
+          // true win rate and expected R of every signal evaluated.
+          break;
         }
       }
 
@@ -356,6 +377,9 @@ class MonteCarloEngine {
           outcome = direction === 'LONG'
             ? (targets[bestTarget] - entry) / entry
             : (entry - targets[bestTarget]) / entry;
+          // FIX: same missing break as _runGBM — without it a later SL check
+          // in the same path could silently overwrite a winning outcome.
+          break;
         }
       }
 
