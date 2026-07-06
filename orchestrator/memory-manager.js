@@ -979,8 +979,12 @@ class MemoryManager extends EventEmitter {
   }
 
   async getSignalsBySymbol(symbol, n = 50) {
-    const key   = `signal:${symbol}`;
-    const l1    = this._lru.scan(`signal:${symbol}`);
+    // FIX: signals are cached under `signal:<id>` (keyed by signal ID), not
+    // `signal:<symbol>...`, so scanning by a `signal:<symbol>` prefix could
+    // never match anything — this L1 fast-path was silently dead code,
+    // always falling through to the slower Redis lookup below. Scan all
+    // cached signals and filter by the symbol field on the value instead.
+    const l1 = this._lru.scan('signal:').filter(e => e.value?.symbol === symbol);
     if (l1.length >= 5) return l1.map(e => e.value).slice(0, n);
 
     const l2 = await this._redis.lrange(`signals:history:${symbol}`, 0, n);
