@@ -44,6 +44,15 @@ class RegimeTransitionModel {
     this._currentRegime = null;
     this._currentStart = null;
     this._totalTransitions = 0;
+    // FIX: _stayCounts tracks how often a regime persists from one classify()
+    // call to the next. _transitions only ever records a change AWAY from a
+    // regime (record() only touches it when regime !== this._currentRegime),
+    // so probs[regime] in transitionProbabilities() could never be populated —
+    // persistenceProbability() was structurally guaranteed to always return
+    // its 0.5 fallback, silently disabling the "low regime persistence"
+    // tradeability penalty in classify(). Verified: rapid regime flapping that
+    // should show near-zero persistence still returned exactly 0.5.
+    this._stayCounts = {};
   }
 
   record(regime) {
@@ -63,6 +72,8 @@ class RegimeTransitionModel {
           this._durations[from] = this._durations[from].slice(-100);
         }
       }
+    } else if (this._currentRegime && regime === this._currentRegime) {
+      this._stayCounts[regime] = (this._stayCounts[regime] || 0) + 1;
     }
 
     if (regime !== this._currentRegime) {
@@ -104,9 +115,14 @@ class RegimeTransitionModel {
   }
 
   // Persistence probability (how likely to stay in current regime next period)
+  // FIX: was `transitionProbabilities(regime)[regime] || 0.5`, which could
+  // never be anything but 0.5 (see constructor note). Now computed from
+  // actual stay-vs-leave counts for this regime.
   persistenceProbability(regime) {
-    const probs = this.transitionProbabilities(regime);
-    return probs[regime] || 0.5; // self-transition = persistence
+    const stays = this._stayCounts[regime] || 0;
+    const transitionsAway = Object.values(this._transitions[regime] || {}).reduce((s, v) => s + v, 0);
+    const total = stays + transitionsAway;
+    return total > 0 ? round(stays / total, 4) : 0.5;
   }
 }
 
