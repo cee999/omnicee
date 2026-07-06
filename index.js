@@ -738,6 +738,9 @@ function buildSingletons() {
       accountBalance: ACCOUNT_BALANCE,
       riskPct:        RISK_PCT,
       sizingMethod:   'ATR',
+      // FIX: without this, DrawdownGuard's circuit breaker never actually
+      // influenced position sizing/approval — see position-sizer.js.
+      drawdownGuard,
     });
     log.info('RiskEngine (position sizer) created');
   }

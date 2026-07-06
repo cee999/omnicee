@@ -332,6 +332,13 @@ class RiskEngine extends EventEmitter {
     this._useKelly      = config.useKelly        || false;
     this._corrFilter    = config.correlationFilter !== false;
     this._sessScaling   = config.sessionScaling  !== false;
+    // FIX: RiskEngine.evaluate() previously used a hardcoded
+    // `{ sizingFactor: 1.0 }` stub instead of actually consulting
+    // DrawdownGuard, meaning the circuit breaker (daily loss limits,
+    // max drawdown, consecutive loss streaks, recovery ramping, etc.)
+    // never actually gated live position sizing or trade approval —
+    // it only tracked stats for display. Wire in the real instance.
+    this._drawdownGuard = config.drawdownGuard || null;
 
     // Performance tracking for Kelly
     this._performanceStats = {
@@ -382,8 +389,16 @@ class RiskEngine extends EventEmitter {
         return { approved: false, reason: 'Invalid entry or SL price', positionSize: 0 };
       }
 
-      // Drawdown check
-      const ddCheck = { sizingFactor: 1.0 }; // simplified
+      // Drawdown check — FIX: was hardcoded to sizingFactor 1.0, which
+      // meant the circuit breaker could never actually block a trade or
+      // shrink its size. Now consults the real DrawdownGuard if wired in.
+      const ddCheck = this._drawdownGuard?.evaluate
+        ? this._drawdownGuard.evaluate({ atr: signal.atr, price: currentPrice || entryPrice })
+        : { allowed: true, sizingFactor: 1.0 };
+
+      if (!ddCheck.allowed) {
+        return { approved: false, reason: ddCheck.reason || 'Blocked by drawdown guard', positionSize: 0 };
+      }
 
       // Correlation check
       const corrReduction = this._corrFilter ? this._getCorrelationReduction() : 1.0;
