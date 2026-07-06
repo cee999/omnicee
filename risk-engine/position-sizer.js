@@ -389,9 +389,13 @@ class RiskEngine extends EventEmitter {
         return { approved: false, reason: 'Invalid entry or SL price', positionSize: 0 };
       }
 
-      // Drawdown check — FIX: was hardcoded to sizingFactor 1.0, which
-      // meant the circuit breaker could never actually block a trade or
-      // shrink its size. Now consults the real DrawdownGuard if wired in.
+      // Drawdown check — FIX: was hardcoded to sizingFactor 1.0, which meant
+      // the circuit breaker could never block a trade if RiskEngine.evaluate()
+      // were ever called directly. Kept here as a defense-in-depth "allowed"
+      // gate. NOTE: the actual sizingFactor is intentionally NOT folded into
+      // effectiveRisk here — index.js's runAnalysisCycle already applies
+      // drawdownGuard's sizingFactor to riskEvaluation.positionSize after
+      // this returns, so folding it in here too would double-shrink size.
       const ddCheck = this._drawdownGuard?.evaluate
         ? this._drawdownGuard.evaluate({ atr: signal.atr, price: currentPrice || entryPrice })
         : { allowed: true, sizingFactor: 1.0 };
@@ -410,7 +414,7 @@ class RiskEngine extends EventEmitter {
 
       // Effective risk %
       const baseRisk     = this._riskPct;
-      const ddFactor     = ddCheck.sizingFactor;
+      const ddFactor     = 1.0; // see note above — applied externally, not here
       const effectiveRisk = Math.min(
         baseRisk * ddFactor * corrReduction * sessionMult,
         this._maxRiskPct
