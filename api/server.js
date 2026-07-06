@@ -10,7 +10,7 @@ const cors = require('cors');
 const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const { Server } = require('socket.io');
-const { bus, getDispatcher } = require('./realtime');
+const { bus, getDispatcher, getEngines } = require('./realtime');
 const db = require('../db');
 const { telegramAuthMiddleware, validateTelegramInitData } = require('./telegram-auth');
 const { FinnhubFeed } = require('../feeds/finnhub-feed');
@@ -109,11 +109,43 @@ function createApp() {
     const [signal] = await db.getRecentSignals({ limit: 200 }).then(list => list.filter(s => s.id === signalId)).catch(() => []);
     if (!signal) return res.status(404).json({ ok: false, error: 'Signal not found in MongoDB history' });
 
-    const saved = await learningEngine.recordOutcome({ signalId, signal, outcome }).catch(err => {
+    // FIX: use the live singleton instances from index.js when running together
+    // (npm run start:all / pm2), so real outcomes update the SAME objects the
+    // signal-scoring pipeline actually consults, not a disconnected local copy.
+    const liveEngines = getEngines();
+    const activeLearningEngine = liveEngines.adaptiveLearning || learningEngine;
+
+    const saved = await activeLearningEngine.recordOutcome({ signalId, signal, outcome }).catch(err => {
       res.status(503).json({ ok: false, error: err.message });
       return null;
     });
     if (!saved) return;
+
+    // FIX: bayesianEngine, walkForwardOptimizer, institutionalGates, and
+    // drawdownGuard were never fed real trade outcomes ANYWHERE in the
+    // codebase — their .recordOutcome()/.recordSymbolOutcome()/.record()
+    // methods existed but had zero call sites. That meant: Bayesian's
+    // symbol/regime/session models stayed at the cold 50/50 prior forever;
+    // walk-forward's out-of-sample history could never accumulate (analyze()
+    // always returned sufficient:false); the per-symbol consecutive-loss
+    // circuit breaker in institutional-gates.js could never trip; and
+    // drawdownGuard's real daily/weekly PnL and consecutive-loss tracking
+    // never updated even though evaluate() now gates on it. Wired all four in.
+    const isWin = (saved.pnlR || 0) > 0;
+    try { liveEngines.bayesianEng?.recordOutcome({ signal, outcome, regime: signal?.regime, session: signal?.session }); } catch (_) {}
+    try { liveEngines.walkForward?.recordOutcome({ signal, outcome }); } catch (_) {}
+    try { liveEngines.institutionalGates?.recordSymbolOutcome(saved.symbol, isWin); } catch (_) {}
+    try { liveEngines.sessionFilter?.recordOutcome({ symbol: saved.symbol, result: isWin ? 'WIN' : 'LOSS', pnlPct: saved.pnlPct, timestamp: saved.closedAt || Date.now() }); } catch (_) {}
+    try {
+      liveEngines.drawdownGuard?.record({
+        pnlPct: Number(saved.pnlPct || 0),
+        won: isWin,
+        symbol: saved.symbol,
+        signalId: saved.signalId,
+        grade: signal?.score?.grade,
+        pnlR: saved.pnlR,
+      });
+    } catch (_) {}
 
     bus.emit('telemetry_update', {
       type: 'outcome_recorded',
@@ -229,8 +261,26 @@ function startServer(config = {}) {
     socket.on('record_outcome', async payload => {
       const [signal] = await db.getRecentSignals({ limit: 200 }).then(list => list.filter(s => s.id === payload?.signalId)).catch(() => []);
       if (!signal) return socket.emit('outcome_error', { error: 'Signal not found' });
-      const outcome = await learningEngine.recordOutcome({ signalId: payload.signalId, signal, outcome: payload.outcome }).catch(err => ({ error: err.message }));
+      const liveEngines = getEngines();
+      const activeLearningEngine = liveEngines.adaptiveLearning || learningEngine;
+      const outcome = await activeLearningEngine.recordOutcome({ signalId: payload.signalId, signal, outcome: payload.outcome }).catch(err => ({ error: err.message }));
       if (outcome.error) return socket.emit('outcome_error', outcome);
+      // FIX: same missing wiring as /api/outcomes — see the detailed note there.
+      const isWin = (outcome.pnlR || 0) > 0;
+      try { liveEngines.bayesianEng?.recordOutcome({ signal, outcome: payload.outcome, regime: signal?.regime, session: signal?.session }); } catch (_) {}
+      try { liveEngines.walkForward?.recordOutcome({ signal, outcome: payload.outcome }); } catch (_) {}
+      try { liveEngines.institutionalGates?.recordSymbolOutcome(outcome.symbol, isWin); } catch (_) {}
+      try { liveEngines.sessionFilter?.recordOutcome({ symbol: outcome.symbol, result: isWin ? 'WIN' : 'LOSS', pnlPct: outcome.pnlPct, timestamp: outcome.closedAt || Date.now() }); } catch (_) {}
+      try {
+        liveEngines.drawdownGuard?.record({
+          pnlPct: Number(outcome.pnlPct || 0),
+          won: isWin,
+          symbol: outcome.symbol,
+          signalId: payload.signalId,
+          grade: signal?.score?.grade,
+          pnlR: outcome.pnlR,
+        });
+      } catch (_) {}
       socket.emit('outcome_saved', outcome);
       bus.emit('telemetry_update', {
         type: 'outcome_recorded',

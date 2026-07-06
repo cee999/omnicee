@@ -208,7 +208,13 @@ class Indicators {
       histogram: histogram.slice(-1)[0],
       prevHistogram: histogram.slice(-2)[0] || 0,
       increasing: histogram.slice(-1)[0] > (histogram.slice(-2)[0] || 0),
-      crossedUp:  signalLine.slice(-2)[0] < macdLine.slice(-(signalLine.length))[macdLine.length - signalLine.length - 1]
+      // FIX: was `signalLine.slice(-2)[0] < macdLine.slice(-(signalLine.length))[macdLine.length - signalLine.length - 1]`
+      // — a confused index into the wrong array that didn't compute a real
+      // crossover. Since macdLine and signalLine both end at the same latest
+      // candle (just different lengths due to lookback), comparing
+      // .slice(-2)[0] and .slice(-1)[0] directly on each already gives
+      // time-aligned prior/current values — no manual offset needed.
+      crossedUp:  macdLine.slice(-2)[0] <= signalLine.slice(-2)[0]
         && macdLine.slice(-1)[0] > signalLine.slice(-1)[0],
     };
   }
@@ -1014,6 +1020,26 @@ class CrossTFDivergenceDetector {
           htfRSI,
           ltfRSI,
           note:   `Both ${htf} and ${ltf} overbought — momentum exhaustion risk`,
+          signal: 'CAUTION',
+        });
+      }
+
+      // FIX: was missing the mirrored bearish/oversold case entirely. Since
+      // this 'CAUTION' signal applies a real -10 score penalty downstream
+      // (see _computeConfluence), LONG signals were being penalized for
+      // overbought exhaustion while SHORT signals never received the
+      // equivalent penalty for oversold exhaustion — a systematic long/short
+      // scoring bias rather than a genuine risk difference.
+      if (htfA.direction === ltfA.direction &&
+          htfRSI < 25 && ltfRSI < 25 &&
+          htfA.direction === DIRECTION.SHORT) {
+        divergences.push({
+          type:   'MOMENTUM_EXHAUSTION',
+          htf,
+          ltf,
+          htfRSI,
+          ltfRSI,
+          note:   `Both ${htf} and ${ltf} oversold — momentum exhaustion risk`,
           signal: 'CAUTION',
         });
       }

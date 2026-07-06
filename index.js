@@ -915,6 +915,17 @@ function buildSingletons() {
     });
     log.info('OpenInsiderFeed created');
   }
+
+  // FIX: publish the live singleton instances so api/server.js's /api/outcomes
+  // handler can record real trade outcomes into the SAME objects this pipeline
+  // actually consults during scoring — see api/realtime.js for the full story.
+  try {
+    require('./api/realtime').setEngines({
+      adaptiveLearning, bayesianEng, walkForward, institutionalGates,
+      drawdownGuard, sessionFilter,
+    });
+    log.info('Live engine singletons published for outcome-feedback wiring');
+  } catch (_) {}
 }
 
 // ── 8. Build feeds ─────────────────────────────────────────────────────────

@@ -729,14 +729,24 @@ class PremiumDiscountCalculator {
    */
   static pricePosition(currentPrice, swingHigh, swingLow) {
     const range    = swingHigh - swingLow;
-    if (range <= 0) return { percentage: 50, zone: 'NEUTRAL', inOTE: false };
+    if (range <= 0) return { percentage: 50, zone: 'NEUTRAL', inOTE: false, inOTELong: false, inOTEShort: false };
     
     const position = (currentPrice - swingLow) / range;
 
     return {
       percentage: round(position * 100, 2),
       zone: position > 0.5 ? 'PREMIUM' : 'DISCOUNT',
-      inOTE: position >= 0.21 && position <= 0.38, // Inverse for long = 62%–79% retrace
+      // FIX: inOTE only ever checked the 62-79% retracement-from-the-HIGH zone
+      // (position 0.21-0.38, i.e. deep DISCOUNT), which is the correct OTE zone
+      // for LONG entries only. The confluence scorer applied this same flag
+      // unconditionally to SHORT signals too, meaning a short got the +5 "OTE"
+      // bonus for being in the discount zone — the worst possible location for
+      // a short entry (should instead be a 62-79% retracement from the LOW,
+      // i.e. position 0.62-0.79, deep PREMIUM). Both are now exposed
+      // separately so the scorer can pick the direction-correct one.
+      inOTELong:  position >= 0.21 && position <= 0.38,
+      inOTEShort: position >= 0.62 && position <= 0.79,
+      inOTE: position >= 0.21 && position <= 0.38, // kept for backward compatibility (long-biased)
     };
   }
 }
@@ -858,7 +868,14 @@ class SMCConfluenceScorer {
 
     if (relevantFVGs.length > 0) {
       score += relevantFVGs[0].strength === 'STRONG' ? 20 : 12;
-      reasons.push(`Bullish FVG imbalance gap above current price`);
+      // FIX: was hardcoded to always say "Bullish FVG ... above current price",
+      // even for SHORT signals backed by a bearish FVG below price. The score
+      // itself was correct (relevantFVGs is already direction-filtered above),
+      // but the displayed reason text — shown to the trader in the Telegram
+      // signal message — was misleading on every SHORT signal.
+      reasons.push(isLong
+        ? 'Bullish FVG imbalance gap below current price'
+        : 'Bearish FVG imbalance gap above current price');
     }
 
     // ── Market Structure (max 20 pts) ──
@@ -900,7 +917,9 @@ class SMCConfluenceScorer {
     }
 
     // ── OTE Zone (max 5 pts bonus) ──
-    if (pd.currentPosition.inOTE) {
+    // FIX: was `pd.currentPosition.inOTE` regardless of direction — see the
+    // detailed note in PremiumDiscountCalculator.pricePosition().
+    if (isLong ? pd.currentPosition.inOTELong : pd.currentPosition.inOTEShort) {
       score += 5;
       reasons.push('Price in Optimal Trade Entry (OTE) zone');
     }
