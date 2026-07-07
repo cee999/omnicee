@@ -922,7 +922,7 @@ function buildSingletons() {
   try {
     require('./api/realtime').setEngines({
       adaptiveLearning, bayesianEng, walkForward, institutionalGates,
-      drawdownGuard, sessionFilter,
+      drawdownGuard, sessionFilter, riskEngine,
     });
     log.info('Live engine singletons published for outcome-feedback wiring');
   } catch (_) {}

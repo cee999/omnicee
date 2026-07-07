@@ -204,6 +204,10 @@ function createApp() {
     if (dispatcher) {
       dispatcher.accountBalance = Number(balance);
     }
+    // FIX: was only updating the dispatcher's (cosmetic, display-only) balance
+    // copy — the actual RiskEngine used for live position-size math never saw
+    // real-time balance updates. See the note on RiskEngine.setBalance().
+    try { getEngines().riskEngine?.setBalance(balance); } catch (_) {}
     bus.emit('balance_update', { balance, equity, margin, freeMargin, updatedAt: Date.now() });
     res.json({ ok: true, balance });
   });
