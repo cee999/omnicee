@@ -290,9 +290,13 @@ class BybitOpenInterestEngine {
 
     let signal, strength;
     if (oiChange > 0.5 && priceChange > 0)       { signal = 'TREND_CONTINUATION_BULLISH'; strength = 'STRONG'; }
-    else if (oiChange < -0.5 && priceChange > 0) { signal = 'WEAKENING_BULLISH_TREND';    strength = 'CAUTION'; }
+    else if (oiChange < -0.5 && priceChange > 0) { signal = 'SHORT_COVERING_BOUNCE';      strength = 'CAUTION'; }
     else if (oiChange > 0.5 && priceChange < 0)  { signal = 'BEARISH_CONVICTION';          strength = 'STRONG'; }
-    else if (oiChange < -0.5 && priceChange < 0) { signal = 'SHORT_COVERING_BOUNCE';       strength = 'MEDIUM'; }
+    // FIX: was mislabeled 'SHORT_COVERING_BOUNCE' — short covering (shorts
+    // buying back to close) mechanically pushes price UP, not down. Falling
+    // price + decreasing OI is longs exiting/getting liquidated, a weaker
+    // bearish signal (declining conviction), not a bullish bounce setup.
+    else if (oiChange < -0.5 && priceChange < 0) { signal = 'LONG_LIQUIDATION_WEAKENING_BEARISH'; strength = 'MEDIUM'; }
     else                                          { signal = 'NEUTRAL';                     strength = 'WEAK'; }
 
     return {
