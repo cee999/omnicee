@@ -76,7 +76,15 @@ class EntryOptimizer {
 
       // Extract structures
       const orderBlocks = smcAnalysis.orderBlocks || {};
-      const fvgs = smcAnalysis.fairValueGaps || [];
+      // FIX: was reading smcAnalysis.fairValueGaps, which doesn't exist on the
+      // analysis object at all — SMCAgent.analyze() returns it as
+      // smcAnalysis.fvgs.{bullish,bearish} (already direction-split, each
+      // entry using fvgHigh/fvgLow field names). Because the old key was
+      // always undefined, `fvgs` fell back to [], .filter() always returned
+      // [], and fvgZone was ALWAYS null — meaning the FVG_TIGHT entry type
+      // (quality 85, the highest-quality option, "best momentum entry") could
+      // never be selected for any signal, system-wide.
+      const fvgsByDir = smcAnalysis.fvgs || {};
       const eqLevels = smcAnalysis.equalLevels || {};
 
       // Get relevant OB
@@ -86,19 +94,34 @@ class EntryOptimizer {
       }
 
       const primary = relevantOB[0];
-      const obLow = isLong ? primary.obLow : primary.obHigh;
-      const obHigh = isLong ? primary.obHigh : primary.obLow;
+      // FIX: obLow/obHigh were being swapped based on direction (isLong ?
+      // primary.obLow : primary.obHigh), but OrderBlockDetector always stores
+      // obHigh = candle.high and obLow = candle.low — literal numeric bounds
+      // regardless of bullish/bearish type (obHigh >= obLow always). Swapping
+      // them for SHORT signals produced zoneLow > zoneHigh. Downstream,
+      // PositionLifecycle's inZone check in sl-tp-engine.js
+      // (currentPrice >= zoneLow && currentPrice <= zoneHigh) can NEVER be
+      // true when zoneLow > zoneHigh — meaning every SHORT trade using an
+      // OB-based entry (the default/fallback entry type) could never
+      // register as 'entered', silently breaking SL/TP tracking and PnL for
+      // short trades. Zone bounds must always be literal min/max, regardless
+      // of trade direction.
+      const obLow = primary.obLow;
+      const obHigh = primary.obHigh;
 
       // FVG zone (tightest entry)
       let fvgZone = null;
       const relevantFVGs = isLong
-        ? fvgs.filter(f => f.type === 'BULL')
-        : fvgs.filter(f => f.type === 'BEAR');
+        ? (fvgsByDir.bullish || [])
+        : (fvgsByDir.bearish || []);
       if (relevantFVGs.length > 0) {
         const fvg = relevantFVGs[0];
+        // FIX: same zone-inversion issue as the OB fix above — fvgHigh/fvgLow
+        // are always literal numeric bounds (fvgHigh >= fvgLow) regardless of
+        // bullish/bearish type, so these must not be swapped by direction either.
         fvgZone = {
-          low: isLong ? fvg.low : fvg.high,
-          high: isLong ? fvg.high : fvg.low,
+          low: fvg.fvgLow,
+          high: fvg.fvgHigh,
           type: 'FVG',
         };
       }
