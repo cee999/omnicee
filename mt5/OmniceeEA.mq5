@@ -389,40 +389,61 @@ double ExtractNestedDouble(string &json, string outerKey, string innerKey, int s
 {
    string search = "\"" + outerKey + "\":{";
    int pos = StringFind(json, search, startPos);
-   if(pos < 0)
-   {
-      // Try flat: "stopLoss":{"price":...} sometimes serialized as nested
-      search = "\"" + outerKey + "\":";
-      pos = StringFind(json, search, startPos);
-      if(pos < 0) return 0;
-   }
-   
-   // Find innerKey within the next 200 chars
-   int searchEnd = MathMin(pos + 200, StringLen(json));
+   if(pos < 0) return 0;
+
+   int searchEnd = MathMin(pos + 400, StringLen(json));
    string sub = StringSubstr(json, pos, searchEnd - pos);
-   
-   string innerSearch = "\"" + innerKey + "\":";
-   int innerPos = StringFind(sub, innerSearch, 0);
-   if(innerPos < 0)
+
+   // FIX: this previously searched for "innerKey": and then greedily skipped
+   // every non-digit character (including innerKey's own opening brace and
+   // the literal word "price") until it happened to land on the first digit
+   // it found anywhere after. For a flat structure like stopLoss:{price:X}
+   // that landed on the right number by construction, but for a
+   // double-nested structure like targets:{tp1:{price:X}} it only "worked"
+   // because price is currently serialized as the FIRST key inside the tp1
+   // object (see sl-tp-engine.js's _resolveTarget) — with zero validation
+   // that it found the right field. If that field order ever changed, this
+   // would silently feed a wrong SL/TP price into a live trade with no error
+   // at all. Now explicitly distinguishes double-nested lookups (find
+   // innerKey's own "{", then "price": specifically inside that scope) from
+   // flat lookups (innerKey IS the field name, e.g. stopLoss.price).
+   string innerObjSearch = "\"" + innerKey + "\":{";
+   int innerObjPos = StringFind(sub, innerObjSearch, 0);
+
+   int valStart = -1;
+   if(innerObjPos >= 0)
    {
-      // For targets.tp1.price — look for "price" after finding tp1
-      innerSearch = "\"price\":";
-      innerPos = StringFind(sub, innerSearch, 0);
-      if(innerPos < 0) return 0;
+      // Double-nested case, e.g. targets.tp1.price
+      int scopeStart   = innerObjPos + StringLen(innerObjSearch);
+      string priceSearch = "\"price\":";
+      int pricePos = StringFind(sub, priceSearch, scopeStart);
+      // Sanity bound: "price" must appear reasonably close to where the
+      // inner object started, or we've likely run into a sibling/unrelated field.
+      if(pricePos < 0 || pricePos - scopeStart > 150) return 0;
+      valStart = pricePos + StringLen(priceSearch);
    }
-   
-   int valStart = innerPos + StringLen(innerSearch);
-   string valStr = "";
+   else
+   {
+      // Flat case, e.g. stopLoss.price — innerKey IS the field name itself
+      string flatSearch = "\"" + innerKey + "\":";
+      int flatPos = StringFind(sub, flatSearch, 0);
+      if(flatPos < 0) return 0;
+      valStart = flatPos + StringLen(flatSearch);
+   }
+
+   string numStr = "";
    for(int i = valStart; i < StringLen(sub); i++)
    {
       ushort ch = StringGetCharacter(sub, i);
       if((ch >= '0' && ch <= '9') || ch == '.' || ch == '-')
-         valStr += CharToString((uchar)ch);
-      else if(valStr != "")
+         numStr += CharToString((uchar)ch);
+      else if(numStr != "")
          break;
+      else
+         break; // no leading whitespace/garbage expected from Express's compact JSON
    }
-   
-   if(valStr == "") return 0;
-   return StringToDouble(valStr);
+
+   if(numStr == "") return 0;
+   return StringToDouble(numStr);
 }
 //+------------------------------------------------------------------+
