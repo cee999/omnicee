@@ -628,7 +628,16 @@ class DrawdownGuard extends EventEmitter {
     this._weeklyPnl   = 0;
     this._dailyTrades = 0;
     this._consecLoss  = 0;
-    this._balance     = null;
+    // FIX: config.accountBalance was accepted by the constructor but never
+    // actually read — _balance was hardcoded to null and only ever set via
+    // an explicit `balance` field on record()/updateBalance(), which nothing
+    // in the live outcome-feedback pipeline provides (it only has pnlPct/pnlR).
+    // That meant _balance stayed null forever, so _evaluateCB's equity-curve
+    // max-drawdown-from-peak check (`dd.pct >= this._maxDrawdown`) always saw
+    // dd.pct === 0 and could never trip — one of the circuit breaker's several
+    // independent safety checks was silently permanently disabled. Seed from
+    // config and track it internally as trades accumulate (see record()).
+    this._balance     = config.accountBalance || null;
     this._dayStart    = _utcDay();
     this._weekStart   = _utcWeek();
     this._paused      = false;
@@ -647,13 +656,22 @@ class DrawdownGuard extends EventEmitter {
     if (week  > this._weekStart) this._rollWeek();
 
     if (balance != null) this._balance = balance;
+    // FIX: the live outcome-feedback pipeline (api/server.js) only has
+    // pnlPct/pnlR for a closed trade, not the account's real dollar balance,
+    // so `balance` is never passed here in practice. Previously this meant
+    // this._balance stayed null forever. Now derive a running balance from
+    // pnlPct applied to the last known balance, seeded from config.accountBalance,
+    // so the equity curve tracker has real values to compute drawdown from.
+    else if (this._balance != null) this._balance = this._balance * (1 + pnlPct / 100);
+    const effectiveBalance = this._balance;
+
     this._dailyPnl   += pnlPct;
     this._weeklyPnl  += pnlPct;
     this._dailyTrades++;
     this._consecLoss  = won ? 0 : this._consecLoss + 1;
 
-    const eqResult = this._equity.record(balance || (this._balance || 10000), pnlPct, signalId);
-    if (eqResult.isNewHigh) this.emit('high_watermark', { balance, timestamp: _now() });
+    const eqResult = this._equity.record(effectiveBalance || 10000, pnlPct, signalId);
+    if (eqResult.isNewHigh) this.emit('high_watermark', { balance: effectiveBalance, timestamp: _now() });
 
     this._winRate.record(won, pnlR || 0, { symbol, session: session || this._sessions.currentSession(), grade });
     const sessResult = this._sessions.record(pnlPct, won, session);
@@ -668,20 +686,20 @@ class DrawdownGuard extends EventEmitter {
 
     if (this._recovery.inRecovery) {
       const rr = won ? this._recovery.onWin() : this._recovery.onLoss();
-      if (rr === 'COMPLETE') { this.emit('recovery_complete', { balance, timestamp: _now() }); this._logEvent('RECOVERY_COMPLETE', 'Full size'); }
+      if (rr === 'COMPLETE') { this.emit('recovery_complete', { balance: effectiveBalance, timestamp: _now() }); this._logEvent('RECOVERY_COMPLETE', 'Full size'); }
       else if (rr === 'ADVANCE') { this.emit('recovery_advance', this._recovery.status()); }
     }
 
     this._tradeLog.add({
       signalId, symbol, grade, session: sessResult?.session,
       pnlPct: _round(pnlPct, 4), pnlR, won,
-      balance: balance ? _round(balance, 2) : null,
+      balance: effectiveBalance ? _round(effectiveBalance, 2) : null,
       dailyPnl: _round(this._dailyPnl, 4), weeklyPnl: _round(this._weeklyPnl, 4),
-      drawdown: balance ? this._equity.drawdown(balance).pct : 0,
+      drawdown: effectiveBalance ? this._equity.drawdown(effectiveBalance).pct : 0,
       consecLoss: this._consecLoss,
     });
 
-    this._evaluateCB(balance);
+    this._evaluateCB(effectiveBalance);
     const status = this.getStatus();
     this.emit('dd_update', { ...status, tradeResult: { pnlPct, won, pnlR } });
     return status;
