@@ -220,6 +220,25 @@ bool ExecuteTrade(string symbol, string action, double sl, double tp, double ris
       return false;
    }
    
+   // FIX: sl==0 (e.g. from a JSON parse failure upstream in
+   // ExtractNestedDouble, or a malformed/missing field in the API response)
+   // was NOT caught here. MathAbs(entryPrice - 0) == entryPrice, a large
+   // positive number, which SAILED PAST the `slDistance <= 0` check below.
+   // The trade would then be sent to trade.Buy()/trade.Sell() with sl=0,
+   // which MT5 interprets as "no stop loss at all" — a real, live,
+   // completely unprotected position opened silently because of a parsing
+   // hiccup, with no error and no warning. Reject outright instead.
+   if(sl <= 0)
+   {
+      Print("[OMNICEE] Refusing trade — stop loss missing or invalid (sl=", sl, ") for ", symbol);
+      return false;
+   }
+   if(tp <= 0)
+   {
+      Print("[OMNICEE] Refusing trade — take profit missing or invalid (tp=", tp, ") for ", symbol);
+      return false;
+   }
+   
    // Calculate lot size based on risk
    double entryPrice = (action == "LONG") ? ask : bid;
    double slDistance  = MathAbs(entryPrice - sl);
@@ -227,6 +246,18 @@ bool ExecuteTrade(string symbol, string action, double sl, double tp, double ris
    if(slDistance <= 0 || tickValue <= 0 || tickSize <= 0)
    {
       Print("[OMNICEE] Invalid SL distance or tick info for ", symbol);
+      return false;
+   }
+   
+   // FIX: also guard against SL being on the wrong side of entry (e.g. a
+   // stale/mismatched price feed, or an upstream direction bug) — placing a
+   // LONG with SL above entry, or a SHORT with SL below entry, would either
+   // be rejected by the broker or (worse) instantly stop the position out
+   // in the wrong direction with no real protection.
+   if((action == "LONG" && sl >= entryPrice) || (action == "SHORT" && sl <= entryPrice))
+   {
+      Print("[OMNICEE] Refusing trade — SL is on the wrong side of entry for ", action, " ", symbol,
+            " (entry=", entryPrice, ", sl=", sl, ")");
       return false;
    }
    
@@ -389,40 +420,61 @@ double ExtractNestedDouble(string &json, string outerKey, string innerKey, int s
 {
    string search = "\"" + outerKey + "\":{";
    int pos = StringFind(json, search, startPos);
-   if(pos < 0)
-   {
-      // Try flat: "stopLoss":{"price":...} sometimes serialized as nested
-      search = "\"" + outerKey + "\":";
-      pos = StringFind(json, search, startPos);
-      if(pos < 0) return 0;
-   }
-   
-   // Find innerKey within the next 200 chars
-   int searchEnd = MathMin(pos + 200, StringLen(json));
+   if(pos < 0) return 0;
+
+   int searchEnd = MathMin(pos + 400, StringLen(json));
    string sub = StringSubstr(json, pos, searchEnd - pos);
-   
-   string innerSearch = "\"" + innerKey + "\":";
-   int innerPos = StringFind(sub, innerSearch, 0);
-   if(innerPos < 0)
+
+   // FIX: this previously searched for "innerKey": and then greedily skipped
+   // every non-digit character (including innerKey's own opening brace and
+   // the literal word "price") until it happened to land on the first digit
+   // it found anywhere after. For a flat structure like stopLoss:{price:X}
+   // that landed on the right number by construction, but for a
+   // double-nested structure like targets:{tp1:{price:X}} it only "worked"
+   // because price is currently serialized as the FIRST key inside the tp1
+   // object (see sl-tp-engine.js's _resolveTarget) — with zero validation
+   // that it found the right field. If that field order ever changed, this
+   // would silently feed a wrong SL/TP price into a live trade with no error
+   // at all. Now explicitly distinguishes double-nested lookups (find
+   // innerKey's own "{", then "price": specifically inside that scope) from
+   // flat lookups (innerKey IS the field name, e.g. stopLoss.price).
+   string innerObjSearch = "\"" + innerKey + "\":{";
+   int innerObjPos = StringFind(sub, innerObjSearch, 0);
+
+   int valStart = -1;
+   if(innerObjPos >= 0)
    {
-      // For targets.tp1.price — look for "price" after finding tp1
-      innerSearch = "\"price\":";
-      innerPos = StringFind(sub, innerSearch, 0);
-      if(innerPos < 0) return 0;
+      // Double-nested case, e.g. targets.tp1.price
+      int scopeStart   = innerObjPos + StringLen(innerObjSearch);
+      string priceSearch = "\"price\":";
+      int pricePos = StringFind(sub, priceSearch, scopeStart);
+      // Sanity bound: "price" must appear reasonably close to where the
+      // inner object started, or we've likely run into a sibling/unrelated field.
+      if(pricePos < 0 || pricePos - scopeStart > 150) return 0;
+      valStart = pricePos + StringLen(priceSearch);
    }
-   
-   int valStart = innerPos + StringLen(innerSearch);
-   string valStr = "";
+   else
+   {
+      // Flat case, e.g. stopLoss.price — innerKey IS the field name itself
+      string flatSearch = "\"" + innerKey + "\":";
+      int flatPos = StringFind(sub, flatSearch, 0);
+      if(flatPos < 0) return 0;
+      valStart = flatPos + StringLen(flatSearch);
+   }
+
+   string numStr = "";
    for(int i = valStart; i < StringLen(sub); i++)
    {
       ushort ch = StringGetCharacter(sub, i);
       if((ch >= '0' && ch <= '9') || ch == '.' || ch == '-')
-         valStr += CharToString((uchar)ch);
-      else if(valStr != "")
+         numStr += CharToString((uchar)ch);
+      else if(numStr != "")
          break;
+      else
+         break; // no leading whitespace/garbage expected from Express's compact JSON
    }
-   
-   if(valStr == "") return 0;
-   return StringToDouble(valStr);
+
+   if(numStr == "") return 0;
+   return StringToDouble(numStr);
 }
 //+------------------------------------------------------------------+

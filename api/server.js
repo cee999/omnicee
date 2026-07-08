@@ -181,7 +181,18 @@ function createApp() {
       stopLoss: sig.stopLoss,
       targets: sig.targets,
       score: sig.score,
-      riskPct: Number(process.env.RISK_PCT_PER_TRADE || 1),
+      // FIX: was a static env-var value regardless of the signal — ignored
+      // RiskEngine's own correlation/session adjustment (effectiveRisk) and
+      // the session-quality/drawdown-guard sizing factor computed in
+      // index.js (finalRiskPct), so every server-side risk-reduction
+      // safeguard had zero effect on what the automated MT5 EA actually
+      // risked per trade. Falls back to the env var only if a signal
+      // predates this fix or riskEvaluation is unavailable.
+      riskPct: Number(
+        sig.riskEvaluation?.finalRiskPct ??
+        sig.riskEvaluation?.effectiveRisk ??
+        process.env.RISK_PCT_PER_TRADE ?? 1
+      ),
       approvedAt: sig.approvedAt,
     }));
     res.json({ ok: true, signals: mapped });
@@ -204,6 +215,10 @@ function createApp() {
     if (dispatcher) {
       dispatcher.accountBalance = Number(balance);
     }
+    // FIX: was only updating the dispatcher's (cosmetic, display-only) balance
+    // copy — the actual RiskEngine used for live position-size math never saw
+    // real-time balance updates. See the note on RiskEngine.setBalance().
+    try { getEngines().riskEngine?.setBalance(balance); } catch (_) {}
     bus.emit('balance_update', { balance, equity, margin, freeMargin, updatedAt: Date.now() });
     res.json({ ok: true, balance });
   });

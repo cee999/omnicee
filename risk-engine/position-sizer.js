@@ -497,6 +497,18 @@ class RiskEngine extends EventEmitter {
     }
   }
 
+  // FIX: RiskEngine._balance was set once at construction from the
+  // ACCOUNT_BALANCE env var and never updatable afterward. The EA actively
+  // posts real-time balance updates via POST /api/ea/balance, but that
+  // endpoint only updated AlertDispatcher.accountBalance (cosmetic — used for
+  // Telegram display text), never this engine — so every real position-size
+  // calculation in the live pipeline kept using a stale startup balance even
+  // as the account grew or shrank from real trading. See api/server.js.
+  setBalance(balance) {
+    const n = Number(balance);
+    if (Number.isFinite(n) && n > 0) this._balance = n;
+  }
+
   recordTrade(outcome) {
     try {
       if (!outcome || typeof outcome.pnlR !== 'number') return;
