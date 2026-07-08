@@ -181,7 +181,18 @@ function createApp() {
       stopLoss: sig.stopLoss,
       targets: sig.targets,
       score: sig.score,
-      riskPct: Number(process.env.RISK_PCT_PER_TRADE || 1),
+      // FIX: was a static env-var value regardless of the signal — ignored
+      // RiskEngine's own correlation/session adjustment (effectiveRisk) and
+      // the session-quality/drawdown-guard sizing factor computed in
+      // index.js (finalRiskPct), so every server-side risk-reduction
+      // safeguard had zero effect on what the automated MT5 EA actually
+      // risked per trade. Falls back to the env var only if a signal
+      // predates this fix or riskEvaluation is unavailable.
+      riskPct: Number(
+        sig.riskEvaluation?.finalRiskPct ??
+        sig.riskEvaluation?.effectiveRisk ??
+        process.env.RISK_PCT_PER_TRADE ?? 1
+      ),
       approvedAt: sig.approvedAt,
     }));
     res.json({ ok: true, signals: mapped });

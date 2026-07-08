@@ -366,6 +366,20 @@ async function runAnalysisCycle(symbol, timeframe) {
               riskEvaluation.drawdownSizingFactor = drawdownEval?.sizingFactor ?? 1;
               riskEvaluation.note = `${riskEvaluation.note || ''} | Size scaled ${(combinedFactor * 100).toFixed(0)}% (session/drawdown)`;
             }
+            // FIX: /api/ea/signals (the MT5 EA polling endpoint) was sending a
+            // completely static riskPct straight from an env var — ignoring
+            // effectiveRisk (RiskEngine's own correlation/session adjustment)
+            // AND the session/drawdown combinedFactor above entirely. That
+            // meant every risk-reduction safeguard computed server-side (this
+            // session's session-quality gate, drawdown circuit breaker, and
+            // the pre-existing correlation reduction) had zero effect on the
+            // size of any trade actually placed by the automated MT5 bridge —
+            // it only ever affected the position-size TEXT shown to a human
+            // via Telegram. finalRiskPct now carries the real, fully-adjusted
+            // risk percentage through to that endpoint.
+            riskEvaluation.finalRiskPct = Math.round(
+              (riskEvaluation.effectiveRisk ?? RISK_PCT) * combinedFactor * 100
+            ) / 100;
           }
         }
       } catch (e) {
