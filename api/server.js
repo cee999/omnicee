@@ -320,6 +320,9 @@ function startServer(config = {}) {
   forward('stats_update', 'stats');
   forward('regime_update', 'regime', payload => db.saveTelemetry({ type: 'regime_update', ...payload }));
   forward('telemetry_update', 'telemetry', db.saveTelemetry);
+  // FIX: myfxbook/openinsider events previously only reached Telegram —
+  // now relayed to the live dashboard as well (see index.js wsBus.emit('intel', ...)).
+  forward('intel', 'intel', payload => db.saveTelemetry({ type: 'intel_' + payload.kind, ...payload }));
 
   const port = Number(config.port || API_PORT);
   httpServer.listen(port, () => {

@@ -902,12 +902,18 @@ function buildSingletons() {
     myfxbookFeed.on('economic_surprise', (data) => {
       log.info(`[Myfxbook] Economic surprise: ${data.event.name} - ${data.impact}`);
       dispatcher?.sendMessage?.(`📊 *Economic Surprise*\n${data.event.name}\nImpact: ${data.impact}\nCurrencies: ${data.affectedCurrencies.join(', ')}`)?.catch(() => {});
+      // FIX: this event only ever reached Telegram — the web/Mini App
+      // frontend had zero visibility into institutional flow data despite
+      // the backend fully computing it. Relay to the live dashboard too.
+      wsBus?.emit('intel', { kind: 'economic_surprise', ...data, timestamp: Date.now() });
     });
     myfxbookFeed.on('extreme_retail_positioning', (data) => {
       log.warn(`[Myfxbook] Extreme retail positioning: ${data.symbol} - ${data.data.contrarianReason}`);
+      wsBus?.emit('intel', { kind: 'extreme_retail_positioning', ...data, timestamp: Date.now() });
     });
     myfxbookFeed.on('upcoming_events', (data) => {
       log.info(`[Myfxbook] ${data.count} high-impact events upcoming`);
+      wsBus?.emit('intel', { kind: 'upcoming_events', ...data, timestamp: Date.now() });
     });
     log.info('MyfxbookFeed created');
   } else {
@@ -923,9 +929,11 @@ function buildSingletons() {
     openInsiderFeed.on('cluster_buy', (data) => {
       log.info(`[OpenInsider] Cluster buy detected: ${data.ticker} - ${data.insiderCount} insiders`);
       dispatcher?.sendMessage?.(`💼 *Cluster Buy*\n${data.ticker}\n${data.insiderCount} insiders in ${data.windowDays} days\nConfidence: ${data.confidence}%`)?.catch(() => {});
+      wsBus?.emit('intel', { kind: 'cluster_buy', ...data, timestamp: Date.now() });
     });
     openInsiderFeed.on('executive_activity', (data) => {
       log.info(`[OpenInsider] Executive activity: ${data.ticker} - ${data.signal}`);
+      wsBus?.emit('intel', { kind: 'executive_activity', ...data, timestamp: Date.now() });
     });
     log.info('OpenInsiderFeed created');
   }
