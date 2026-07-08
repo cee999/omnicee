@@ -220,6 +220,25 @@ bool ExecuteTrade(string symbol, string action, double sl, double tp, double ris
       return false;
    }
    
+   // FIX: sl==0 (e.g. from a JSON parse failure upstream in
+   // ExtractNestedDouble, or a malformed/missing field in the API response)
+   // was NOT caught here. MathAbs(entryPrice - 0) == entryPrice, a large
+   // positive number, which SAILED PAST the `slDistance <= 0` check below.
+   // The trade would then be sent to trade.Buy()/trade.Sell() with sl=0,
+   // which MT5 interprets as "no stop loss at all" — a real, live,
+   // completely unprotected position opened silently because of a parsing
+   // hiccup, with no error and no warning. Reject outright instead.
+   if(sl <= 0)
+   {
+      Print("[OMNICEE] Refusing trade — stop loss missing or invalid (sl=", sl, ") for ", symbol);
+      return false;
+   }
+   if(tp <= 0)
+   {
+      Print("[OMNICEE] Refusing trade — take profit missing or invalid (tp=", tp, ") for ", symbol);
+      return false;
+   }
+   
    // Calculate lot size based on risk
    double entryPrice = (action == "LONG") ? ask : bid;
    double slDistance  = MathAbs(entryPrice - sl);
@@ -227,6 +246,18 @@ bool ExecuteTrade(string symbol, string action, double sl, double tp, double ris
    if(slDistance <= 0 || tickValue <= 0 || tickSize <= 0)
    {
       Print("[OMNICEE] Invalid SL distance or tick info for ", symbol);
+      return false;
+   }
+   
+   // FIX: also guard against SL being on the wrong side of entry (e.g. a
+   // stale/mismatched price feed, or an upstream direction bug) — placing a
+   // LONG with SL above entry, or a SHORT with SL below entry, would either
+   // be rejected by the broker or (worse) instantly stop the position out
+   // in the wrong direction with no real protection.
+   if((action == "LONG" && sl >= entryPrice) || (action == "SHORT" && sl <= entryPrice))
+   {
+      Print("[OMNICEE] Refusing trade — SL is on the wrong side of entry for ", action, " ", symbol,
+            " (entry=", entryPrice, ", sl=", sl, ")");
       return false;
    }
    
