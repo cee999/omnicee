@@ -112,6 +112,7 @@ const { SignalMonitor }      = loadModule('./signal-pipeline/signal-monitor',   
 const { InstitutionalRiskManager } = loadModule('./risk-engine/institutional-risk-manager', 'InstitutionalRiskManager') || {};
 const { MyfxbookFeed }       = loadModule('./feeds/myfxbook-feed',               'MyfxbookFeed')      || {};
 const { OpenInsiderFeed }    = loadModule('./feeds/openinsider-feed',            'OpenInsiderFeed')   || {};
+const { FinnhubFeed }        = loadModule('./feeds/finnhub-feed',                'FinnhubFeed')       || {};
 
 // ConflictResolver is instantiated (not static) — create one singleton
 const conflictResolver = ConflictResolverClass ? new ConflictResolverClass() : null;
@@ -672,7 +673,8 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
 let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, institutionalGates,
     adaptiveLearning, drawdownGuard, riskEngine, sessionFilter, correlationFilter, memory,
     monteCarlo, bayesianEng, statValidator, walkForward, ensembleEng,
-    signalMonitor, institutionalRiskManager, executionManager, myfxbookFeed, openInsiderFeed;
+    signalMonitor, institutionalRiskManager, executionManager, myfxbookFeed, openInsiderFeed,
+    finnhubFeed;
 
 function buildSingletons() {
   // AlertDispatcher
@@ -936,6 +938,51 @@ function buildSingletons() {
       wsBus?.emit('intel', { kind: 'executive_activity', ...data, timestamp: Date.now() });
     });
     log.info('OpenInsiderFeed created');
+  }
+
+  // FIX: FinnhubFeed existed but was never instantiated anywhere, and its
+  // economic-calendar data (added alongside this fix) was the missing real
+  // data source for sessionFilter's EconomicCalendarTierSystem — that gate
+  // was fully built and (as of an earlier fix this session) correctly
+  // consulted before every trade, but nothing ever fed it real events, so it
+  // silently reported "CLEAR" 100% of the time. Poll it periodically here.
+  if (FinnhubFeed) {
+    finnhubFeed = new FinnhubFeed({ apiKey: process.env.FINNHUB_API_KEY || '' });
+    if (finnhubFeed.enabled()) {
+      const pollEconomicCalendar = async () => {
+        try {
+          const events = await finnhubFeed.economicCalendar();
+          if (sessionFilter?.addNewsEvents && events.length) {
+            // FIX: only use Finnhub's impact rating to PROMOTE an event that
+            // none of EconomicCalendarTierSystem._inferTier's own name-regexes
+            // would catch — never to override/downgrade a name that's already
+            // correctly recognized. Mirrors _inferTier's tier1/tier2/tier3
+            // patterns so a same-tier or higher inference always wins.
+            const TIER1_RE = /nfp|non.?farm|fomc|cpi|rate decision|interest rate/i;
+            const TIER2_RE = /gdp|pmi|retail sales|unemployment/i;
+            const TIER3_RE = /building permit|confidence|trade balance/i;
+            sessionFilter.addNewsEvents(events.map(e => ({
+              name: e.name,
+              currency: e.currency,
+              time: e.time,
+              tier: TIER1_RE.test(e.name) || TIER2_RE.test(e.name) || TIER3_RE.test(e.name)
+                ? undefined // let _inferTier's own regex classify it
+                : e.impact === 'high'   ? 'TIER_2'
+                : e.impact === 'medium' ? 'TIER_3'
+                : undefined, // stays TIER_4 via _inferTier's default
+            })));
+          }
+          log.info(`EconomicCalendar: ${events.length} events loaded for the next 7 days`);
+        } catch (err) {
+          log.warn(`EconomicCalendar poll failed: ${err.message}`);
+        }
+      };
+      pollEconomicCalendar();
+      setInterval(pollEconomicCalendar, 4 * 3600000); // every 4 hours
+      log.info('FinnhubFeed created — economic calendar polling active');
+    } else {
+      log.warn('FinnhubFeed disabled - missing FINNHUB_API_KEY');
+    }
   }
 
   // FIX: publish the live singleton instances so api/server.js's /api/outcomes
