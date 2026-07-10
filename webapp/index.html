@@ -1209,7 +1209,14 @@ window.selectSignal = selectSignal;
 
 async function recordOutcome(signalId, pnlR) {
   const payload = { signalId, outcome: { pnlR, notes: 'Mini App quick outcome' } };
-  socket.emit('record_outcome', payload);
+  // FIX: was calling BOTH socket.emit('record_outcome', ...) AND
+  // fetch('/api/outcomes', ...) for the same click. Both paths run the full
+  // outcome-processing pipeline (Q-table update, Bayesian posterior update,
+  // drawdown daily-PnL accumulation, symbol loss-streak tracking, etc.) —
+  // none of which have any idempotency/dedup check — so every single outcome
+  // recorded from this button was silently counted TWICE across the entire
+  // learning system. Use the REST endpoint only (it has proper auth,
+  // response handling, and error surfacing); the socket event was redundant.
   const headers = { 'Content-Type': 'application/json' };
   if (initData) headers['x-telegram-init-data'] = initData;
   try { await fetch('/api/outcomes', { method: 'POST', headers, body: JSON.stringify(payload) }); } catch (_) {}

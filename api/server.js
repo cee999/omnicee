@@ -106,6 +106,16 @@ function createApp() {
     const { signalId, outcome } = req.body || {};
     if (!signalId || !outcome) return res.status(400).json({ ok: false, error: 'signalId and outcome are required' });
 
+    // FIX: defense-in-depth against double-recording. None of the engines
+    // this endpoint feeds (Q-table, Bayesian posteriors, drawdown daily PnL,
+    // symbol loss-streak) have their own idempotency check, so any duplicate
+    // submission for the same signalId — a double-click, a network retry, or
+    // (as found and fixed separately) the Mini App calling both this REST
+    // endpoint and the record_outcome socket event for one click — would
+    // silently double-count every learning update. Reject repeats outright.
+    const existing = await db.getTradeOutcome(signalId).catch(() => null);
+    if (existing) return res.status(409).json({ ok: false, error: 'Outcome already recorded for this signal', outcome: existing });
+
     const [signal] = await db.getRecentSignals({ limit: 200 }).then(list => list.filter(s => s.id === signalId)).catch(() => []);
     if (!signal) return res.status(404).json({ ok: false, error: 'Signal not found in MongoDB history' });
 
@@ -274,6 +284,9 @@ function startServer(config = {}) {
       socket.emit('history', { signals });
     });
     socket.on('record_outcome', async payload => {
+      // FIX: same double-recording defense as /api/outcomes — see the note there.
+      const existing = await db.getTradeOutcome(payload?.signalId).catch(() => null);
+      if (existing) return socket.emit('outcome_error', { error: 'Outcome already recorded for this signal', outcome: existing });
       const [signal] = await db.getRecentSignals({ limit: 200 }).then(list => list.filter(s => s.id === payload?.signalId)).catch(() => []);
       if (!signal) return socket.emit('outcome_error', { error: 'Signal not found' });
       const liveEngines = getEngines();
