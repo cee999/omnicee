@@ -113,6 +113,8 @@ const { InstitutionalRiskManager } = loadModule('./risk-engine/institutional-ris
 const { MyfxbookFeed }       = loadModule('./feeds/myfxbook-feed',               'MyfxbookFeed')      || {};
 const { OpenInsiderFeed }    = loadModule('./feeds/openinsider-feed',            'OpenInsiderFeed')   || {};
 const { FinnhubFeed }        = loadModule('./feeds/finnhub-feed',                'FinnhubFeed')       || {};
+const { CFTCCotFeed }        = loadModule('./feeds/cftc-cot-feed',               'CFTCCotFeed')       || {};
+const { COTReportParser }    = loadModule('./feeds/news-feed',                   'COTReportParser')   || {};
 
 // ConflictResolver is instantiated (not static) — create one singleton
 const conflictResolver = ConflictResolverClass ? new ConflictResolverClass() : null;
@@ -203,8 +205,11 @@ async function runAnalysisCycle(symbol, timeframe) {
     ]);
 
     // Sentiment/Pattern run less frequently (every 3rd cycle per symbol)
+    // FIX: was `agents.sentiment.analyze(candles)` — see buildSentimentExternalData() above.
     const sentResult = agents.sentiment && Math.random() > 0.66
-      ? await agents.sentiment.analyze(candles).catch(() => null)
+      ? await buildSentimentExternalData(symbol)
+          .then(extData => agents.sentiment.analyze(extData))
+          .catch(() => null)
       : lastVotes[symbol]?.macroSent || null;
 
     // Store votes for next cycle reuse
@@ -630,6 +635,53 @@ function buildMTFData(symbol) {
   return data;
 }
 
+// FIX: agents.sentiment.analyze() was being called with a raw candles ARRAY
+// (agents.sentiment.analyze(candles)) where it expects a structured
+// { cot, fearGreed, lsRatio, upcomingEvents, social, articles } object.
+// Since candles.cot / candles.fearGreed / etc. are all undefined on an
+// array, EVERY sub-analyzer inside SentimentAgent (COT, Fear&Greed,
+// Long/Short Ratio, Social) was silently disabled — only the NLP news arm
+// could ever fire, and only if a working news fetcher was configured. This
+// builds the real object instead, including real CFTC COT data.
+const _cotCache = {}; // symbol -> { analysis, ts } — CFTC updates weekly, no need to re-fetch every cycle
+
+async function buildSentimentExternalData(symbol) {
+  const data = {};
+
+  if (cftcCotFeed && cotParser) {
+    try {
+      const cached = _cotCache[symbol];
+      const stale = !cached || (Date.now() - cached.ts) > 12 * 3600000;
+      let analysis = cached?.analysis;
+      if (stale) {
+        const rows = await cftcCotFeed.fetchForSymbol(symbol);
+        if (rows && rows.length) {
+          for (const row of rows) analysis = cotParser.ingest(symbol, row);
+          _cotCache[symbol] = { analysis, ts: Date.now() };
+        }
+      }
+      // FIX: COTAnalyzer.analyze() (agents/sentiment-agent.js) destructures
+      // `commercials` (plural) from its input, but COTReportParser.analyze()
+      // (feeds/news-feed.js) returns the field as `commercial` (singular).
+      // Passing the raw analysis straight through would silently zero out
+      // the commercial-hedger side of the signal while largeSpec/smallSpec
+      // (whose key names happen to match) kept working. Bridge explicitly.
+      if (analysis) {
+        data.cot = {
+          commercials:  { long: analysis.commercial.long, short: analysis.commercial.short },
+          largeSpec:    { long: analysis.largeSpec.long,  short: analysis.largeSpec.short },
+          smallSpec:    { long: analysis.smallSpec.long,  short: analysis.smallSpec.short },
+          openInterest: analysis.openInterest,
+        };
+      }
+    } catch (err) {
+      log.debug(`COT fetch failed for ${symbol}: ${err.message}`);
+    }
+  }
+
+  return data;
+}
+
 // ── 6. Candle ingestion ────────────────────────────────────────────────────
 
 const MAX_CANDLES_PER_TF = 500;
@@ -674,7 +726,7 @@ let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, institutionalGates,
     adaptiveLearning, drawdownGuard, riskEngine, sessionFilter, correlationFilter, memory,
     monteCarlo, bayesianEng, statValidator, walkForward, ensembleEng,
     signalMonitor, institutionalRiskManager, executionManager, myfxbookFeed, openInsiderFeed,
-    finnhubFeed;
+    finnhubFeed, cftcCotFeed, cotParser;
 
 function buildSingletons() {
   // AlertDispatcher
@@ -983,6 +1035,17 @@ function buildSingletons() {
     } else {
       log.warn('FinnhubFeed disabled - missing FINNHUB_API_KEY');
     }
+  }
+
+  // FIX: real COT (Commitment of Traders) data — CFTCCotFeed and
+  // COTReportParser were fully built but nothing anywhere fetched real CFTC
+  // data or fed it to them. Free public API, no key required, updates
+  // weekly (Fridays ~15:30 ET). See buildSentimentExternalData() below for
+  // how this gets bridged into SentimentAgent's expected shape.
+  if (CFTCCotFeed && COTReportParser) {
+    cftcCotFeed = new CFTCCotFeed();
+    cotParser = new COTReportParser();
+    log.info(`CFTCCotFeed created — supports: ${cftcCotFeed.supportedSymbols().join(', ')}`);
   }
 
   // FIX: publish the live singleton instances so api/server.js's /api/outcomes
