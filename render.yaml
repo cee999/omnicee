@@ -1,0 +1,103 @@
+# ═══════════════════════════════════════════════════════════
+#  OMNICEE — Render Blueprint
+#  Deploys two services from this one repo:
+#    1. omnicee-api    (web)    — REST + Socket.IO + Telegram Mini App frontend
+#    2. omnicee-engine (worker) — the trading/signal engine (index.js)
+#  They share one env group so you only enter secrets once.
+#
+#  Deploy: push this file to your repo root, then in the Render
+#  Dashboard choose New > Blueprint and select this repo. Render
+#  will prompt you to fill in every `sync: false` value below —
+#  nothing secret is stored in this file or in git.
+# ═══════════════════════════════════════════════════════════
+
+envVarGroups:
+  - name: omnicee-shared
+    envVars:
+      # ── Telegram ──────────────────────────────────────────
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_IDS
+        sync: false
+      - key: TELEGRAM_ALLOWED_USER_IDS
+        sync: false
+
+      # ── Data feeds ────────────────────────────────────────
+      - key: TWELVE_DATA_API_KEY
+        sync: false
+      - key: FINNHUB_API_KEY
+        sync: false
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_API_SECRET
+        sync: false
+      - key: MYFXBOOK_EMAIL
+        sync: false
+      - key: MYFXBOOK_PASSWORD
+        sync: false
+      - key: PARSE_API_KEY
+        sync: false
+
+      # ── MongoDB Atlas (external — Render has no native Mongo) ──
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB
+        value: omnicee_db
+      - key: MONGODB_MAX_POOL
+        value: "5"
+      - key: MONGODB_SIGNAL_TTL_DAYS
+        value: "45"
+      - key: MONGODB_TELEMETRY_TTL_DAYS
+        value: "7"
+
+      # ── Trading config ────────────────────────────────────
+      - key: SYMBOLS
+        value: BTCUSDT,XAUUSD,EURUSD
+      - key: TIMEFRAMES
+        value: "15m,H1,H4,D1"
+      - key: RISK_PCT_PER_TRADE
+        value: "1.0"
+      - key: MAX_DAILY_LOSS_PCT
+        value: "3.0"
+      - key: MAX_DRAWDOWN_PCT
+        value: "10.0"
+      - key: ACCOUNT_BALANCE
+        sync: false
+      - key: MIN_SIGNAL_SCORE
+        value: "75"
+      - key: REQUIRE_KILLZONE
+        value: "false"
+
+      # ── System ────────────────────────────────────────────
+      - key: NODE_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: info
+      - key: API_RATE_LIMIT_PER_MIN
+        value: "120"
+      - key: CORS_ORIGIN
+        value: ""
+
+services:
+  # ── Single combined service: REST API + Socket.IO + Telegram Mini App
+  # frontend + the trading/signal engine, all in ONE process.
+  #
+  # IMPORTANT: index.js and api/server.js share live data (signals, risk
+  # updates, market ticks) through an in-memory EventEmitter, not a network
+  # transport. That only works if both run in the same Node process — see
+  # package.json's "start:all" script, which is exactly what startCommand
+  # below reproduces. Splitting these into two separate Render services
+  # (e.g. a web service + a worker) would silently break every live update
+  # reaching the frontend, since each process would get its own disconnected
+  # copy of that EventEmitter.
+  - type: web
+    name: omnicee
+    runtime: node
+    plan: starter
+    region: oregon
+    buildCommand: npm ci --omit=dev
+    startCommand: node -e "require('./api/server').startServer(); require('./index.js').main();"
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - fromGroup: omnicee-shared

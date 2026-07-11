@@ -2,480 +2,187 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<meta name="theme-color" content="#080b0f">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#05070a">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>OMNICEE Command</title>
+<title>OMNICEE — Command</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="/socket.io/socket.io.js"></script>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
+/* ═══════════════════════════════════════════════════════════
+   DESIGN TOKENS
+   Subject: institutional multi-agent AI trading signal desk.
+   Palette stays dark (correct for a screen you watch for hours,
+   and matches Telegram's own dark surface) but is pushed away
+   from flat near-black + single acid green into a deeper,
+   slightly warm-black with three accents instead of one:
+   emerald (bullish), coral (bearish), gold (distinction/grade-A/
+   consensus). Space Grotesk carries headers/hero — geometric and
+   a little architectural, distinct from default UI sans. JetBrains
+   Mono stays for every number, price, and code-like data point,
+   because a trading desk's credibility lives in its data typography.
+   ═══════════════════════════════════════════════════════════ */
 :root {
-  --bg: #060a0f;
-  --bg-2: #0a0f16;
-  --panel: #0d131c;
-  --panel-2: #111922;
-  --panel-3: #162030;
-  --panel-hover: #1a2638;
-  --line: #1c2a3a;
-  --line-hi: #2d4460;
-  --text: #e8edf4;
-  --muted: #8a9bb2;
-  --faint: #4d6178;
-  --green: #00e68a;
-  --green-dim: #00c278;
-  --green-soft: rgba(0,230,138,.08);
-  --green-bg: rgba(0,230,138,.04);
-  --red: #ff5168;
-  --red-dim: #e03e55;
-  --red-soft: rgba(255,81,104,.08);
+  --bg: #05070a;
+  --bg-1: #070a0f;
+  --bg-2: #0a0e15;
+  --panel: #0c111a;
+  --panel-2: #10161f;
+  --panel-3: #141b26;
+  --panel-hover: #182130;
+  --line: #1a2230;
+  --line-hi: #283449;
+  --text: #eef2f7;
+  --muted: #8b9bb0;
+  --faint: #526078;
+  --faintest: #34405a;
+
+  --emerald: #1fe3a8;
+  --emerald-dim: #16c492;
+  --emerald-soft: rgba(31,227,168,.09);
+  --emerald-line: rgba(31,227,168,.22);
+
+  --coral: #ff5470;
+  --coral-dim: #e8425c;
+  --coral-soft: rgba(255,84,112,.09);
+  --coral-line: rgba(255,84,112,.22);
+
+  --gold: #e8b64a;
+  --gold-soft: rgba(232,182,74,.1);
+  --gold-line: rgba(232,182,74,.25);
+
   --amber: #f0b429;
-  --amber-soft: rgba(240,180,41,.08);
-  --blue: #5ea8ff;
-  --blue-soft: rgba(94,168,255,.08);
+  --amber-soft: rgba(240,180,41,.09);
+  --azure: #5ea8ff;
+  --azure-soft: rgba(94,168,255,.09);
   --violet: #a78bfa;
-  --violet-soft: rgba(167,139,250,.08);
+  --violet-soft: rgba(167,139,250,.09);
   --cyan: #22d3ee;
-  --font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", Consolas, monospace;
+  --cyan-soft: rgba(34,211,238,.09);
+
+  --font-display: "Space Grotesk", "Inter", -apple-system, sans-serif;
   --font-ui: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --radius: 8px;
-  --radius-sm: 5px;
-  --shadow: 0 1px 3px rgba(0,0,0,.4), 0 4px 12px rgba(0,0,0,.2);
-  --transition: 180ms ease;
+  --font-mono: "JetBrains Mono", "SF Mono", Consolas, monospace;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+  --radius-lg: 16px;
+  --shadow-card: 0 1px 2px rgba(0,0,0,.5), 0 8px 24px rgba(0,0,0,.28);
+  --ease: cubic-bezier(.22,.9,.32,1);
+  --fast: 150ms var(--ease);
+  --med: 320ms var(--ease);
 }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+}
+
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html { height: 100%; -webkit-tap-highlight-color: transparent; }
 body {
   height: 100%;
   background: var(--bg);
+  background-image:
+    radial-gradient(ellipse 900px 500px at 15% -10%, rgba(31,227,168,.05), transparent 60%),
+    radial-gradient(ellipse 700px 500px at 100% 0%, rgba(232,182,74,.035), transparent 55%);
   color: var(--text);
   font-family: var(--font-ui);
   font-size: 13px;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
 }
-button, input, select { font: inherit; border: none; outline: none; cursor: pointer; }
+button, input, select { font: inherit; border: none; outline: none; cursor: pointer; background: none; color: inherit; }
+button:focus-visible, .chip:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--emerald); outline-offset: 2px; }
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--line-hi); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--faint); }
 
-/* ── Layout ── */
-.app {
-  height: 100dvh;
-  display: grid;
-  grid-template-rows: 52px 1fr 48px;
-}
+.app { height: 100dvh; display: grid; grid-template-rows: 56px 1fr 54px; }
 
 /* ── Top bar ── */
 .topbar {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 0 16px;
+  display: flex; align-items: center; gap: 14px;
+  padding: 0 14px;
   border-bottom: 1px solid var(--line);
-  background: var(--bg-2);
-  z-index: 10;
+  background: linear-gradient(180deg, var(--bg-1), var(--bg-2));
+  z-index: 20;
 }
-.brand {
-  font-family: var(--font-mono);
-  font-weight: 800;
-  font-size: 15px;
-  letter-spacing: .18em;
-  color: var(--green);
-  flex-shrink: 0;
+.brand { display: flex; align-items: baseline; gap: 6px; flex-shrink: 0; }
+.brand-mark {
+  font-family: var(--font-display); font-weight: 700; font-size: 16px;
+  letter-spacing: .01em; color: var(--text);
+  background: linear-gradient(120deg, var(--emerald) 0%, #8be6cb 45%, var(--text) 100%);
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
 }
-.brand span { color: var(--faint); font-weight: 500; font-size: 12px; letter-spacing: .12em; }
-.ticker {
-  display: flex;
-  gap: 6px;
-  overflow: hidden;
-  flex: 1;
-  min-width: 0;
-}
+.brand-sub { font-family: var(--font-mono); font-weight: 600; font-size: 9px; letter-spacing: .18em; color: var(--faint); }
+.ticker-strip { display: flex; gap: 6px; overflow: hidden; flex: 1; min-width: 0; mask-image: linear-gradient(90deg, #000 88%, transparent); }
 .ticker-pill {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--panel);
-  border: 1px solid var(--line);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 500;
-  white-space: nowrap;
-  transition: border-color var(--transition);
+  display: flex; align-items: center; gap: 7px;
+  padding: 5px 9px; border-radius: var(--radius-sm);
+  background: var(--panel); border: 1px solid var(--line);
+  font-family: var(--font-mono); font-size: 10.5px; font-weight: 500;
+  white-space: nowrap; transition: border-color var(--fast); flex-shrink: 0;
 }
-.ticker-pill:hover { border-color: var(--line-hi); }
-.ticker-pill .sym { color: var(--text); }
+.ticker-pill canvas { display: block; }
+.ticker-pill .sym { color: var(--text); font-weight: 700; }
 .ticker-pill .price { color: var(--muted); }
 .conn-badge {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 5px 12px;
-  border-radius: var(--radius-sm);
-  background: var(--panel);
-  border: 1px solid var(--line);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: .08em;
-  color: var(--muted);
-  flex-shrink: 0;
+  display: flex; align-items: center; gap: 7px;
+  padding: 5px 11px; border-radius: var(--radius-sm);
+  background: var(--panel); border: 1px solid var(--line);
+  font-family: var(--font-mono); font-size: 9.5px; font-weight: 700; letter-spacing: .1em;
+  color: var(--muted); flex-shrink: 0;
 }
-.pulse {
-  width: 7px; height: 7px;
-  border-radius: 50%;
-  background: var(--amber);
-  transition: all 300ms;
-}
-.pulse.live { background: var(--green); box-shadow: 0 0 8px rgba(0,230,138,.5); animation: pulse-glow 2s ease-in-out infinite; }
-.pulse.error { background: var(--red); }
-@keyframes pulse-glow {
-  0%, 100% { box-shadow: 0 0 4px rgba(0,230,138,.3); }
-  50% { box-shadow: 0 0 12px rgba(0,230,138,.6); }
-}
+.pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); transition: background var(--med); }
+.pulse.live { background: var(--emerald); box-shadow: 0 0 8px rgba(31,227,168,.55); animation: pulse-glow 2.2s ease-in-out infinite; }
+.pulse.error { background: var(--coral); box-shadow: 0 0 8px rgba(255,84,112,.5); }
+@keyframes pulse-glow { 0%,100% { box-shadow: 0 0 4px rgba(31,227,168,.35); } 50% { box-shadow: 0 0 13px rgba(31,227,168,.65); } }
 
 /* ── Workspace ── */
-.workspace {
-  min-height: 0;
-  overflow: hidden;
-}
-.view { display: none; height: 100%; overflow: auto; }
+.workspace { min-height: 0; overflow: hidden; }
+.view { display: none; height: 100%; overflow: auto; -webkit-overflow-scrolling: touch; }
 .view.active { display: block; }
 
-/* ── Bottom nav (mobile-first) ── */
-.bottomnav {
-  display: flex;
-  align-items: stretch;
-  border-top: 1px solid var(--line);
-  background: var(--bg-2);
-  z-index: 10;
-}
+/* ── Bottom nav ── */
+.bottomnav { display: flex; align-items: stretch; overflow-x: auto; border-top: 1px solid var(--line); background: var(--bg-1); z-index: 20; scrollbar-width: none; }
+.bottomnav::-webkit-scrollbar { display: none; }
 .nav-btn {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  background: transparent;
-  color: var(--faint);
-  font-family: var(--font-mono);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: .1em;
-  text-transform: uppercase;
-  transition: color var(--transition);
-  position: relative;
+  flex: 1 0 52px; min-width: 52px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  color: var(--faint); font-family: var(--font-mono); font-size: 8.5px; font-weight: 700;
+  letter-spacing: .07em; text-transform: uppercase; transition: color var(--fast); position: relative;
 }
 .nav-btn svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.8; }
-.nav-btn.active { color: var(--green); }
-.nav-btn.active::after {
-  content: '';
-  position: absolute;
-  top: 0; left: 20%; right: 20%;
-  height: 2px;
-  background: var(--green);
-  border-radius: 0 0 2px 2px;
-}
-.nav-btn:hover { color: var(--muted); }
-.nav-badge {
-  position: absolute;
-  top: 4px; right: calc(50% - 16px);
-  min-width: 16px; height: 16px;
-  border-radius: 8px;
-  background: var(--red);
-  color: #fff;
-  font-size: 9px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 4px;
-}
+.nav-btn.active { color: var(--emerald); }
+.nav-btn.active::after { content: ''; position: absolute; top: 0; left: 26%; right: 26%; height: 2px; background: var(--emerald); border-radius: 0 0 2px 2px; }
+.nav-badge { position: absolute; top: 3px; right: calc(50% - 18px); min-width: 15px; height: 15px; border-radius: 8px; background: var(--coral); color: #fff; font-size: 8.5px; font-weight: 700; display: flex; align-items: center; justify-content: center; padding: 0 4px; }
 
-/* ── Cards / Panels ── */
-.card {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-.card-head {
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--line);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: .14em;
-  text-transform: uppercase;
-  color: var(--faint);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
+/* ── Cards ── */
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow-card); }
+.card-head { padding: 12px 14px; border-bottom: 1px solid var(--line); font-family: var(--font-mono); font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .card-body { padding: 14px; }
 .card-body.flush { padding: 0; }
+.section-gap { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
 
-/* ── Metrics grid ── */
-.metrics-strip {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 1px;
-  background: var(--line);
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-.metric-cell {
-  background: var(--panel);
-  padding: 14px;
-}
-.metric-label {
-  font-family: var(--font-mono);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: .14em;
-  text-transform: uppercase;
-  color: var(--faint);
-}
-.metric-val {
-  margin-top: 6px;
-  font-family: var(--font-mono);
-  font-size: 22px;
-  font-weight: 800;
-  line-height: 1;
-}
-.metric-sub {
-  margin-top: 4px;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--muted);
-}
-
-/* ── Signal table ── */
-.signal-table {
-  width: 100%;
-  border-collapse: collapse;
-  table-layout: fixed;
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-.signal-table thead { position: sticky; top: 0; z-index: 5; }
-.signal-table th {
-  background: var(--bg-2);
-  color: var(--faint);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: .12em;
-  text-transform: uppercase;
-  text-align: left;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--line);
-}
-.signal-table td {
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--line);
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  transition: background var(--transition);
-}
-.signal-table tr { cursor: pointer; background: var(--panel); }
-.signal-table tr:nth-child(even) { background: var(--bg-2); }
-.signal-table tr:hover { background: var(--panel-hover); }
-.signal-table tr.selected { background: var(--panel-3); border-left: 2px solid var(--green); }
-
-/* ── Badges / chips ── */
-.dir-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 52px;
-  padding: 3px 8px;
-  border-radius: var(--radius-sm);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: .06em;
-}
-.dir-badge.long { color: var(--green); background: var(--green-soft); border: 1px solid rgba(0,230,138,.2); }
-.dir-badge.short { color: var(--red); background: var(--red-soft); border: 1px solid rgba(255,81,104,.2); }
-.status-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 8px;
-  border-radius: var(--radius-sm);
-  font-size: 10px;
-  font-weight: 600;
-}
-.status-badge.approved { color: var(--green); background: var(--green-soft); }
-.status-badge.warn { color: var(--amber); background: var(--amber-soft); }
-.status-badge.rejected { color: var(--red); background: var(--red-soft); }
-
-.score-bar {
-  height: 4px;
-  background: var(--line);
-  border-radius: 2px;
-  margin-top: 4px;
-  overflow: hidden;
-}
-.score-bar span {
-  display: block;
-  height: 100%;
-  border-radius: 2px;
-  transition: width 400ms ease;
-}
-
-.chip {
-  display: inline-flex;
-  align-items: center;
-  height: 28px;
-  padding: 0 10px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--line);
-  background: var(--panel);
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  transition: all var(--transition);
-}
-.chip:hover { border-color: var(--line-hi); color: var(--text); }
-.chip.active { color: var(--green); border-color: rgba(0,230,138,.3); background: var(--green-soft); }
-
-/* ── KV rows ── */
-.kv-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--line);
-  font-family: var(--font-mono);
-  font-size: 11px;
-}
-.kv-row:last-child { border-bottom: none; }
-.kv-key { color: var(--faint); }
-.kv-val { color: var(--text); font-weight: 500; text-align: right; }
-
-/* ── Validation layer bars ── */
-.layer-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--line);
-}
-.layer-bar:last-child { border-bottom: none; }
-.layer-name {
-  width: 110px;
-  flex-shrink: 0;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--muted);
-}
-.layer-track {
-  flex: 1;
-  height: 6px;
-  background: var(--line);
-  border-radius: 3px;
-  overflow: hidden;
-}
-.layer-fill {
-  height: 100%;
-  border-radius: 3px;
-  transition: width 500ms ease;
-}
-.layer-score {
-  width: 36px;
-  text-align: right;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 700;
-  flex-shrink: 0;
-}
-
-/* ── Agent vote stack ── */
-.agent-vote {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--line);
-}
-.agent-vote:last-child { border-bottom: none; }
-.agent-icon {
-  width: 28px; height: 28px;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 800;
-  flex-shrink: 0;
-}
-.agent-info { flex: 1; min-width: 0; }
-.agent-name { font-weight: 600; font-size: 12px; }
-.agent-detail { font-size: 10px; color: var(--faint); margin-top: 1px; }
-.agent-score {
-  font-family: var(--font-mono);
-  font-size: 13px;
-  font-weight: 700;
-  flex-shrink: 0;
-}
-
-/* ── Tape / event log ── */
-.tape-event {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--line);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  transition: background var(--transition);
-}
-.tape-event:hover { background: var(--panel-hover); }
-.tape-time { color: var(--faint); width: 48px; flex-shrink: 0; font-size: 10px; }
-.tape-sym { color: var(--blue); width: 70px; flex-shrink: 0; font-weight: 600; }
-.tape-msg { flex: 1; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-/* ── Outcome buttons ── */
-.outcome-row {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
-  margin-top: 10px;
-}
-.outcome-btn {
-  height: 34px;
-  border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 700;
-  transition: all var(--transition);
-}
-.outcome-btn.win { color: var(--green); background: var(--green-soft); border: 1px solid rgba(0,230,138,.2); }
-.outcome-btn.win:hover { background: rgba(0,230,138,.15); }
-.outcome-btn.be { color: var(--amber); background: var(--amber-soft); border: 1px solid rgba(240,180,41,.2); }
-.outcome-btn.be:hover { background: rgba(240,180,41,.15); }
-.outcome-btn.loss { color: var(--red); background: var(--red-soft); border: 1px solid rgba(255,81,104,.2); }
-.outcome-btn.loss:hover { background: rgba(255,81,104,.15); }
+/* ── Skeleton loading ── */
+.skel { background: linear-gradient(90deg, var(--panel-2) 25%, var(--panel-3) 37%, var(--panel-2) 63%); background-size: 400% 100%; animation: skel-shine 1.4s ease-in-out infinite; border-radius: var(--radius-sm); }
+@keyframes skel-shine { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
 
 /* ── Utility ── */
-.good { color: var(--green) !important; }
-.bad { color: var(--red) !important; }
+.good { color: var(--emerald) !important; }
+.bad { color: var(--coral) !important; }
 .warn-text { color: var(--amber) !important; }
-.blue-text { color: var(--blue) !important; }
+.gold-text { color: var(--gold) !important; }
+.blue-text { color: var(--azure) !important; }
 .violet-text { color: var(--violet) !important; }
 .text-xs { font-size: 10px; }
 .text-sm { font-size: 11px; }
 .text-mono { font-family: var(--font-mono); }
+.text-display { font-family: var(--font-display); }
 .text-faint { color: var(--faint); }
 .text-muted { color: var(--muted); }
 .fw-600 { font-weight: 600; }
@@ -486,81 +193,189 @@ button, input, select { font: inherit; border: none; outline: none; cursor: poin
 .mt-16 { margin-top: 16px; }
 .gap-8 { gap: 8px; }
 .gap-12 { gap: 12px; }
-.p-16 { padding: 16px; }
 .flex { display: flex; }
 .flex-col { display: flex; flex-direction: column; }
 .items-center { align-items: center; }
 .justify-between { justify-content: space-between; }
-.empty-state {
-  padding: 48px 24px;
-  text-align: center;
-  color: var(--faint);
-  font-family: var(--font-mono);
-  font-size: 12px;
+.eyebrow { font-family: var(--font-mono); font-size: 9.5px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; color: var(--faint); }
+.empty-state { padding: 44px 24px; text-align: center; color: var(--faint); font-family: var(--font-mono); font-size: 11.5px; line-height: 1.7; }
+.empty-state svg { width: 26px; height: 26px; stroke: var(--faintest); margin-bottom: 10px; }
+
+@keyframes fade-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.fade-up { animation: fade-up var(--med) forwards; }
+@keyframes row-in { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: translateX(0); } }
+.row-in { animation: row-in var(--med) forwards; }
+
+/* ── Hero (dashboard) ── */
+.hero {
+  position: relative; overflow: hidden;
+  background: linear-gradient(155deg, var(--panel) 0%, var(--bg-1) 100%);
+  border: 1px solid var(--line); border-radius: var(--radius-lg);
+  padding: 20px 18px 0;
 }
-.section-gap { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
-.dev-credit {
-  text-align: center;
-  padding: 10px 16px;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 1.5px;
-  color: var(--faint);
-  border-top: 1px solid var(--line);
-  background: var(--bg);
-}
-.dev-credit span { color: var(--green); font-weight: 600; }
+.hero-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.hero-label { font-family: var(--font-mono); font-size: 10px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; color: var(--faint); }
+.hero-value { font-family: var(--font-display); font-weight: 700; font-size: 40px; line-height: 1; margin-top: 8px; letter-spacing: -.01em; }
+.hero-sub { margin-top: 8px; font-family: var(--font-mono); font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.hero-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 999px; font-family: var(--font-mono); font-size: 10px; font-weight: 700; letter-spacing: .04em; border: 1px solid var(--line); background: var(--panel-2); color: var(--muted); }
+.hero-chip.on { color: var(--emerald); border-color: var(--emerald-line); background: var(--emerald-soft); }
+.hero-chip.risk-open { color: var(--coral); border-color: var(--coral-line); background: var(--coral-soft); }
+.hero-spark { height: 62px; margin-top: 10px; }
+.hero-spark canvas { display: block; width: 100%; height: 100%; }
+
+/* ── Metrics strip ── */
+.metrics-strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 1px; background: var(--line); border-radius: var(--radius); overflow: hidden; }
+.metric-cell { background: var(--panel); padding: 13px 14px; transition: background var(--fast); }
+.metric-label { font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; color: var(--faint); }
+.metric-val { margin-top: 6px; font-family: var(--font-mono); font-size: 20px; font-weight: 800; line-height: 1; }
+.metric-sub { margin-top: 4px; font-family: var(--font-mono); font-size: 9.5px; color: var(--muted); }
+
+/* ── Consensus Radar (signature element) ── */
+.radar-wrap { display: flex; flex-direction: column; align-items: center; padding: 6px 4px 2px; }
+.radar-wrap canvas { display: block; }
+.radar-caption { margin-top: 6px; font-family: var(--font-mono); font-size: 10.5px; color: var(--muted); text-align: center; }
+.radar-caption b { color: var(--text); }
+.radar-legend { display: flex; justify-content: center; gap: 14px; margin-top: 8px; flex-wrap: wrap; }
+.radar-legend-item { display: flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 9.5px; color: var(--faint); }
+.radar-dot { width: 7px; height: 7px; border-radius: 50%; }
+
+/* ── Signal table ── */
+.signal-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-family: var(--font-mono); font-size: 11.5px; }
+.signal-table thead { position: sticky; top: 0; z-index: 5; }
+.signal-table th { background: var(--bg-2); color: var(--faint); font-size: 9px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.signal-table td { padding: 10px 12px; border-bottom: 1px solid var(--line); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.signal-table tr { cursor: pointer; background: var(--panel); transition: background var(--fast); }
+.signal-table tr:nth-child(even) { background: var(--bg-2); }
+.signal-table tr:hover { background: var(--panel-hover); }
+.signal-table tr.selected { background: var(--panel-3); box-shadow: inset 2px 0 0 var(--emerald); }
+
+/* ── Signal card (mobile-friendly alt to table on dashboard) ── */
+.signal-card { display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-bottom: 1px solid var(--line); cursor: pointer; transition: background var(--fast); }
+.signal-card:hover, .signal-card:active { background: var(--panel-hover); }
+.signal-card.selected { background: var(--panel-3); box-shadow: inset 2px 0 0 var(--emerald); }
+.signal-card-dir { width: 3px; align-self: stretch; border-radius: 2px; flex-shrink: 0; }
+.signal-card-dir.long { background: var(--emerald); }
+.signal-card-dir.short { background: var(--coral); }
+.signal-card-main { flex: 1; min-width: 0; }
+.signal-card-top { display: flex; align-items: center; gap: 8px; }
+.signal-card-sym { font-family: var(--font-mono); font-weight: 700; font-size: 13px; }
+.signal-card-thesis { margin-top: 3px; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.signal-card-right { text-align: right; flex-shrink: 0; }
+.signal-card-score { font-family: var(--font-mono); font-weight: 800; font-size: 16px; }
+.signal-card-time { font-family: var(--font-mono); font-size: 9.5px; color: var(--faint); margin-top: 2px; }
+
+/* ── Badges / chips ── */
+.dir-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 50px; padding: 3px 8px; border-radius: var(--radius-sm); font-size: 9.5px; font-weight: 700; letter-spacing: .05em; }
+.dir-badge.long { color: var(--emerald); background: var(--emerald-soft); border: 1px solid var(--emerald-line); }
+.dir-badge.short { color: var(--coral); background: var(--coral-soft); border: 1px solid var(--coral-line); }
+.status-badge { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: var(--radius-sm); font-size: 9.5px; font-weight: 600; }
+.status-badge.approved { color: var(--emerald); background: var(--emerald-soft); }
+.status-badge.warn { color: var(--amber); background: var(--amber-soft); }
+.status-badge.rejected { color: var(--coral); background: var(--coral-soft); }
+.grade-badge { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 6px; font-family: var(--font-mono); font-weight: 800; font-size: 11px; }
+.grade-badge.A { color: var(--gold); background: var(--gold-soft); border: 1px solid var(--gold-line); }
+.grade-badge.B { color: var(--emerald); background: var(--emerald-soft); }
+.grade-badge.C { color: var(--amber); background: var(--amber-soft); }
+.grade-badge.D, .grade-badge.F { color: var(--coral); background: var(--coral-soft); }
+
+.score-bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 4px; overflow: hidden; }
+.score-bar span { display: block; height: 100%; border-radius: 2px; transition: width 500ms var(--ease); }
+
+.chip { display: inline-flex; align-items: center; height: 27px; padding: 0 10px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--panel); color: var(--muted); font-family: var(--font-mono); font-size: 10px; font-weight: 700; transition: all var(--fast); }
+.chip:hover { border-color: var(--line-hi); color: var(--text); }
+.chip.active { color: var(--emerald); border-color: var(--emerald-line); background: var(--emerald-soft); }
+
+/* ── KV rows ── */
+.kv-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); font-family: var(--font-mono); font-size: 11px; gap: 10px; }
+.kv-row:last-child { border-bottom: none; }
+.kv-key { color: var(--faint); }
+.kv-val { color: var(--text); font-weight: 500; text-align: right; }
+
+/* ── Validation layer bars ── */
+.layer-bar { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.layer-bar:last-child { border-bottom: none; }
+.layer-name { width: 108px; flex-shrink: 0; font-family: var(--font-mono); font-size: 10px; font-weight: 600; color: var(--muted); }
+.layer-track { flex: 1; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.layer-fill { height: 100%; border-radius: 3px; transition: width 600ms var(--ease); }
+.layer-score { width: 34px; text-align: right; font-family: var(--font-mono); font-size: 11px; font-weight: 700; flex-shrink: 0; }
+
+/* ── Agent vote stack ── */
+.agent-vote { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.agent-vote:last-child { border-bottom: none; }
+.agent-icon { width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-size: 10px; font-weight: 800; flex-shrink: 0; }
+.agent-info { flex: 1; min-width: 0; }
+.agent-name { font-weight: 600; font-size: 12px; }
+.agent-detail { font-size: 10px; color: var(--faint); margin-top: 1px; }
+.agent-score { font-family: var(--font-mono); font-size: 13px; font-weight: 700; flex-shrink: 0; }
+
+/* ── Tape / event log ── */
+.tape-event { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--line); font-family: var(--font-mono); font-size: 10.5px; transition: background var(--fast); }
+.tape-event:hover { background: var(--panel-hover); }
+.tape-time { color: var(--faint); width: 46px; flex-shrink: 0; font-size: 9.5px; }
+.tape-sym { color: var(--azure); width: 68px; flex-shrink: 0; font-weight: 600; }
+.tape-msg { flex: 1; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Intel feed ── */
+.intel-item { display: flex; gap: 11px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.intel-icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.intel-icon svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2; }
+.intel-body { flex: 1; min-width: 0; }
+.intel-title { font-weight: 600; font-size: 12px; }
+.intel-desc { font-size: 11px; color: var(--muted); margin-top: 2px; line-height: 1.5; }
+.intel-time { font-family: var(--font-mono); font-size: 9.5px; color: var(--faint); margin-top: 4px; }
+
+/* ── Outcome buttons ── */
+.outcome-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
+.outcome-btn { height: 34px; border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 11px; font-weight: 700; transition: all var(--fast); }
+.outcome-btn.win { color: var(--emerald); background: var(--emerald-soft); border: 1px solid var(--emerald-line); }
+.outcome-btn.win:hover { background: rgba(31,227,168,.16); }
+.outcome-btn.be { color: var(--amber); background: var(--amber-soft); border: 1px solid rgba(240,180,41,.22); }
+.outcome-btn.be:hover { background: rgba(240,180,41,.16); }
+.outcome-btn.loss { color: var(--coral); background: var(--coral-soft); border: 1px solid var(--coral-line); }
+.outcome-btn.loss:hover { background: rgba(255,84,112,.16); }
+
+/* ── Risk gauge ── */
+.gauge-wrap { display: flex; align-items: center; gap: 16px; padding: 4px 0 8px; }
+.gauge-wrap canvas { display: block; flex-shrink: 0; }
+.gauge-readout { flex: 1; }
+.gauge-state { font-family: var(--font-display); font-weight: 700; font-size: 20px; }
+.gauge-reason { font-family: var(--font-mono); font-size: 10.5px; color: var(--muted); margin-top: 3px; line-height: 1.5; }
+
+/* ── About page ── */
+.about-hero { text-align: center; padding: 34px 20px 26px; }
+.about-mark { font-family: var(--font-display); font-weight: 700; font-size: 26px; letter-spacing: -.01em; background: linear-gradient(120deg, var(--emerald), var(--gold)); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+.about-tag { margin-top: 6px; font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .1em; color: var(--faint); text-transform: uppercase; }
+.stack-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
+.stack-pill { padding: 10px 12px; border-radius: var(--radius-sm); background: var(--panel-2); border: 1px solid var(--line); font-family: var(--font-mono); font-size: 10px; color: var(--muted); text-align: center; }
+.dev-credit { text-align: center; padding: 22px 16px 28px; font-family: var(--font-mono); font-size: 11px; letter-spacing: .06em; color: var(--faint); }
+.dev-credit b { color: var(--emerald); font-weight: 700; }
+.dev-credit .role { display: block; margin-top: 3px; font-size: 9.5px; color: var(--faintest); letter-spacing: .12em; text-transform: uppercase; }
 
 /* ── Desktop layout ── */
 @media (min-width: 1024px) {
-  .app { grid-template-rows: 52px 1fr; }
+  .app { grid-template-rows: 56px 1fr; }
   .bottomnav { display: none; }
-  .workspace { display: grid; grid-template-columns: 56px 1fr; }
-  .sidebar-rail {
-    display: flex !important;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    padding: 10px 0;
-    border-right: 1px solid var(--line);
-    background: var(--bg-2);
-  }
-  .sidebar-btn {
-    width: 40px; height: 40px;
-    border-radius: var(--radius);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: transparent;
-    color: var(--faint);
-    transition: all var(--transition);
-    position: relative;
-  }
-  .sidebar-btn svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.8; }
+  .workspace { display: grid; grid-template-columns: 58px 1fr; }
+  .sidebar-rail { display: flex !important; flex-direction: column; align-items: center; gap: 4px; padding: 12px 0; border-right: 1px solid var(--line); background: var(--bg-1); }
+  .sidebar-btn { width: 40px; height: 40px; border-radius: var(--radius); display: flex; align-items: center; justify-content: center; color: var(--faint); transition: all var(--fast); position: relative; }
+  .sidebar-btn svg { width: 19px; height: 19px; stroke: currentColor; fill: none; stroke-width: 1.8; }
   .sidebar-btn:hover { color: var(--muted); background: var(--panel); }
-  .sidebar-btn.active { color: var(--green); background: var(--green-soft); }
+  .sidebar-btn.active { color: var(--emerald); background: var(--emerald-soft); }
   .sidebar-btn .nav-badge { top: 2px; right: 2px; }
   .view.active { display: grid; }
   .view-dashboard { grid-template-columns: 1fr 380px; grid-template-rows: auto 1fr; }
   .dash-top { grid-column: 1 / -1; }
   .view-signals { grid-template-columns: 1fr 400px; }
   .view-validation { grid-template-columns: 1fr 1fr; }
+  .view-intel { grid-template-columns: 1fr 340px; }
+  .view-about { grid-template-columns: 1fr; }
 }
 @media (max-width: 1023px) {
   .sidebar-rail { display: none !important; }
-  .view-dashboard { display: flex; flex-direction: column; }
-  .view-signals { display: flex; flex-direction: column; }
-  .view-validation { display: flex; flex-direction: column; }
-  .ticker { display: none; }
+  .view-dashboard, .view-signals, .view-validation, .view-intel { display: flex; flex-direction: column; }
+  .ticker-strip { display: none; }
   .metrics-strip { grid-template-columns: repeat(2, 1fr); }
 }
-
-/* ── Animations ── */
-@keyframes fade-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-.fade-in { animation: fade-in 300ms ease forwards; }
 </style>
 </head>
 <body>
@@ -568,8 +383,11 @@ button, input, select { font: inherit; border: none; outline: none; cursor: poin
 
   <!-- ── Top Bar ── -->
   <header class="topbar">
-    <div class="brand">OMNICEE<span> COMMAND</span></div>
-    <div class="ticker" id="ticker"></div>
+    <div class="brand">
+      <span class="brand-mark">OMNICEE</span>
+      <span class="brand-sub">COMMAND</span>
+    </div>
+    <div class="ticker-strip" id="ticker"></div>
     <div class="conn-badge">
       <span class="pulse" id="status-dot"></span>
       <span id="status-text">CONNECTING</span>
@@ -579,43 +397,65 @@ button, input, select { font: inherit; border: none; outline: none; cursor: poin
   <!-- ── Workspace ── -->
   <section class="workspace">
 
-    <!-- Desktop sidebar -->
     <nav class="sidebar-rail" id="sidebar">
-      <button class="sidebar-btn active" data-view="dashboard" title="Dashboard">
-        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-      </button>
-      <button class="sidebar-btn" data-view="signals" title="Signals">
-        <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-      </button>
-      <button class="sidebar-btn" data-view="validation" title="Validation">
-        <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-      </button>
-      <button class="sidebar-btn" data-view="tape" title="Event Tape">
-        <svg viewBox="0 0 24 24"><line x1="17" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="17" y1="18" x2="3" y2="18"/></svg>
-      </button>
-      <button class="sidebar-btn" data-view="risk" title="Risk">
-        <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-      </button>
+      <button class="sidebar-btn active" data-view="dashboard" title="Dashboard"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
+      <button class="sidebar-btn" data-view="signals" title="Signals"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></button>
+      <button class="sidebar-btn" data-view="intel" title="Intel"><svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+      <button class="sidebar-btn" data-view="validation" title="Validation"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></button>
+      <button class="sidebar-btn" data-view="tape" title="Event Tape"><svg viewBox="0 0 24 24"><line x1="17" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="17" y1="18" x2="3" y2="18"/></svg></button>
+      <button class="sidebar-btn" data-view="risk" title="Risk"><svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></button>
+      <button class="sidebar-btn" data-view="about" title="About"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></button>
     </nav>
 
-    <!-- Dashboard View -->
-    <div class="view active" id="view-dashboard">
+    <!-- Dashboard -->
+    <div class="view view-dashboard active" id="view-dashboard">
       <div class="dash-top section-gap">
-        <div class="metrics-strip" id="metrics-strip">
-          <div class="metric-cell"><div class="metric-label">System Gate</div><div class="metric-val good" id="m-gate">ARMED</div><div class="metric-sub" id="m-gate-sub">no rejected setup</div></div>
-          <div class="metric-cell"><div class="metric-label">Live Symbols</div><div class="metric-val blue-text" id="m-symbols">0</div><div class="metric-sub">streaming</div></div>
-          <div class="metric-cell"><div class="metric-label">Daily PnL</div><div class="metric-val" id="m-pnl">0.0%</div><div class="metric-sub" id="m-risk">risk normal</div></div>
-          <div class="metric-cell"><div class="metric-label">Best Regime</div><div class="metric-val" id="c-regime">UNKNOWN</div><div class="metric-sub" id="c-regime-sub">waiting for feed</div></div>
-          <div class="metric-cell"><div class="metric-label">A-Grade Signals</div><div class="metric-val good" id="c-gradea">0</div><div class="metric-sub">this session</div></div>
+        <div class="hero">
+          <div class="hero-top">
+            <div>
+              <div class="hero-label">Session PnL</div>
+              <div class="hero-value" id="hero-pnl">0.0<span style="font-size:22px;">%</span></div>
+              <div class="hero-sub">
+                <span class="hero-chip" id="hero-cb">CIRCUIT CLOSED</span>
+                <span class="hero-chip" id="hero-sizing">SIZING 100%</span>
+              </div>
+            </div>
+            <div style="text-align:right;">
+              <div class="hero-label">Signals&nbsp;Today</div>
+              <div class="hero-value" style="font-size:26px;" id="hero-count">0</div>
+            </div>
+          </div>
+          <div class="hero-spark"><canvas id="spark-canvas"></canvas></div>
+        </div>
+
+        <div class="metrics-strip">
+          <div class="metric-cell"><div class="metric-label">Gate State</div><div class="metric-val good" id="m-gate">ARMED</div><div class="metric-sub" id="m-gate-sub">no rejected setup</div></div>
+          <div class="metric-cell"><div class="metric-label">Symbols Live</div><div class="metric-val" id="m-symbols">0</div><div class="metric-sub">streaming</div></div>
+          <div class="metric-cell"><div class="metric-label">Top Regime</div><div class="metric-val blue-text" id="c-regime">--</div><div class="metric-sub" id="c-regime-sub">waiting for feed</div></div>
+          <div class="metric-cell"><div class="metric-label">A-Grade</div><div class="metric-val gold-text" id="c-gradea">0</div><div class="metric-sub">this session</div></div>
           <div class="metric-cell"><div class="metric-label">Avg Score</div><div class="metric-val" id="c-score">--</div><div class="metric-sub">approved signals</div></div>
-          <div class="metric-cell"><div class="metric-label">Net Sizing</div><div class="metric-val warn-text" id="c-size">100%</div><div class="metric-sub">risk engine factor</div></div>
           <div class="metric-cell"><div class="metric-label">Learning</div><div class="metric-val warn-text" id="m-learn">WARM</div><div class="metric-sub" id="m-learn-sub">awaiting outcomes</div></div>
-          <div class="metric-cell"><div class="metric-label">MongoDB</div><div class="metric-val blue-text" id="m-db">CHECK</div><div class="metric-sub">Atlas persistence</div></div>
         </div>
       </div>
 
-      <!-- Dashboard: recent signals card -->
       <div class="section-gap" style="overflow:auto;">
+        <div class="card">
+          <div class="card-head">
+            <span>Consensus Radar</span>
+            <span class="text-faint" id="radar-symbol">--</span>
+          </div>
+          <div class="card-body">
+            <div class="radar-wrap">
+              <canvas id="radar-canvas" width="240" height="240"></canvas>
+              <div class="radar-caption" id="radar-caption">Select a signal to see live agent consensus.</div>
+              <div class="radar-legend">
+                <div class="radar-legend-item"><span class="radar-dot" style="background:var(--emerald)"></span>SUPPORTS</div>
+                <div class="radar-legend-item"><span class="radar-dot" style="background:var(--amber)"></span>NEUTRAL</div>
+                <div class="radar-legend-item"><span class="radar-dot" style="background:var(--coral)"></span>OPPOSES</div>
+              </div>
+            </div>
+          </div>
+        </div>
         <div class="card">
           <div class="card-head">
             <span>Recent Signals</span>
@@ -624,33 +464,16 @@ button, input, select { font: inherit; border: none; outline: none; cursor: poin
               <button class="chip" data-filter="A">A ONLY</button>
             </div>
           </div>
-          <div class="card-body flush" style="overflow:auto;max-height:calc(100vh - 320px);">
-            <table class="signal-table">
-              <thead><tr>
-                <th style="width:52px">Time</th>
-                <th style="width:80px">Symbol</th>
-                <th style="width:68px">Side</th>
-                <th style="width:72px">Score</th>
-                <th style="width:100px">Regime</th>
-                <th style="width:90px">Gate</th>
-                <th style="width:82px">Entry</th>
-                <th style="width:82px">Stop</th>
-                <th>Thesis</th>
-              </tr></thead>
-              <tbody id="signal-body">
-                <tr><td colspan="9"><div class="empty-state">Waiting for approved institutional signals...</div></td></tr>
-              </tbody>
-            </table>
+          <div class="card-body flush" id="signal-cards" style="overflow:auto;max-height:420px;">
           </div>
         </div>
       </div>
 
-      <!-- Dashboard: detail sidebar -->
       <div class="section-gap" style="overflow:auto;">
         <div class="card">
           <div class="card-head"><span id="detail-title">Signal Inspector</span></div>
           <div class="card-body" id="detail-panel">
-            <div class="empty-state">Select a signal to inspect execution quality, agent votes, validation layers, and risk.</div>
+            <div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>Select a signal to inspect execution quality, agent votes, validation layers, and risk.</div>
           </div>
         </div>
         <div class="card">
@@ -662,8 +485,8 @@ button, input, select { font: inherit; border: none; outline: none; cursor: poin
       </div>
     </div>
 
-    <!-- Signals View -->
-    <div class="view" id="view-signals">
+    <!-- Signals -->
+    <div class="view view-signals" id="view-signals">
       <div class="section-gap" style="overflow:auto;">
         <div class="card" style="flex:1;">
           <div class="card-head">
@@ -678,16 +501,9 @@ button, input, select { font: inherit; border: none; outline: none; cursor: poin
           <div class="card-body flush" style="overflow:auto;">
             <table class="signal-table">
               <thead><tr>
-                <th style="width:52px">Time</th>
-                <th style="width:80px">Symbol</th>
-                <th style="width:68px">Side</th>
-                <th style="width:72px">Score</th>
-                <th style="width:100px">Regime</th>
-                <th style="width:90px">Gate</th>
-                <th style="width:82px">Entry</th>
-                <th style="width:82px">Stop</th>
-                <th style="width:82px">TP1</th>
-                <th>Thesis</th>
+                <th style="width:50px">Time</th><th style="width:78px">Symbol</th><th style="width:64px">Side</th>
+                <th style="width:70px">Score</th><th style="width:96px">Regime</th><th style="width:88px">Gate</th>
+                <th style="width:78px">Entry</th><th style="width:78px">Stop</th><th style="width:78px">TP1</th><th>Thesis</th>
               </tr></thead>
               <tbody id="signal-body-full"></tbody>
             </table>
@@ -704,8 +520,28 @@ button, input, select { font: inherit; border: none; outline: none; cursor: poin
       </div>
     </div>
 
-    <!-- Validation View -->
-    <div class="view" id="view-validation">
+    <!-- Intel -->
+    <div class="view view-intel" id="view-intel">
+      <div class="section-gap" style="overflow:auto;">
+        <div class="card" style="flex:1;">
+          <div class="card-head"><span>Institutional Flow</span><span class="text-faint text-xs" id="intel-count">0 events</span></div>
+          <div class="card-body flush" id="intel-feed">
+            <div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>Watching for economic surprises, extreme retail positioning, and insider cluster buys.</div>
+          </div>
+        </div>
+      </div>
+      <div class="section-gap" style="overflow:auto;">
+        <div class="card">
+          <div class="card-head"><span>Watchlist</span></div>
+          <div class="card-body" id="watchlist-panel">
+            <div class="text-faint text-xs text-mono">Live prices appear once the feed connects.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Validation -->
+    <div class="view view-validation" id="view-validation">
       <div class="section-gap" style="overflow:auto;">
         <div class="card">
           <div class="card-head"><span>Ensemble Validation Layers</span></div>
@@ -715,28 +551,22 @@ button, input, select { font: inherit; border: none; outline: none; cursor: poin
         </div>
         <div class="card">
           <div class="card-head"><span>Statistical Tests</span></div>
-          <div class="card-body" id="stat-panel">
-            <div class="text-faint text-xs text-mono">No statistical validation data yet.</div>
-          </div>
+          <div class="card-body" id="stat-panel"><div class="text-faint text-xs text-mono">No statistical validation data yet.</div></div>
         </div>
       </div>
       <div class="section-gap" style="overflow:auto;">
         <div class="card">
           <div class="card-head"><span>Monte Carlo Simulation</span></div>
-          <div class="card-body" id="mc-panel">
-            <div class="text-faint text-xs text-mono">No Monte Carlo data yet.</div>
-          </div>
+          <div class="card-body" id="mc-panel"><div class="text-faint text-xs text-mono">No Monte Carlo data yet.</div></div>
         </div>
         <div class="card">
           <div class="card-head"><span>Bayesian Analysis</span></div>
-          <div class="card-body" id="bayes-panel">
-            <div class="text-faint text-xs text-mono">No Bayesian data yet.</div>
-          </div>
+          <div class="card-body" id="bayes-panel"><div class="text-faint text-xs text-mono">No Bayesian data yet.</div></div>
         </div>
       </div>
     </div>
 
-    <!-- Event Tape View -->
+    <!-- Tape -->
     <div class="view" id="view-tape">
       <div class="section-gap" style="overflow:auto;">
         <div class="card" style="flex:1;">
@@ -748,13 +578,24 @@ button, input, select { font: inherit; border: none; outline: none; cursor: poin
       </div>
     </div>
 
-    <!-- Risk View -->
+    <!-- Risk -->
     <div class="view" id="view-risk">
       <div class="section-gap" style="overflow:auto;">
         <div class="card">
+          <div class="card-head"><span>Circuit Breaker</span></div>
+          <div class="card-body">
+            <div class="gauge-wrap">
+              <canvas id="gauge-canvas" width="96" height="96"></canvas>
+              <div class="gauge-readout">
+                <div class="gauge-state good" id="r-circuit">CLOSED</div>
+                <div class="gauge-reason" id="r-reason">All systems nominal. Full position sizing active.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
           <div class="card-head"><span>Risk Dashboard</span></div>
-          <div class="card-body" id="risk-panel">
-            <div class="kv-row"><span class="kv-key">Circuit Breaker</span><span class="kv-val good" id="r-circuit">CLOSED</span></div>
+          <div class="card-body">
             <div class="kv-row"><span class="kv-key">Daily PnL</span><span class="kv-val" id="r-pnl">0.0%</span></div>
             <div class="kv-row"><span class="kv-key">Max Daily Loss</span><span class="kv-val" id="r-maxdaily">3.0%</span></div>
             <div class="kv-row"><span class="kv-key">Drawdown</span><span class="kv-val" id="r-dd">0.0%</span></div>
@@ -765,100 +606,146 @@ button, input, select { font: inherit; border: none; outline: none; cursor: poin
         </div>
         <div class="card">
           <div class="card-head"><span>Learning Profiles</span></div>
-          <div class="card-body" id="learning-panel">
-            <div class="text-faint text-xs text-mono">No learning profiles yet.</div>
+          <div class="card-body" id="learning-panel"><div class="text-faint text-xs text-mono">No learning profiles yet.</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- About -->
+    <div class="view view-about" id="view-about">
+      <div class="section-gap" style="overflow:auto;max-width:640px;margin:0 auto;width:100%;">
+        <div class="card">
+          <div class="about-hero">
+            <div class="about-mark">OMNICEE</div>
+            <div class="about-tag">Institutional-Grade AI Signal Desk</div>
           </div>
+          <div class="card-body">
+            <p class="text-sm text-muted" style="line-height:1.7;">
+              OMNICEE runs an ensemble of specialist AI agents — Smart Money Concepts, multi-timeframe structure,
+              momentum, volume/open interest, sentiment, harmonic and Wyckoff pattern recognition, fractal geometry,
+              and market microstructure — and reconciles their votes through a nine-layer validation pipeline
+              (statistical significance, Bayesian posterior, Monte Carlo simulation, and more) before a signal
+              is ever approved. Every approved signal you see here has already survived that gauntlet.
+            </p>
+            <div class="mt-16 eyebrow">System</div>
+            <div class="stack-grid mt-8">
+              <div class="stack-pill">8 AI Agents</div>
+              <div class="stack-pill">9 Validation Layers</div>
+              <div class="stack-pill">Multi-Asset</div>
+              <div class="stack-pill">Real-Time WS</div>
+              <div class="stack-pill">Circuit-Breaker Risk</div>
+              <div class="stack-pill">Adaptive Learning</div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span>Connection</span></div>
+          <div class="card-body">
+            <div class="kv-row"><span class="kv-key">MongoDB Persistence</span><span class="kv-val" id="m-db">CHECK</span></div>
+            <div class="kv-row"><span class="kv-key">Transport</span><span class="kv-val text-xs" id="about-transport">--</span></div>
+            <div class="kv-row"><span class="kv-key">Session Started</span><span class="kv-val text-xs" id="about-since">--</span></div>
+          </div>
+        </div>
+        <div class="dev-credit">
+          Developed by <b>James Yelbert</b>
+          <span class="role">Architect &amp; Builder — OMNICEE Trading Systems</span>
         </div>
       </div>
     </div>
 
   </section>
 
-  <!-- ── Bottom Nav (mobile) ── -->
+  <!-- ── Bottom Nav ── -->
   <nav class="bottomnav" id="bottomnav">
-    <button class="nav-btn active" data-view="dashboard">
-      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-      DASH
-    </button>
-    <button class="nav-btn" data-view="signals">
-      <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-      SIGNALS
-    </button>
-    <button class="nav-btn" data-view="validation">
-      <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-      VALID
-    </button>
-    <button class="nav-btn" data-view="tape">
-      <svg viewBox="0 0 24 24"><line x1="17" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="17" y1="18" x2="3" y2="18"/></svg>
-      TAPE
-    </button>
-    <button class="nav-btn" data-view="risk">
-      <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-      RISK
-    </button>
+    <button class="nav-btn active" data-view="dashboard"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>DASH</button>
+    <button class="nav-btn" data-view="signals"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>SIGNALS</button>
+    <button class="nav-btn" data-view="intel"><svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>INTEL</button>
+    <button class="nav-btn" data-view="validation"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>VALID</button>
+    <button class="nav-btn" data-view="tape"><svg viewBox="0 0 24 24"><line x1="17" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="17" y1="18" x2="3" y2="18"/></svg>TAPE</button>
+    <button class="nav-btn" data-view="risk"><svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>RISK</button>
+    <button class="nav-btn" data-view="about"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>ABOUT</button>
   </nav>
 </div>
 
 <script>
 'use strict';
 
+/* ── Telegram WebApp integration ── */
 const tg = window.Telegram?.WebApp;
 if (tg) {
   tg.ready();
   tg.expand();
-  tg.setHeaderColor('#080b0f');
-  tg.setBackgroundColor('#080b0f');
+  tg.setHeaderColor('#05070a');
+  tg.setBackgroundColor('#05070a');
+}
+function haptic(kind) {
+  const h = tg?.HapticFeedback;
+  if (!h) return;
+  if (kind === 'signal') h.notificationOccurred('success');
+  else if (kind === 'nav') h.impactOccurred('light');
+  else if (kind === 'error') h.notificationOccurred('error');
 }
 
+/* ── State (all real, nothing fabricated) ── */
 const state = {
   signals: [],
   markets: {},
+  priceHistory: {},   // symbol -> [prices] for ticker sparklines
+  pnlHistory: [],      // [{t, v}] session PnL trail, real data from risk_update stream
   regimes: {},
   telemetry: [],
+  intel: [],
   learning: [],
-  stats: { total: 0, gradeA: 0, avgScore: 0 },
-  risk: { dailyPnl: 0, drawdown: 0, consecLoss: 0, netSizingFactor: 1, state: 'CLOSED' },
+  stats: { total: 0, gradeA: 0 },
+  risk: { dailyPnl: 0, drawdown: 0, consecLoss: 0, netSizingFactor: 1, state: 'CLOSED', maxDailyLoss: 3, maxDrawdown: 10 },
   selectedId: null,
   filter: 'ALL',
   filterSig: 'ALL',
   currentView: 'dashboard',
   connected: false,
+  sessionStart: Date.now(),
 };
 
 const initData = tg?.initData || '';
-const socket = io({
-  path: '/socket.io',
-  auth: { initData },
-  transports: ['websocket', 'polling'],
-});
+const socket = io({ path: '/socket.io', auth: { initData }, transports: ['websocket', 'polling'] });
 
 socket.on('connect', () => {
   state.connected = true;
   setStatus('live', 'LIVE');
   socket.emit('get_history', { limit: 50 });
   hydrateFromApi();
+  setText('about-transport', socket.io.engine.transport.name.toUpperCase());
+  setText('about-since', new Date(state.sessionStart).toLocaleTimeString());
 });
 socket.on('connect_error', err => {
   setStatus('error', 'OFFLINE');
-  console.warn(err.message);
-  setTimeout(loadDemo, 1200);
+  console.warn('[OMNICEE]', err.message);
 });
-socket.on('disconnect', () => {
-  state.connected = false;
-  setStatus('', 'RECONNECTING');
-});
+socket.on('disconnect', () => { state.connected = false; setStatus('', 'RECONNECTING'); });
+
 socket.on('history', msg => {
   for (const sig of msg.signals || []) ingestSignal(sig, false);
   renderAll();
 });
 socket.on('outcome_saved', msg => {
   state.telemetry.unshift({ type: 'outcome_saved', symbol: msg.symbol, payload: msg, receivedAt: Date.now() });
-  hydrateLearning();
-  renderAll();
+  hydrateLearning().then(renderAll);
 });
 socket.on('signal', sig => ingestSignal(sig));
-socket.on('market', data => { state.markets[data.symbol] = data; renderAll(); });
-socket.on('risk', data => { Object.assign(state.risk, data); renderAll(); });
+socket.on('market', data => {
+  if (!data?.symbol) return;
+  state.markets[data.symbol] = data;
+  const h = state.priceHistory[data.symbol] || (state.priceHistory[data.symbol] = []);
+  h.push(Number(data.price) || 0);
+  if (h.length > 40) h.shift();
+  renderAll();
+});
+socket.on('risk', data => {
+  Object.assign(state.risk, data);
+  state.pnlHistory.push({ t: Date.now(), v: Number(state.risk.dailyPnl || 0) });
+  if (state.pnlHistory.length > 120) state.pnlHistory.shift();
+  renderAll();
+});
 socket.on('stats', data => { Object.assign(state.stats, data); renderAll(); });
 socket.on('regime', data => {
   if (data?.symbol) state.regimes[`${data.symbol}:${data.timeframe || ''}`] = data;
@@ -869,14 +756,19 @@ socket.on('telemetry', data => {
   state.telemetry = state.telemetry.slice(0, 60);
   renderAll();
 });
+socket.on('intel', data => {
+  state.intel.unshift({ ...data, receivedAt: Date.now() });
+  state.intel = state.intel.slice(0, 60);
+  haptic('nav');
+  renderAll();
+});
 
 async function hydrateFromApi() {
   const headers = initData ? { 'x-telegram-init-data': initData } : {};
   try {
     const health = await fetch('/health').then(r => r.json());
-    setText('m-db', health.mongo?.enabled ? (health.mongo.ok ? 'LIVE' : 'ERR') : 'OFF');
-    if (health.mongo?.ok) setClass('m-db', 'metric-val good');
-    else setClass('m-db', 'metric-val bad');
+    setText('m-db', health.mongo?.enabled ? (health.mongo.ok ? 'LIVE' : 'ERROR') : 'OFFLINE');
+    setClass('m-db', 'kv-val ' + (health.mongo?.ok ? 'good' : health.mongo?.enabled ? 'bad' : 'text-faint'));
   } catch (_) {}
   try {
     const res = await fetch('/api/signals?limit=50', { headers }).then(r => r.json());
@@ -885,7 +777,6 @@ async function hydrateFromApi() {
   await hydrateLearning();
   renderAll();
 }
-
 async function hydrateLearning() {
   const headers = initData ? { 'x-telegram-init-data': initData } : {};
   try {
@@ -897,67 +788,80 @@ async function hydrateLearning() {
 function ingestSignal(sig, rerender = true) {
   if (!sig || sig.action === 'WAIT') return;
   if (state.signals.some(s => s.id === sig.id)) return;
+  const isNew = rerender && state.signals.length > 0;
   state.signals.unshift(sig);
   state.signals = state.signals.slice(0, 200);
   if (!state.selectedId) state.selectedId = sig.id;
+  if (isNew) haptic('signal');
   if (rerender) renderAll();
 }
 
-// ── Navigation ──
-
+/* ── Navigation ── */
 function switchView(viewId) {
   state.currentView = viewId;
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-  const el = document.getElementById('view-' + viewId);
-  if (el) el.classList.add('active');
-  document.querySelectorAll('.sidebar-btn, .nav-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.view === viewId);
-  });
+  document.getElementById('view-' + viewId)?.classList.add('active');
+  document.querySelectorAll('.sidebar-btn, .nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === viewId));
+  haptic('nav');
   renderAll();
 }
+document.querySelectorAll('[data-view]').forEach(btn => btn.addEventListener('click', () => switchView(btn.dataset.view)));
 
-document.querySelectorAll('[data-view]').forEach(btn => {
-  btn.addEventListener('click', () => switchView(btn.dataset.view));
-});
+document.querySelectorAll('[data-filter]').forEach(btn => btn.addEventListener('click', () => {
+  state.filter = btn.dataset.filter;
+  document.querySelectorAll('[data-filter]').forEach(b => b.classList.toggle('active', b.dataset.filter === state.filter));
+  renderSignalCards();
+}));
+document.querySelectorAll('[data-filter-sig]').forEach(btn => btn.addEventListener('click', () => {
+  state.filterSig = btn.dataset.filterSig;
+  document.querySelectorAll('[data-filter-sig]').forEach(b => b.classList.toggle('active', b.dataset.filterSig === state.filterSig));
+  renderSignalTable('signal-body-full', state.filterSig);
+}));
 
-// Filter chips
-document.querySelectorAll('[data-filter]').forEach(btn => {
-  btn.addEventListener('click', () => {
-    state.filter = btn.dataset.filter;
-    document.querySelectorAll('[data-filter]').forEach(b => b.classList.toggle('active', b.dataset.filter === state.filter));
-    renderSignalTable('signal-body', state.filter);
-  });
-});
-document.querySelectorAll('[data-filter-sig]').forEach(btn => {
-  btn.addEventListener('click', () => {
-    state.filterSig = btn.dataset.filterSig;
-    document.querySelectorAll('[data-filter-sig]').forEach(b => b.classList.toggle('active', b.dataset.filterSig === state.filterSig));
-    renderSignalTable('signal-body-full', state.filterSig);
-  });
-});
-
-// ── Render ──
-
+/* ── Render orchestration ── */
 function renderAll() {
   renderTicker();
   renderMetrics();
-  renderSignalTable('signal-body', state.filter);
+  renderHero();
+  renderSignalCards();
   renderSignalTable('signal-body-full', state.filterSig);
   renderDetail('detail-panel', 'detail-title');
   renderDetail('detail-panel-full', 'detail-title-full');
+  renderRadar();
   renderRegimes();
   renderTape();
   renderRisk();
   renderValidation();
   renderLearning();
+  renderIntel();
+  renderWatchlist();
 }
 
 function renderTicker() {
   const items = Object.values(state.markets).slice(0, 8);
   document.getElementById('ticker').innerHTML = items.map(m => {
     const ch = Number(m.change || 0);
-    return `<div class="ticker-pill"><span class="sym">${esc(m.symbol)}</span><span class="price">${formatPrice(m.price)}</span><span class="${ch >= 0 ? 'good' : 'bad'}">${ch >= 0 ? '+' : ''}${ch.toFixed(2)}%</span></div>`;
+    const id = 'spark-' + esc(m.symbol);
+    return `<div class="ticker-pill"><span class="sym">${esc(m.symbol)}</span><canvas id="${id}" width="34" height="16"></canvas><span class="price">${formatPrice(m.price)}</span><span class="${ch >= 0 ? 'good' : 'bad'}">${ch >= 0 ? '+' : ''}${ch.toFixed(2)}%</span></div>`;
   }).join('');
+  for (const m of items) {
+    const c = document.getElementById('spark-' + m.symbol);
+    if (c) drawSparkline(c, state.priceHistory[m.symbol] || [], Number(m.change) >= 0 ? '#1fe3a8' : '#ff5470');
+  }
+}
+
+function renderHero() {
+  const pnl = Number(state.risk.dailyPnl || 0);
+  const el = document.getElementById('hero-pnl');
+  countUp(el, pnl, 1, '%');
+  el.className = 'hero-value ' + (pnl < 0 ? 'bad' : pnl > 0 ? 'good' : '');
+  const cb = document.getElementById('hero-cb');
+  const isOpen = state.risk.state === 'OPEN';
+  cb.textContent = 'CIRCUIT ' + (state.risk.state || 'CLOSED');
+  cb.className = 'hero-chip ' + (isOpen ? 'risk-open' : 'on');
+  document.getElementById('hero-sizing').textContent = `SIZING ${Math.round((state.risk.netSizingFactor ?? 1) * 100)}%`;
+  countUp(document.getElementById('hero-count'), state.signals.length, 0, '');
+  drawSparkline(document.getElementById('spark-canvas'), state.pnlHistory.map(p => p.v), pnl >= 0 ? '#1fe3a8' : '#ff5470', true);
 }
 
 function renderMetrics() {
@@ -965,23 +869,53 @@ function renderMetrics() {
   const lastGate = state.telemetry.find(t => t.gate)?.gate;
   const rejected = lastGate?.status === 'REJECTED';
   setText('m-gate', lastGate?.status || 'ARMED');
-  setClass('m-gate', rejected ? 'metric-val bad' : lastGate?.status?.includes('WARN') ? 'metric-val warn-text' : 'metric-val good');
+  setClass('m-gate', 'metric-val ' + (rejected ? 'bad' : lastGate?.status?.includes('WARN') ? 'warn-text' : 'good'));
   setText('m-gate-sub', lastGate?.failures?.[0] || lastGate?.warnings?.[0] || 'no rejected setup');
   setText('m-symbols', Object.keys(state.markets).length);
-  const pnl = Number(state.risk.dailyPnl || 0);
-  setText('m-pnl', `${pnl.toFixed(1)}%`);
-  setClass('m-pnl', pnl < 0 ? 'metric-val bad' : 'metric-val good');
-  setText('m-risk', `${state.risk.state || 'CLOSED'} / size ${Math.round((state.risk.netSizingFactor ?? 1) * 100)}%`);
   setText('m-learn', state.learning.length ? 'ACTIVE' : 'WARM');
-  setClass('m-learn', state.learning.length ? 'metric-val good' : 'metric-val warn-text');
+  setClass('m-learn', 'metric-val ' + (state.learning.length ? 'good' : 'warn-text'));
   const worst = state.learning[0];
   setText('m-learn-sub', worst ? `${(Number(worst.winRate || 0) * 100).toFixed(0)}% WR / ${Number(worst.expectancyR || 0).toFixed(2)}R` : 'awaiting outcomes');
-  setText('c-regime', best?.regime || 'UNKNOWN');
+  setText('c-regime', best?.regime || '--');
   setText('c-regime-sub', best ? `${best.symbol} ${best.tradeability}/100` : 'waiting for feed');
   setText('c-gradea', state.signals.filter(s => s.score?.grade === 'A').length);
   const avg = state.signals.length ? state.signals.reduce((s, x) => s + Number(x.score?.final || 0), 0) / state.signals.length : 0;
   setText('c-score', avg ? avg.toFixed(0) : '--');
-  setText('c-size', `${Math.round((state.risk.netSizingFactor ?? 1) * 100)}%`);
+}
+
+function renderSignalCards() {
+  const el = document.getElementById('signal-cards');
+  if (!el) return;
+  let rows = state.signals;
+  if (state.filter === 'A') rows = rows.filter(s => s.score?.grade === 'A');
+  if (!rows.length) {
+    el.innerHTML = state.connected
+      ? `<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>Waiting for the first approved institutional signal...</div>`
+      : `<div class="section-gap"><div class="skel" style="height:52px"></div><div class="skel" style="height:52px"></div><div class="skel" style="height:52px"></div></div>`;
+    return;
+  }
+  el.innerHTML = rows.slice(0, 25).map((sig, i) => {
+    const dir = String(sig.action || '').toLowerCase();
+    const selected = sig.id === state.selectedId ? 'selected' : '';
+    const score = Number(sig.score?.final || 0);
+    const grade = sig.score?.grade || '-';
+    const thesis = (sig.allReasons || sig.reasons || [sig.reasoning || '']).join(' ') || 'No thesis recorded.';
+    return `<div class="signal-card row-in ${selected}" style="animation-delay:${Math.min(i,8)*20}ms" onclick="selectSignal('${escAttr(sig.id)}')">
+      <div class="signal-card-dir ${dir}"></div>
+      <div class="signal-card-main">
+        <div class="signal-card-top">
+          <span class="signal-card-sym">${esc(sig.symbol)}</span>
+          <span class="dir-badge ${dir}">${esc(sig.action)}</span>
+          <span class="grade-badge ${esc(grade)}">${esc(grade)}</span>
+        </div>
+        <div class="signal-card-thesis">${esc(thesis)}</div>
+      </div>
+      <div class="signal-card-right">
+        <div class="signal-card-score ${score >= 85 ? 'good' : score >= 75 ? 'warn-text' : 'bad'}">${score}</div>
+        <div class="signal-card-time">${time(sig.timestamp)}</div>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 function renderSignalTable(bodyId, filter) {
@@ -999,7 +933,7 @@ function renderSignalTable(bodyId, filter) {
     const dir = String(sig.action || '').toLowerCase();
     const selected = sig.id === state.selectedId ? 'selected' : '';
     const score = Number(sig.score?.final || 0);
-    const scoreColor = score >= 85 ? 'var(--green)' : score >= 75 ? 'var(--amber)' : 'var(--red)';
+    const scoreColor = score >= 85 ? 'var(--emerald)' : score >= 75 ? 'var(--amber)' : 'var(--coral)';
     const gateStatus = sig.gate?.status || 'APPROVED';
     const gateCls = gateStatus === 'REJECTED' ? 'rejected' : gateStatus.includes('WARN') ? 'warn' : 'approved';
     const thesis = (sig.allReasons || sig.reasons || [sig.reasoning || '']).join(' ').slice(0, 120);
@@ -1012,11 +946,13 @@ function renderSignalTable(bodyId, filter) {
       <td><span class="status-badge ${gateCls}">${esc(gateStatus)}</span></td>
       <td>${formatPrice(sig.entry?.midpoint || sig.entry?.zoneHigh || sig.currentPrice)}</td>
       <td class="bad">${formatPrice(sig.stopLoss?.price)}</td>
-      ${bodyId === 'signal-body-full' ? `<td class="good">${formatPrice(sig.targets?.tp1?.price)}</td>` : ''}
+      <td class="good">${formatPrice(sig.targets?.tp1?.price)}</td>
       <td class="text-xs text-muted">${esc(thesis || '--')}</td>
     </tr>`;
   }).join('');
 }
+
+const AGENT_COLORS = { SMC: '#1fe3a8', MTF: '#5ea8ff', Momentum: '#f0b429', 'Volume/OI': '#a78bfa', Microstructure: '#22d3ee', Fractal: '#ff5470', Sentiment: '#8b9bb0', Pattern: '#e8b64a' };
 
 function renderDetail(panelId, titleId) {
   const sig = state.signals.find(s => s.id === state.selectedId);
@@ -1031,25 +967,24 @@ function renderDetail(panelId, titleId) {
   if (titleEl) titleEl.textContent = `${sig.symbol} ${sig.action} ${sig.timeframe || ''}`;
 
   const agents = (sig.agentBreakdown || sig.agents || []);
-  const agentColors = { SMC: 'var(--green)', MTF: 'var(--blue)', Momentum: 'var(--amber)', 'Volume/OI': 'var(--violet)', Microstructure: 'var(--cyan)', Fractal: 'var(--red)', Sentiment: 'var(--muted)', Pattern: 'var(--amber)' };
-
   const agentHtml = agents.map(a => {
     const name = a.agent || a.label || '';
-    const color = agentColors[name] || 'var(--faint)';
+    const color = AGENT_COLORS[name] || '#526078';
     const dirCls = a.status === 'OPPOSES' ? 'bad' : a.status === 'NEUTRAL' ? 'warn-text' : 'good';
     return `<div class="agent-vote">
-      <div class="agent-icon" style="background:${color}22;color:${color}">${name.slice(0,2).toUpperCase()}</div>
+      <div class="agent-icon" style="background:${color}22;color:${color}">${esc(name).slice(0,2).toUpperCase()}</div>
       <div class="agent-info"><div class="agent-name">${esc(name)}</div><div class="agent-detail">${esc(a.status || a.direction || '--')}</div></div>
       <div class="agent-score ${dirCls}">${esc(a.score)}</div>
     </div>`;
   }).join('');
 
-  const reasons = (sig.allReasons || sig.reasons || []).slice(0, 6).map(r => `<li style="color:var(--muted);font-family:var(--font-mono);font-size:11px;line-height:1.5;list-style:none;padding:4px 0;border-bottom:1px solid var(--line);"><span style="color:var(--green);margin-right:6px;">></span>${esc(r)}</li>`).join('');
+  const reasons = (sig.allReasons || sig.reasons || []).slice(0, 6).map(r =>
+    `<li style="color:var(--muted);font-family:var(--font-mono);font-size:11px;line-height:1.5;list-style:none;padding:4px 0;border-bottom:1px solid var(--line);"><span style="color:var(--emerald);margin-right:6px;">›</span>${esc(r)}</li>`
+  ).join('');
 
-  // Ensemble/validation summary
   let validationHtml = '';
   if (sig.validation || sig.ensemble) {
-    validationHtml = '<div class="mt-12"><div class="text-xs text-mono text-faint fw-600" style="letter-spacing:.12em;text-transform:uppercase;">Validation Summary</div>';
+    validationHtml = '<div class="mt-12"><div class="eyebrow">Validation Summary</div>';
     if (sig.validation?.monteCarlo) {
       const mc = sig.validation.monteCarlo;
       validationHtml += `<div class="kv-row"><span class="kv-key">Monte Carlo</span><span class="kv-val ${mc.approved ? 'good' : 'bad'}">${(mc.winProbability * 100).toFixed(1)}% win / ${mc.simulations} sims</span></div>`;
@@ -1084,9 +1019,9 @@ function renderDetail(panelId, titleId) {
       <button class="outcome-btn be" onclick="recordOutcome('${escAttr(sig.id)}', 0)">BE 0R</button>
       <button class="outcome-btn loss" onclick="recordOutcome('${escAttr(sig.id)}', -1)">LOSS -1R</button>
     </div>
-    <div class="mt-12"><div class="text-xs text-mono text-faint fw-600" style="letter-spacing:.12em;text-transform:uppercase;">Agent Votes (${agents.length})</div></div>
+    <div class="mt-12 eyebrow">Agent Votes (${agents.length})</div>
     ${agentHtml || '<div class="text-xs text-muted mt-8">No agent breakdown.</div>'}
-    <div class="mt-12"><div class="text-xs text-mono text-faint fw-600" style="letter-spacing:.12em;text-transform:uppercase;">Thesis</div></div>
+    <div class="mt-12 eyebrow">Thesis</div>
     <ul style="margin-top:6px;">${reasons || '<li class="text-muted text-xs">No reasons.</li>'}</ul>
   `;
 }
@@ -1105,34 +1040,41 @@ function renderRegimes() {
 function renderTape() {
   const el = document.getElementById('gate-tape');
   if (!el) return;
-  if (!state.telemetry.length) {
-    el.innerHTML = '<div class="empty-state">No gate events yet.</div>';
-    return;
-  }
-  el.innerHTML = state.telemetry.slice(0, 30).map(t => {
+  if (!state.telemetry.length) { el.innerHTML = '<div class="empty-state">No gate events yet.</div>'; return; }
+  el.innerHTML = state.telemetry.slice(0, 40).map(t => {
     const status = t.gate?.status || t.type || 'EVENT';
-    const cls = status === 'REJECTED' ? 'bad' : status.includes('WARN') ? 'warn-text' : 'good';
+    const cls = status === 'REJECTED' ? 'bad' : String(status).includes('WARN') ? 'warn-text' : 'good';
     const text = t.gate?.failures?.[0] || t.gate?.warnings?.[0] || t.type || 'telemetry';
     return `<div class="tape-event"><span class="tape-time">${time(t.receivedAt || t.timestamp)}</span><span class="tape-sym">${esc(t.symbol || 'SYS')}</span><span class="tape-msg">${esc(text)}</span><span class="text-xs fw-600 ${cls}">${esc(status)}</span></div>`;
   }).join('');
 }
 
 function renderRisk() {
-  setText('r-circuit', state.risk.state || 'CLOSED');
-  setClass('r-circuit', state.risk.state === 'OPEN' ? 'kv-val bad' : 'kv-val good');
   const pnl = Number(state.risk.dailyPnl || 0);
   setText('r-pnl', `${pnl.toFixed(2)}%`);
-  setClass('r-pnl', pnl < 0 ? 'kv-val bad' : 'kv-val good');
+  setClass('r-pnl', 'kv-val ' + (pnl < 0 ? 'bad' : 'good'));
+  setText('r-maxdaily', `${Number(state.risk.maxDailyLoss ?? 3).toFixed(1)}%`);
   setText('r-dd', `${Number(state.risk.drawdown || 0).toFixed(2)}%`);
+  setText('r-maxdd', `${Number(state.risk.maxDrawdown ?? 10).toFixed(1)}%`);
   setText('r-consec', state.risk.consecLoss || 0);
   setText('r-sizing', `${Math.round((state.risk.netSizingFactor ?? 1) * 100)}%`);
+
+  const circuitEl = document.getElementById('r-circuit');
+  const isOpen = state.risk.state === 'OPEN';
+  const isHalf = state.risk.state === 'HALF';
+  circuitEl.textContent = state.risk.state || 'CLOSED';
+  circuitEl.className = 'gauge-state ' + (isOpen ? 'bad' : isHalf ? 'warn-text' : 'good');
+  setText('r-reason', isOpen
+    ? 'Trading halted. A protective limit has been breached — new signals are blocked until conditions recover.'
+    : isHalf
+    ? 'Reduced sizing in effect while the system watches recent performance.'
+    : 'All systems nominal. Full position sizing active.');
+  drawGauge(document.getElementById('gauge-canvas'), Math.min(100, Math.abs(Number(state.risk.drawdown || 0)) / Math.max(1, Number(state.risk.maxDrawdown || 10)) * 100), isOpen ? '#ff5470' : isHalf ? '#f0b429' : '#1fe3a8');
 }
 
 function renderValidation() {
   const sig = state.signals.find(s => s.id === state.selectedId);
   if (!sig) return;
-
-  // Ensemble layers
   const ensEl = document.getElementById('ensemble-panel');
   if (ensEl && sig.ensemble?.layers) {
     const layers = sig.ensemble.layers;
@@ -1140,21 +1082,12 @@ function renderValidation() {
       <div class="kv-row"><span class="kv-key">Ensemble Score</span><span class="kv-val fw-800 ${sig.ensemble.approved ? 'good' : 'bad'}">${sig.ensemble.ensembleScore}/100</span></div>
       <div class="kv-row"><span class="kv-key">Status</span><span class="kv-val ${sig.ensemble.approved ? 'good' : 'bad'}">${sig.ensemble.approved ? 'APPROVED' : 'REJECTED'}</span></div>
       <div class="kv-row"><span class="kv-key">Penalty</span><span class="kv-val">${sig.ensemble.totalPenalty} pts</span></div>
-      <div class="mt-12">
-        ${layers.map(l => {
-          const pct = Math.min(100, Math.max(0, l.score || 0));
-          const color = l.approved ? 'var(--green)' : 'var(--red)';
-          return `<div class="layer-bar">
-            <span class="layer-name">${esc(l.name)}</span>
-            <div class="layer-track"><div class="layer-fill" style="width:${pct}%;background:${color}"></div></div>
-            <span class="layer-score" style="color:${color}">${pct}</span>
-          </div>`;
-        }).join('')}
-      </div>
-    `;
+      <div class="mt-12">${layers.map(l => {
+        const pct = Math.min(100, Math.max(0, l.score || 0));
+        const color = l.approved ? 'var(--emerald)' : 'var(--coral)';
+        return `<div class="layer-bar"><span class="layer-name">${esc(l.name)}</span><div class="layer-track"><div class="layer-fill" style="width:${pct}%;background:${color}"></div></div><span class="layer-score" style="color:${color}">${pct}</span></div>`;
+      }).join('')}</div>`;
   }
-
-  // Monte Carlo
   const mcEl = document.getElementById('mc-panel');
   if (mcEl && sig.validation?.monteCarlo) {
     const mc = sig.validation.monteCarlo;
@@ -1162,28 +1095,21 @@ function renderValidation() {
       <div class="kv-row"><span class="kv-key">Status</span><span class="kv-val ${mc.approved ? 'good' : 'bad'}">${mc.approved ? 'APPROVED' : 'REJECTED'}</span></div>
       <div class="kv-row"><span class="kv-key">Win Probability</span><span class="kv-val fw-700">${(mc.winProbability * 100).toFixed(1)}%</span></div>
       <div class="kv-row"><span class="kv-key">Expected R</span><span class="kv-val">${mc.expectedR}R</span></div>
-      <div class="kv-row"><span class="kv-key">Simulations</span><span class="kv-val">${mc.simulations?.toLocaleString()}</span></div>
-    `;
+      <div class="kv-row"><span class="kv-key">Simulations</span><span class="kv-val">${mc.simulations?.toLocaleString()}</span></div>`;
   }
-
-  // Bayesian
   const bayesEl = document.getElementById('bayes-panel');
   if (bayesEl && sig.validation?.bayesian) {
     const b = sig.validation.bayesian;
     bayesEl.innerHTML = `
       <div class="kv-row"><span class="kv-key">Status</span><span class="kv-val ${b.approved ? 'good' : 'bad'}">${b.approved ? 'APPROVED' : 'REJECTED'}</span></div>
-      <div class="kv-row"><span class="kv-key">Posterior P(Win)</span><span class="kv-val fw-700">${(b.posterior * 100).toFixed(1)}%</span></div>
-    `;
+      <div class="kv-row"><span class="kv-key">Posterior P(Win)</span><span class="kv-val fw-700">${(b.posterior * 100).toFixed(1)}%</span></div>`;
   }
-
-  // Statistical
   const statEl = document.getElementById('stat-panel');
   if (statEl && sig.validation?.statistical) {
     const s = sig.validation.statistical;
     statEl.innerHTML = `
       <div class="kv-row"><span class="kv-key">Status</span><span class="kv-val ${s.approved ? 'good' : 'bad'}">${s.approved ? 'APPROVED' : 'REJECTED'}</span></div>
-      <div class="kv-row"><span class="kv-key">Tests Passed</span><span class="kv-val fw-700">${s.passed}/${s.total}</span></div>
-    `;
+      <div class="kv-row"><span class="kv-key">Tests Passed</span><span class="kv-val fw-700">${s.passed}/${s.total}</span></div>`;
   }
 }
 
@@ -1199,12 +1125,207 @@ function renderLearning() {
   }).join('');
 }
 
-// ── Actions ──
-
-function selectSignal(id) {
-  state.selectedId = id;
-  renderAll();
+const INTEL_META = {
+  economic_surprise: { icon: '📊', color: '#5ea8ff', label: 'Economic Surprise' },
+  extreme_retail_positioning: { icon: '⚡', color: '#f0b429', label: 'Extreme Retail Positioning' },
+  upcoming_events: { icon: '🗓', color: '#a78bfa', label: 'Upcoming Events' },
+  cluster_buy: { icon: '💼', color: '#1fe3a8', label: 'Insider Cluster Buy' },
+  executive_activity: { icon: '👔', color: '#e8b64a', label: 'Executive Activity' },
+};
+function renderIntel() {
+  const el = document.getElementById('intel-feed');
+  const countEl = document.getElementById('intel-count');
+  if (!el) return;
+  if (countEl) countEl.textContent = `${state.intel.length} event${state.intel.length === 1 ? '' : 's'}`;
+  if (!state.intel.length) return; // keep the static empty state markup
+  el.innerHTML = state.intel.slice(0, 40).map(it => {
+    const meta = INTEL_META[it.kind] || { icon: '•', color: '#8b9bb0', label: it.kind || 'Event' };
+    let desc = '';
+    if (it.kind === 'economic_surprise') desc = `${it.event?.name || ''} — impact ${it.impact || '--'} on ${(it.affectedCurrencies || []).join(', ')}`;
+    else if (it.kind === 'cluster_buy') desc = `${it.ticker}: ${it.insiderCount} insiders in ${it.windowDays}d, confidence ${it.confidence}%`;
+    else if (it.kind === 'extreme_retail_positioning') desc = `${it.symbol}: ${it.data?.contrarianReason || 'extreme positioning detected'}`;
+    else if (it.kind === 'executive_activity') desc = `${it.ticker}: ${it.signal || 'executive trade activity'}`;
+    else if (it.kind === 'upcoming_events') desc = `${it.count} high-impact events on the calendar`;
+    else desc = JSON.stringify(it).slice(0, 100);
+    return `<div class="intel-item">
+      <div class="intel-icon" style="background:${meta.color}1c;color:${meta.color}">${meta.icon}</div>
+      <div class="intel-body">
+        <div class="intel-title">${esc(meta.label)}</div>
+        <div class="intel-desc">${esc(desc)}</div>
+        <div class="intel-time">${time(it.receivedAt || it.timestamp)}</div>
+      </div>
+    </div>`;
+  }).join('');
 }
+
+function renderWatchlist() {
+  const el = document.getElementById('watchlist-panel');
+  if (!el) return;
+  const items = Object.values(state.markets);
+  if (!items.length) { el.innerHTML = '<div class="text-faint text-xs text-mono">Live prices appear once the feed connects.</div>'; return; }
+  el.innerHTML = items.map(m => {
+    const ch = Number(m.change || 0);
+    return `<div class="kv-row"><span class="kv-key">${esc(m.symbol)}</span><span class="kv-val ${ch >= 0 ? 'good' : 'bad'}">${formatPrice(m.price)} (${ch >= 0 ? '+' : ''}${ch.toFixed(2)}%)</span></div>`;
+  }).join('');
+}
+
+/* ── Consensus Radar: signature visual, plots selected signal's agent votes ── */
+function renderRadar() {
+  const sig = state.signals.find(s => s.id === state.selectedId);
+  const canvas = document.getElementById('radar-canvas');
+  const caption = document.getElementById('radar-caption');
+  const symEl = document.getElementById('radar-symbol');
+  if (!canvas) return;
+  const agents = sig ? (sig.agentBreakdown || sig.agents || []) : [];
+  symEl.textContent = sig ? `${sig.symbol} ${sig.action}` : '--';
+  if (!sig || !agents.length) {
+    drawRadarChart(canvas, [], sig?.action);
+    caption.innerHTML = sig ? 'This signal has no per-agent breakdown available.' : 'Select a signal to see live agent consensus.';
+    return;
+  }
+  drawRadarChart(canvas, agents, sig.action);
+  const supporting = agents.filter(a => a.status !== 'OPPOSES' && a.status !== 'NEUTRAL').length;
+  caption.innerHTML = `<b>${supporting}/${agents.length}</b> agents support this ${esc(sig.action)} — score <b>${esc(sig.score?.final)}</b>`;
+}
+
+function drawRadarChart(canvas, agents, direction) {
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const size = 240;
+  canvas.width = size * dpr; canvas.height = size * dpr;
+  canvas.style.width = size + 'px'; canvas.style.height = size + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, size, size);
+  const cx = size / 2, cy = size / 2, R = size / 2 - 34;
+  const n = Math.max(agents.length, 3);
+
+  // grid rings
+  ctx.strokeStyle = 'rgba(255,255,255,.06)';
+  ctx.lineWidth = 1;
+  for (let ring = 1; ring <= 4; ring++) {
+    ctx.beginPath();
+    for (let i = 0; i <= n; i++) {
+      const a = (Math.PI * 2 * i / n) - Math.PI / 2;
+      const r = R * ring / 4;
+      const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  // spokes + labels
+  ctx.fillStyle = '#526078';
+  ctx.font = '600 8.5px "JetBrains Mono", monospace';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (let i = 0; i < n; i++) {
+    const a = (Math.PI * 2 * i / n) - Math.PI / 2;
+    const x2 = cx + Math.cos(a) * R, y2 = cy + Math.sin(a) * R;
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(x2, y2);
+    ctx.strokeStyle = 'rgba(255,255,255,.06)'; ctx.stroke();
+    if (agents[i]) {
+      const lx = cx + Math.cos(a) * (R + 18), ly = cy + Math.sin(a) * (R + 18);
+      const name = (agents[i].agent || agents[i].label || '').slice(0, 4).toUpperCase();
+      ctx.fillText(name, lx, ly);
+    }
+  }
+  if (!agents.length) return;
+
+  // data polygon
+  const fillColor = direction === 'SHORT' ? '255,84,112' : '31,227,168';
+  ctx.beginPath();
+  agents.forEach((ag, i) => {
+    const a = (Math.PI * 2 * i / n) - Math.PI / 2;
+    const score = ag.status === 'OPPOSES' ? 0.15 : ag.status === 'NEUTRAL' ? 0.5 : Math.min(1, Math.max(0.3, Number(ag.score || 50) / 100));
+    const r = R * score;
+    const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.closePath();
+  ctx.fillStyle = `rgba(${fillColor},.18)`;
+  ctx.fill();
+  ctx.strokeStyle = `rgba(${fillColor},.9)`;
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+
+  // vertex dots colored by vote
+  agents.forEach((ag, i) => {
+    const a = (Math.PI * 2 * i / n) - Math.PI / 2;
+    const score = ag.status === 'OPPOSES' ? 0.15 : ag.status === 'NEUTRAL' ? 0.5 : Math.min(1, Math.max(0.3, Number(ag.score || 50) / 100));
+    const r = R * score;
+    const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
+    const dotColor = ag.status === 'OPPOSES' ? '#ff5470' : ag.status === 'NEUTRAL' ? '#f0b429' : '#1fe3a8';
+    ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fillStyle = dotColor; ctx.fill();
+  });
+}
+
+/* ── Sparkline canvas ── */
+function drawSparkline(canvas, values, color, filled) {
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth || canvas.width, h = canvas.clientHeight || canvas.height;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  if (!values || values.length < 2) return;
+  const min = Math.min(...values), max = Math.max(...values);
+  const range = (max - min) || 1;
+  const pts = values.map((v, i) => [ (i / (values.length - 1)) * w, h - ((v - min) / range) * (h - 4) - 2 ]);
+  if (filled) {
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], h);
+    pts.forEach(p => ctx.lineTo(p[0], p[1]));
+    ctx.lineTo(pts[pts.length - 1][0], h);
+    ctx.closePath();
+    const grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, color + '33'); grad.addColorStop(1, color + '02');
+    ctx.fillStyle = grad; ctx.fill();
+  }
+  ctx.beginPath();
+  pts.forEach((p, i) => i === 0 ? ctx.moveTo(p[0], p[1]) : ctx.lineTo(p[0], p[1]));
+  ctx.strokeStyle = color; ctx.lineWidth = 1.4; ctx.lineJoin = 'round'; ctx.stroke();
+}
+
+/* ── Risk gauge (arc) ── */
+function drawGauge(canvas, pct, color) {
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const size = 96;
+  canvas.width = size * dpr; canvas.height = size * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, size, size);
+  const cx = size / 2, cy = size / 2, r = size / 2 - 8;
+  const start = Math.PI * 0.75, end = Math.PI * 2.25;
+  ctx.beginPath(); ctx.arc(cx, cy, r, start, end); ctx.strokeStyle = 'rgba(255,255,255,.08)'; ctx.lineWidth = 9; ctx.lineCap = 'round'; ctx.stroke();
+  const sweep = start + (end - start) * Math.min(1, Math.max(0, pct / 100));
+  ctx.beginPath(); ctx.arc(cx, cy, r, start, sweep); ctx.strokeStyle = color; ctx.lineWidth = 9; ctx.lineCap = 'round'; ctx.stroke();
+  ctx.fillStyle = '#eef2f7'; ctx.font = '700 17px "JetBrains Mono", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(Math.round(pct) + '%', cx, cy - 2);
+  ctx.fillStyle = '#526078'; ctx.font = '600 8px "JetBrains Mono", monospace';
+  ctx.fillText('OF LIMIT', cx, cy + 14);
+}
+
+/* ── Count-up number animation ── */
+const _countState = new WeakMap();
+function countUp(el, target, decimals, suffix) {
+  if (!el) return;
+  const prev = _countState.get(el) ?? target;
+  _countState.set(el, target);
+  if (Math.abs(prev - target) < 0.001) { el.textContent = target.toFixed(decimals) + suffix; return; }
+  const start = performance.now(), dur = 500;
+  function tick(now) {
+    const p = Math.min(1, (now - start) / dur);
+    const eased = 1 - Math.pow(1 - p, 3);
+    const val = prev + (target - prev) * eased;
+    el.textContent = val.toFixed(decimals) + suffix;
+    if (p < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+/* ── Actions ── */
+function selectSignal(id) { state.selectedId = id; haptic('nav'); renderAll(); }
 window.selectSignal = selectSignal;
 
 async function recordOutcome(signalId, pnlR) {
@@ -1212,96 +1333,33 @@ async function recordOutcome(signalId, pnlR) {
   socket.emit('record_outcome', payload);
   const headers = { 'Content-Type': 'application/json' };
   if (initData) headers['x-telegram-init-data'] = initData;
+  haptic('signal');
   try { await fetch('/api/outcomes', { method: 'POST', headers, body: JSON.stringify(payload) }); } catch (_) {}
 }
 window.recordOutcome = recordOutcome;
 
-// ── Demo data ──
-
-function loadDemo() {
-  if (state.signals.length) return;
-  state.markets = {
-    XAUUSD: { symbol: 'XAUUSD', price: 2342.5, change: 0.34 },
-    BTCUSDT: { symbol: 'BTCUSDT', price: 67840, change: 1.22 },
-    EURUSD: { symbol: 'EURUSD', price: 1.0882, change: -0.18 },
-  };
-  state.regimes['XAUUSD:H1'] = { symbol: 'XAUUSD', timeframe: 'H1', regime: 'BULL_TREND', tradeability: 84 };
-  state.telemetry.unshift({ symbol: 'XAUUSD', type: 'signal_approved', gate: { status: 'APPROVED', confidence: 91, failures: [], warnings: [] }, receivedAt: Date.now() });
-  ingestSignal({
-    id: 'demo-xau',
-    symbol: 'XAUUSD',
-    timeframe: 'H1',
-    action: 'LONG',
-    timestamp: Date.now(),
-    currentPrice: 2342.5,
-    score: { final: 88, grade: 'A' },
-    gate: { status: 'APPROVED', confidence: 91 },
-    regime: { regime: 'BULL_TREND', tradeability: 84 },
-    entry: { midpoint: 2338, zoneHigh: 2340 },
-    stopLoss: { price: 2328 },
-    targets: { tp1: { price: 2352, rr: 1.5 }, tp2: { price: 2366, rr: 3 } },
-    riskEvaluation: { effectiveRisk: 1 },
-    agentBreakdown: [
-      { agent: 'SMC', score: 90, direction: 'LONG', status: 'CONFIRMS' },
-      { agent: 'MTF', score: 82, direction: 'LONG', status: 'CONFIRMS' },
-      { agent: 'Momentum', score: 78, direction: 'LONG', status: 'CONFIRMS' },
-      { agent: 'Volume/OI', score: 72, direction: 'LONG', status: 'CONFIRMS' },
-      { agent: 'Microstructure', score: 68, direction: 'LONG', status: 'CONFIRMS' },
-      { agent: 'Fractal', score: 65, direction: 'LONG', status: 'NEUTRAL' },
-    ],
-    allReasons: ['Bullish order block defended with displacement', 'Higher-timeframe bias aligned', 'Volume expansion confirmed accumulation'],
-    ensemble: { approved: true, ensembleScore: 82, totalPenalty: 5, layers: [
-      { name: 'Monte Carlo', score: 88, approved: true },
-      { name: 'Bayesian', score: 85, approved: true },
-      { name: 'Statistical', score: 90, approved: true },
-      { name: 'Walk-Forward', score: 72, approved: true },
-      { name: 'Learning', score: 78, approved: true },
-      { name: 'Consensus', score: 85, approved: true },
-      { name: 'Regime', score: 84, approved: true },
-      { name: 'Fractal', score: 65, approved: true },
-      { name: 'Microstructure', score: 68, approved: true },
-    ]},
-    validation: {
-      monteCarlo: { approved: true, winProbability: 0.72, expectedR: 1.2, simulations: 15000 },
-      bayesian: { approved: true, posterior: 0.81 },
-      statistical: { approved: true, passed: 8, total: 10 },
-      walkForward: { sufficient: true, wfe: 0.68, robust: true },
-    },
-  });
-}
-setTimeout(() => { if (!state.connected) loadDemo(); }, 2500);
-
-// ── Utilities ──
-
+/* ── Small utilities ── */
 function setStatus(cls, text) {
-  document.getElementById('status-dot').className = `pulse ${cls}`;
+  const dot = document.getElementById('status-dot');
+  dot.className = 'pulse' + (cls ? ' ' + cls : '');
   setText('status-text', text);
 }
-function setText(id, text) {
-  const el = document.getElementById(id);
-  if (el) el.textContent = text == null ? '--' : String(text);
-}
-function setClass(id, className) {
-  const el = document.getElementById(id);
-  if (el) el.className = className;
-}
-function esc(value) {
-  return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch]));
-}
+function setText(id, text) { const el = document.getElementById(id); if (el) el.textContent = text; }
+function setClass(id, className) { const el = document.getElementById(id); if (el) el.className = className; }
+function esc(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
 function escAttr(value) { return esc(value).replace(/`/g, '&#96;'); }
-function time(ts) {
-  if (!ts) return '--:--';
-  return new Date(ts).toTimeString().slice(0, 5);
-}
+function time(ts) { if (!ts) return '--:--'; const d = new Date(ts); return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
 function formatPrice(value) {
   const n = Number(value);
-  if (!Number.isFinite(n) || n === 0) return '--';
-  if (Math.abs(n) >= 1000) return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  if (Math.abs(n) >= 10) return n.toFixed(3);
-  return n.toFixed(5);
+  if (!isFinite(n) || value == null) return '--';
+  if (n >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  if (n >= 1) return n.toFixed(4);
+  return n.toFixed(6);
 }
+
+/* ── Boot ── */
 renderAll();
+setStatus('', 'CONNECTING');
 </script>
-<div class="dev-credit">DEVELOPED BY <span>JAMES YELBERT</span></div>
 </body>
 </html>
