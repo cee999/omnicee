@@ -561,6 +561,175 @@ button, input, select { font: inherit; border: none; outline: none; cursor: poin
   to { opacity: 1; transform: translateY(0); }
 }
 .fade-in { animation: fade-in 300ms ease forwards; }
+/* ── Outlook view ── */
+.outlook-brief {
+  padding: 14px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+  border-left: 2px solid var(--green-dim);
+}
+.outlook-brief .eyebrow {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--green);
+  margin-bottom: 6px;
+}
+
+/* Week timeline — the signature element: 7 day-segments, each showing
+   scheduled events as tier-colored ticks positioned by hour-of-day. */
+.week-strip {
+  display: flex;
+  gap: 3px;
+  padding: 14px;
+}
+.week-day {
+  flex: 1;
+  min-width: 0;
+}
+.week-day-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  color: var(--faint);
+  text-align: center;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+.week-day-label.is-today { color: var(--green); }
+.week-day-track {
+  position: relative;
+  height: 46px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.week-tick {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  height: 6px;
+  border-radius: 2px;
+  cursor: default;
+}
+.week-tick.tier-1 { background: var(--red); box-shadow: 0 0 8px rgba(255,81,104,.5); }
+.week-tick.tier-2 { background: var(--amber); }
+.week-day-count {
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--faint);
+  margin-top: 4px;
+}
+
+.outlook-event-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.outlook-event-row:last-child { border-bottom: none; }
+.outlook-event-tier {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.outlook-event-tier.tier-1 { background: var(--red); box-shadow: 0 0 6px rgba(255,81,104,.6); }
+.outlook-event-tier.tier-2 { background: var(--amber); }
+.outlook-event-name { flex: 1; color: var(--text); font-weight: 500; }
+.outlook-event-cur { color: var(--faint); font-size: 10px; }
+.outlook-event-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.outlook-event-time.imminent { color: var(--red); font-weight: 700; }
+
+.regime-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.regime-row:last-child { border-bottom: none; }
+.regime-symbol {
+  width: 82px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+}
+.regime-badge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.regime-badge.trend { color: var(--green); background: var(--green-soft); }
+.regime-badge.range { color: var(--blue); background: var(--blue-soft); }
+.regime-badge.chop { color: var(--muted); background: rgba(138,155,178,.08); }
+.regime-track {
+  flex: 1;
+  height: 6px;
+  background: var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+  min-width: 40px;
+}
+.regime-fill { height: 100%; border-radius: 3px; background: var(--green-dim); transition: width 500ms ease; }
+.regime-score {
+  width: 30px;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.regime-session {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+  color: var(--faint);
+  background: rgba(138,155,178,.08);
+  white-space: nowrap;
+}
+.regime-session.blocked { color: var(--red); background: var(--red-soft); }
+
+.news-row {
+  display: block;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.news-row:last-child { border-bottom: none; }
+.news-row:hover { background: var(--panel-hover); }
+.news-row .news-meta {
+  display: block;
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
 </style>
 </head>
 <body>
@@ -595,6 +764,9 @@ button, input, select { font: inherit; border: none; outline: none; cursor: poin
       </button>
       <button class="sidebar-btn" data-view="risk" title="Risk">
         <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      </button>
+      <button class="sidebar-btn" data-view="outlook" title="Outlook">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/></svg>
       </button>
     </nav>
 
@@ -772,6 +944,41 @@ button, input, select { font: inherit; border: none; outline: none; cursor: poin
       </div>
     </div>
 
+    <!-- Outlook View -->
+    <div class="view" id="view-outlook">
+      <div class="section-gap" style="overflow:auto;">
+        <div class="card">
+          <div class="card-head"><span>Today &amp; This Week</span><span id="outlook-updated" class="text-faint" style="font-weight:400; text-transform:none; letter-spacing:0;"></span></div>
+          <div class="outlook-brief" id="outlook-narrative">
+            <span class="eyebrow">Brief</span>
+            Loading outlook…
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span>7-Day Event Timeline</span></div>
+          <div class="week-strip" id="outlook-week-strip"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span>Today — Tier 1 Releases</span></div>
+          <div class="card-body flush" id="outlook-today-events">
+            <div class="empty-state">No Tier-1 releases scheduled today.</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span>Regime Leaderboard</span></div>
+          <div class="card-body flush" id="outlook-regimes">
+            <div class="empty-state">Waiting for regime data…</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span>Latest Headlines</span></div>
+          <div class="card-body flush" id="outlook-news">
+            <div class="empty-state">No headlines available.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </section>
 
   <!-- ── Bottom Nav (mobile) ── -->
@@ -795,6 +1002,10 @@ button, input, select { font: inherit; border: none; outline: none; cursor: poin
     <button class="nav-btn" data-view="risk">
       <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
       RISK
+    </button>
+    <button class="nav-btn" data-view="outlook">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/></svg>
+      OUTLOOK
     </button>
   </nav>
 </div>
@@ -823,6 +1034,7 @@ const state = {
   filterSig: 'ALL',
   currentView: 'dashboard',
   connected: false,
+  outlook: null,
 };
 
 const initData = tg?.initData || '';
@@ -950,6 +1162,7 @@ function renderAll() {
   renderRisk();
   renderValidation();
   renderLearning();
+  renderOutlook();
 }
 
 function renderTicker() {
@@ -1101,6 +1314,114 @@ function renderRegimes() {
     return `<div class="kv-row"><span class="kv-key">${esc(r.symbol)} ${esc(r.timeframe || '')}</span><span class="kv-val ${color}">${esc(r.regime)} / ${esc(r.tradeability)}</span></div>`;
   }).join('');
 }
+
+// ── Outlook ──
+
+let outlookLoading = false;
+async function fetchOutlook() {
+  if (outlookLoading) return;
+  outlookLoading = true;
+  try {
+    const headers = {};
+    if (initData) headers['x-telegram-init-data'] = initData;
+    const res = await fetch('/api/outlook', { headers });
+    const data = await res.json();
+    if (data.ok) { state.outlook = data.outlook; renderOutlook(); }
+  } catch (_) { /* keep showing last known outlook */ }
+  outlookLoading = false;
+}
+
+function regimeClass(regime) {
+  if (!regime) return 'chop';
+  if (regime.includes('TREND')) return 'trend';
+  if (regime.includes('RANGE')) return 'range';
+  return 'chop';
+}
+
+function renderWeekStrip(outlook) {
+  const el = document.getElementById('outlook-week-strip');
+  if (!el) return;
+  const allEvents = [...(outlook.week.tier1Events || []), ...(outlook.week.tier2Events || [])];
+  const days = [];
+  const now = new Date();
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(now.getTime() + i * 86400000);
+    days.push({ date: d, label: d.toLocaleDateString('en-US', { weekday: 'short' }), events: [] });
+  }
+  allEvents.forEach(e => {
+    const eventDate = new Date(e.time);
+    const dayIdx = Math.floor((eventDate.setHours(0,0,0,0) - new Date(now).setHours(0,0,0,0)) / 86400000);
+    if (dayIdx >= 0 && dayIdx < 7) days[dayIdx].events.push(e);
+  });
+  el.innerHTML = days.map((day, i) => {
+    const ticks = day.events.map(e => {
+      const hourPct = (new Date(e.time).getHours() / 24) * 100;
+      const tierCls = e.tier === 'TIER_1' ? 'tier-1' : 'tier-2';
+      const title = `${e.name} (${e.currency}) — ${new Date(e.time).toLocaleString()}`;
+      return `<div class="week-tick ${tierCls}" style="top:${hourPct}%" title="${esc(title)}"></div>`;
+    }).join('');
+    return `<div class="week-day">
+      <div class="week-day-label ${i === 0 ? 'is-today' : ''}">${i === 0 ? 'TODAY' : esc(day.label)}</div>
+      <div class="week-day-track">${ticks}</div>
+      <div class="week-day-count">${day.events.length ? day.events.length + ' evt' : '—'}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderOutlook() {
+  const outlook = state.outlook;
+  if (!outlook) { fetchOutlook(); return; }
+
+  const updatedEl = document.getElementById('outlook-updated');
+  if (updatedEl) updatedEl.textContent = 'Updated ' + time(outlook.generatedAt);
+
+  const narrEl = document.getElementById('outlook-narrative');
+  if (narrEl) narrEl.innerHTML = `<span class="eyebrow">Brief</span>${esc(outlook.narrative || 'No summary available.')}`;
+
+  renderWeekStrip(outlook);
+
+  const todayEl = document.getElementById('outlook-today-events');
+  if (todayEl) {
+    const events = outlook.today?.tier1Events || [];
+    todayEl.innerHTML = events.length ? events.map(e => {
+      const imminent = e.hoursAway <= 1;
+      return `<div class="outlook-event-row">
+        <span class="outlook-event-tier tier-1"></span>
+        <span class="outlook-event-name">${esc(e.name)}</span>
+        <span class="outlook-event-cur">${esc(e.currency)}</span>
+        <span class="outlook-event-time ${imminent ? 'imminent' : ''}">${e.hoursAway.toFixed(1)}h</span>
+      </div>`;
+    }).join('') : '<div class="empty-state">No Tier-1 releases scheduled today.</div>';
+  }
+
+  const regimeEl = document.getElementById('outlook-regimes');
+  if (regimeEl) {
+    const symbols = (outlook.symbols || []).slice().sort((a, b) => (b.tradeability || 0) - (a.tradeability || 0));
+    regimeEl.innerHTML = symbols.length ? symbols.map(s => {
+      const cls = regimeClass(s.regime);
+      const blocked = s.sessionStatus && s.sessionStatus !== 'CLEAR';
+      return `<div class="regime-row">
+        <span class="regime-symbol">${esc(s.symbol)}</span>
+        <span class="regime-badge ${cls}">${esc(s.regime || 'UNKNOWN')}</span>
+        <span class="regime-track"><span class="regime-fill" style="width:${s.tradeability || 0}%"></span></span>
+        <span class="regime-score">${s.tradeability ?? '—'}</span>
+        <span class="regime-session ${blocked ? 'blocked' : ''}">${esc(blocked ? s.sessionStatus : 'CLEAR')}</span>
+      </div>`;
+    }).join('') : '<div class="empty-state">Waiting for regime data…</div>';
+  }
+
+  const newsEl = document.getElementById('outlook-news');
+  if (newsEl) {
+    const news = outlook.news || [];
+    newsEl.innerHTML = news.length ? news.map(n => `
+      <a class="news-row" href="${esc(n.url || '#')}" target="_blank" rel="noopener">
+        ${esc(n.headline)}
+        <span class="news-meta">${esc(n.source || '')} · ${n.datetime ? time(n.datetime) : ''}</span>
+      </a>`).join('') : '<div class="empty-state">No headlines available.</div>';
+  }
+}
+
+setInterval(fetchOutlook, 5 * 60 * 1000);
 
 function renderTape() {
   const el = document.getElementById('gate-tape');
