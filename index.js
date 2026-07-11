@@ -992,6 +992,8 @@ function buildSingletons() {
     require('./api/realtime').setEngines({
       adaptiveLearning, bayesianEng, walkForward, institutionalGates,
       drawdownGuard, sessionFilter, riskEngine,
+      // For GET /api/outlook (signal-pipeline/market-outlook.js)
+      regimeEngine, candleStores, symbols: SYMBOLS,
     });
     log.info('Live engine singletons published for outcome-feedback wiring');
   } catch (_) {}

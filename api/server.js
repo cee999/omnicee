@@ -15,6 +15,7 @@ const db = require('../db');
 const { telegramAuthMiddleware, validateTelegramInitData } = require('./telegram-auth');
 const { FinnhubFeed } = require('../feeds/finnhub-feed');
 const { AdaptiveLearningEngine } = require('../signal-pipeline/adaptive-learning-engine');
+const { MarketOutlookBuilder } = require('../signal-pipeline/market-outlook');
 
 const API_PORT = Number(process.env.PORT || process.env.WS_PORT || 3001);
 const STATIC_ROOT = path.join(__dirname, '..', 'webapp');
@@ -71,6 +72,35 @@ function createApp() {
       return null;
     });
     if (signals) res.json({ ok: true, signals });
+  });
+
+  app.get('/api/outlook', telegramAuthMiddleware, async (req, res) => {
+    const live = getEngines();
+    if (!live.regimeEngine || !live.candleStores) {
+      return res.status(503).json({ ok: false, error: 'Outlook unavailable — trading engine not yet initialized' });
+    }
+    let outlook;
+    try {
+      outlook = MarketOutlookBuilder.build({
+        symbols: live.symbols || [],
+        candleStores: live.candleStores,
+        regimeEngine: live.regimeEngine,
+        sessionFilter: live.sessionFilter,
+        timeframe: 'H1',
+      });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+    // Recent market news headlines (real, from Finnhub) — the user-facing
+    // "accurate news" component of the outlook.
+    let news = [];
+    if (finnhub.enabled()) {
+      news = await finnhub.marketNews('general').catch(() => []);
+      news = Array.isArray(news) ? news.slice(0, 8).map(n => ({
+        headline: n.headline, source: n.source, url: n.url, datetime: n.datetime * 1000,
+      })) : [];
+    }
+    res.json({ ok: true, outlook: { ...outlook, news } });
   });
 
   app.get('/api/telemetry', telegramAuthMiddleware, async (req, res) => {
