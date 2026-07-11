@@ -404,6 +404,7 @@ button:focus-visible, .chip:focus-visible, [tabindex]:focus-visible { outline: 2
       <button class="sidebar-btn" data-view="validation" title="Validation"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></button>
       <button class="sidebar-btn" data-view="tape" title="Event Tape"><svg viewBox="0 0 24 24"><line x1="17" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="17" y1="18" x2="3" y2="18"/></svg></button>
       <button class="sidebar-btn" data-view="risk" title="Risk"><svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></button>
+      <button class="sidebar-btn" data-view="outlook" title="Outlook"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg></button>
       <button class="sidebar-btn" data-view="about" title="About"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></button>
     </nav>
 
@@ -611,6 +612,32 @@ button:focus-visible, .chip:focus-visible, [tabindex]:focus-visible { outline: 2
       </div>
     </div>
 
+    <!-- Outlook -->
+    <div class="view" id="view-outlook">
+      <div class="section-gap" style="overflow:auto;max-width:640px;margin:0 auto;width:100%;">
+        <div class="card">
+          <div class="card-head"><span>Daily / Weekly Outlook</span><span class="text-faint text-xs" id="outlook-time">--</span></div>
+          <div class="card-body" id="outlook-narrative"><div class="text-faint text-xs text-mono">Loading market outlook...</div></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span>Tier-1 Events — Today</span></div>
+          <div class="card-body flush" id="outlook-today"><div class="empty-state">No Tier-1 releases today.</div></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span>This Week</span></div>
+          <div class="card-body flush" id="outlook-week"><div class="empty-state">No high-impact releases this week.</div></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span>Per-Symbol Regime</span></div>
+          <div class="card-body" id="outlook-symbols"><div class="text-faint text-xs text-mono">No symbol data yet.</div></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span>Headlines</span></div>
+          <div class="card-body flush" id="outlook-news"><div class="empty-state">No recent headlines.</div></div>
+        </div>
+      </div>
+    </div>
+
     <!-- About -->
     <div class="view view-about" id="view-about">
       <div class="section-gap" style="overflow:auto;max-width:640px;margin:0 auto;width:100%;">
@@ -663,6 +690,7 @@ button:focus-visible, .chip:focus-visible, [tabindex]:focus-visible { outline: 2
     <button class="nav-btn" data-view="validation"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>VALID</button>
     <button class="nav-btn" data-view="tape"><svg viewBox="0 0 24 24"><line x1="17" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="17" y1="18" x2="3" y2="18"/></svg>TAPE</button>
     <button class="nav-btn" data-view="risk"><svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>RISK</button>
+    <button class="nav-btn" data-view="outlook"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/></svg>OUTLOOK</button>
     <button class="nav-btn" data-view="about"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>ABOUT</button>
   </nav>
 </div>
@@ -784,6 +812,14 @@ async function hydrateLearning() {
     state.learning = res.profiles || [];
   } catch (_) { state.learning = []; }
 }
+async function hydrateOutlook() {
+  const headers = initData ? { 'x-telegram-init-data': initData } : {};
+  try {
+    const res = await fetch('/api/outlook', { headers }).then(r => r.json());
+    if (res.ok) state.outlook = res.outlook;
+  } catch (_) {}
+  renderOutlook();
+}
 
 function ingestSignal(sig, rerender = true) {
   if (!sig || sig.action === 'WAIT') return;
@@ -803,6 +839,7 @@ function switchView(viewId) {
   document.getElementById('view-' + viewId)?.classList.add('active');
   document.querySelectorAll('.sidebar-btn, .nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === viewId));
   haptic('nav');
+  if (viewId === 'outlook' && !state.outlook) hydrateOutlook();
   renderAll();
 }
 document.querySelectorAll('[data-view]').forEach(btn => btn.addEventListener('click', () => switchView(btn.dataset.view)));
@@ -1169,6 +1206,38 @@ function renderWatchlist() {
   }).join('');
 }
 
+function renderOutlook() {
+  const o = state.outlook;
+  if (!o) return;
+  setText('outlook-time', new Date(o.generatedAt).toLocaleString());
+  const narrEl = document.getElementById('outlook-narrative');
+  if (narrEl) narrEl.innerHTML = `<p class="text-sm text-muted" style="line-height:1.7;">${esc(o.narrative || 'No narrative available.')}</p>`;
+
+  const renderEvents = (events) => events.length
+    ? events.map(e => `<div class="tape-event"><span class="tape-time">${e.hoursAway != null ? e.hoursAway.toFixed(1) + 'h' : '--'}</span><span class="tape-sym">${esc(e.currency)}</span><span class="tape-msg">${esc(e.name)}</span></div>`).join('')
+    : '<div class="empty-state">No releases.</div>';
+
+  const todayEl = document.getElementById('outlook-today');
+  if (todayEl) todayEl.innerHTML = renderEvents(o.today?.tier1Events || []);
+  const weekEl = document.getElementById('outlook-week');
+  if (weekEl) weekEl.innerHTML = renderEvents([...(o.week?.tier1Events || []), ...(o.week?.tier2Events || [])]);
+
+  const symEl = document.getElementById('outlook-symbols');
+  if (symEl) {
+    const rows = o.symbols || [];
+    symEl.innerHTML = rows.length ? rows.map(s => {
+      const cls = (s.tradeability || 0) >= 70 ? 'good' : (s.tradeability || 0) >= 50 ? 'warn-text' : 'bad';
+      return `<div class="kv-row"><span class="kv-key">${esc(s.symbol)}</span><span class="kv-val ${cls}">${esc(s.regime || '--')} / ${s.tradeability ?? '--'} — ${esc(s.sessionStatus || '--')}</span></div>`;
+    }).join('') : '<div class="text-faint text-xs text-mono">No symbol data yet.</div>';
+  }
+
+  const newsEl = document.getElementById('outlook-news');
+  if (newsEl) {
+    const news = o.news || [];
+    newsEl.innerHTML = news.length ? news.map(n => `<div class="intel-item"><div class="intel-body"><div class="intel-title">${esc(n.headline)}</div><div class="intel-desc">${esc(n.source || '')}</div><div class="intel-time">${time(n.datetime)}</div></div></div>`).join('') : '<div class="empty-state">No recent headlines.</div>';
+  }
+}
+
 /* ── Consensus Radar: signature visual, plots selected signal's agent votes ── */
 function renderRadar() {
   const sig = state.signals.find(s => s.id === state.selectedId);
@@ -1330,11 +1399,18 @@ window.selectSignal = selectSignal;
 
 async function recordOutcome(signalId, pnlR) {
   const payload = { signalId, outcome: { pnlR, notes: 'Mini App quick outcome' } };
-  socket.emit('record_outcome', payload);
+  // FIX: previously fired BOTH socket.emit('record_outcome', ...) AND this
+  // REST call for one click. Neither path is idempotent on its own within
+  // the engines it feeds (Q-table, Bayesian posteriors, drawdown daily PnL),
+  // so every outcome was being silently double-counted. REST is now the
+  // single path; the backend also rejects true duplicates with 409.
   const headers = { 'Content-Type': 'application/json' };
   if (initData) headers['x-telegram-init-data'] = initData;
   haptic('signal');
-  try { await fetch('/api/outcomes', { method: 'POST', headers, body: JSON.stringify(payload) }); } catch (_) {}
+  try {
+    const res = await fetch('/api/outcomes', { method: 'POST', headers, body: JSON.stringify(payload) });
+    if (res.status === 409) { haptic('error'); return; }
+  } catch (_) {}
 }
 window.recordOutcome = recordOutcome;
 

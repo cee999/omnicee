@@ -426,6 +426,17 @@ async function close() {
   }
 }
 
+async function getTradeOutcome(signalId) {
+  try {
+    const db = await getDB();
+    if (!db || !signalId) return null;
+    return await db.collection('trade_outcomes').findOne({ signalId });
+  } catch (err) {
+    console.error('[MongoDB] getTradeOutcome error:', err.message);
+    return null;
+  }
+}
+
 module.exports = {
   getDB,
   ensureIndexes,
@@ -435,6 +446,7 @@ module.exports = {
   getRecentSignals,
   getTelemetry,
   saveTradeOutcome,
+  getTradeOutcome,
   getLearningProfile,
   getLearningProfiles,
   upsertTelegramUser,
