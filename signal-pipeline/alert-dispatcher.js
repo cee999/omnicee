@@ -1004,6 +1004,7 @@ class AlertDispatcher extends EventEmitter {
     this._paused        = false;
     this._pendingSignals = new Map(); // signalId → signal (for callback resolution)
     this._approvedSignals = new Map(); // signalId → signal (approved, waiting for EA execution)
+    this._recordedOutcomes = new Set(); // signalId → guards against double-tapping WIN/LOSS/BE
     this._subscribers   = new Set();  // auto-registered chat IDs from /start
     this._bot           = null;      // bot info from getMe()
 
@@ -1527,12 +1528,52 @@ class AlertDispatcher extends EventEmitter {
         case 'LOSS':
         case 'BE': {
           const result  = action;
+          // FIX: guard against double-tapping the same button (or Telegram
+          // redelivering the callback), which would otherwise double-count
+          // this outcome across every engine in the pipeline below.
+          if (this._recordedOutcomes.has(signalId)) {
+            await this._client.answerCallback(callbackQueryId, 'Already recorded for this signal', true);
+            break;
+          }
+          this._recordedOutcomes.add(signalId);
+
+          // NOTE: these are placeholder R-multiples for a single quick tap —
+          // a button can't capture the real P&L of a specific trade. This is
+          // a genuine UX limitation, not something the wiring fix below can
+          // solve; flagging rather than pretending otherwise.
           const pnlMap  = { WIN: 1.5, LOSS: -1, BE: 0 };
-          const outcome = { result, pnlPct: pnlMap[result], note: `Recorded via Telegram callback` };
+          const pnlR    = pnlMap[result];
+          const outcome = { result, pnlPct: pnlR, note: `Recorded via Telegram callback` };
 
           if (this.scorer) {
             this.scorer.recordTradeOutcome(signalId, outcome);
           }
+
+          // FIX: this handler — the primary way most users will record an
+          // outcome, via a single Telegram tap — only ever fed
+          // scorer.recordTradeOutcome(), which updates a SEPARATE circuit
+          // breaker (signal-scorer.js's own DrawdownCircuitBreaker) that is
+          // NOT the same object as drawdownGuard (risk-engine/drawdown-guard.js),
+          // which is what actually gates new trades pre-signal (wired in
+          // earlier this session). It also never touched adaptiveLearning,
+          // bayesianEng, walkForward, institutionalGates, or sessionFilter.
+          // That meant every one of those systems' real-world feedback loop
+          // was blind to any trade recorded via Telegram — only outcomes
+          // recorded through the Mini App's /api/outcomes ever reached them.
+          try {
+            const liveEngines = require('../api/realtime').getEngines();
+            const isWin = pnlR > 0;
+            const symbol = signal?.symbol;
+            liveEngines.adaptiveLearning?.recordOutcome?.({ signalId, signal, outcome: { pnlR, result } }).catch(() => {});
+            liveEngines.bayesianEng?.recordOutcome?.({ signal, outcome: { pnlR, result }, regime: signal?.regime, session: signal?.session });
+            liveEngines.walkForward?.recordOutcome?.({ signal, outcome: { pnlR, result } });
+            if (symbol) liveEngines.institutionalGates?.recordSymbolOutcome?.(symbol, isWin);
+            if (symbol) liveEngines.sessionFilter?.recordOutcome?.({ symbol, result: isWin ? 'WIN' : 'LOSS', pnlPct: pnlR, timestamp: Date.now() });
+            liveEngines.drawdownGuard?.record?.({
+              pnlPct: pnlR, won: isWin, symbol, signalId,
+              grade: signal?.score?.grade, pnlR,
+            });
+          } catch (_) { /* registry not available (e.g. standalone dispatcher usage) — non-fatal */ }
 
           await this._client.answerCallback(callbackQueryId, `${result} recorded!`, true);
           this.emit('trade_outcome', { signalId, outcome, signal });
