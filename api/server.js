@@ -186,6 +186,12 @@ function createApp() {
         pnlR: saved.pnlR,
       });
     } catch (_) {}
+    // FIX: institutionalRiskManager (Kelly Criterion + correlation analysis)
+    // was instantiated and even had a validateAndSizePosition() call site
+    // wired into index.js's pipeline, but it was NEVER fed real outcomes —
+    // its Kelly sizing was permanently stuck on the cold-start default and
+    // its correlation analyzer never had real per-symbol return series.
+    try { liveEngines.institutionalRiskManager?.recordTradeResult(saved.symbol, saved.pnlR, saved.closedAt); } catch (_) {}
 
     bus.emit('telemetry_update', {
       type: 'outcome_recorded',
@@ -329,6 +335,7 @@ function startServer(config = {}) {
       try { liveEngines.walkForward?.recordOutcome({ signal, outcome: payload.outcome }); } catch (_) {}
       try { liveEngines.institutionalGates?.recordSymbolOutcome(outcome.symbol, isWin); } catch (_) {}
       try { liveEngines.sessionFilter?.recordOutcome({ symbol: outcome.symbol, result: isWin ? 'WIN' : 'LOSS', pnlPct: outcome.pnlPct, timestamp: outcome.closedAt || Date.now() }); } catch (_) {}
+      try { liveEngines.institutionalRiskManager?.recordTradeResult(outcome.symbol, outcome.pnlR, outcome.closedAt); } catch (_) {}
       try {
         liveEngines.drawdownGuard?.record({
           pnlPct: Number(outcome.pnlPct || 0),

@@ -98,7 +98,7 @@ class KellyCriterionCalculator {
 
     const winRate = (wins.length / recentTrades.length) * 100;
     const avgWin = wins.length > 0 ? avg(wins.map(t => t.pnl)) : 1;
-    const avgLoss = losses.length > 0 ? avg(Math.abs(losses.map(t => t.pnl))) : 1;
+    const avgLoss = losses.length > 0 ? avg(losses.map(t => Math.abs(t.pnl))) : 1;
 
     return this.calculate(winRate, avgWin, avgLoss, accountBalance, currentPrice);
   }
@@ -564,6 +564,12 @@ class InstitutionalRiskManager extends EventEmitter {
     this.peakBalance = this.accountBalance;
     this.currentDrawdown = 0;
 
+    // FIX: was never fed real trade results anywhere, so KellyCriterionCalculator
+    // .adaptiveKelly() always fell back to its cold-start default (tradeHistory.length
+    // < 10) and CorrelationAnalyzer never had real per-symbol return series. Tracked
+    // here so recordTradeResult() (wired to /api/outcomes in api/server.js) can feed both.
+    this._returnsBySymbol = new Map();
+
     this._stats = {
       tradesExecuted: 0,
       riskAdjustments: 0,
@@ -591,6 +597,41 @@ class InstitutionalRiskManager extends EventEmitter {
 
   addReturns(symbol, returns) {
     this.portfolioManager.correlationAnalyzer.addReturns(symbol, returns);
+  }
+
+  // FIX: this whole class was instantiated + connected in index.js but
+  // .validateAndSizePosition() was never called anywhere, and nothing ever
+  // fed it real trade outcomes — see index.js and api/server.js for the
+  // other half of this wiring. Call this whenever a signal's outcome is
+  // recorded (win/loss/breakeven, expressed in R-multiples) so Kelly sizing
+  // and correlation analysis are based on real history instead of the
+  // permanent cold-start default.
+  recordTradeResult(symbol, pnlR, timestamp = Date.now()) {
+    const pnl = Number(pnlR) || 0;
+
+    this.portfolioManager.tradeHistory.push({
+      symbol,
+      pnl,
+      entryPrice: 0,
+      exitPrice: 0,
+      direction: null,
+      timestamp,
+    });
+    if (this.portfolioManager.tradeHistory.length > 500) {
+      this.portfolioManager.tradeHistory.splice(0, this.portfolioManager.tradeHistory.length - 500);
+    }
+    this._stats.tradesExecuted++;
+
+    // CorrelationAnalyzer.addReturns() expects the FULL array (it replaces,
+    // not appends — see `returns.slice(-100)` above), so maintain our own
+    // running per-symbol series and pass the whole thing each time.
+    const series = this._returnsBySymbol.get(symbol) || [];
+    series.push(pnl);
+    const trimmed = series.slice(-100);
+    this._returnsBySymbol.set(symbol, trimmed);
+    this.addReturns(symbol, trimmed);
+
+    return { tradesExecuted: this._stats.tradesExecuted, seriesLength: trimmed.length };
   }
 
   /**

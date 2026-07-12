@@ -266,6 +266,24 @@ async function runAnalysisCycle(symbol, timeframe) {
       wsBus.emit('regime_update', { symbol, timeframe, ...regime });
     }
 
+    // FIX: institutionalRiskManager was instantiated + connected but never fed
+    // live data — setRegime()/updateLiquidity() had zero call sites, so its
+    // regime-aware Kelly multiplier and liquidity check were permanently blind.
+    // Spread has no real feed anywhere in this codebase (grepped — confirmed),
+    // so we use candle range/close as a documented proxy, not a real quote spread.
+    if (institutionalRiskManager) {
+      if (regime?.regime && institutionalRiskManager.setRegime) {
+        institutionalRiskManager.setRegime(regime.regime);
+      }
+      if (institutionalRiskManager.updateLiquidity) {
+        const lastCandle = candles[candles.length - 1];
+        const spreadProxy = lastCandle.close > 0
+          ? (lastCandle.high - lastCandle.low) / lastCandle.close
+          : 0;
+        institutionalRiskManager.updateLiquidity(symbol, lastCandle.volume || 1, spreadProxy);
+      }
+    }
+
     // ── Conflict resolution ──
     const currentPrice = candles[candles.length - 1].close;
     const conflictCtx  = { symbol, timeframe, currentPrice };
@@ -380,12 +398,45 @@ async function runAnalysisCycle(symbol, timeframe) {
               })
             : { approved: true, reason: 'RiskEngine unavailable' };
 
+          // FIX: institutionalRiskManager.validateAndSizePosition() was never
+          // called anywhere (only .connect() was) — its Kelly/regime/liquidity/
+          // portfolio-cap sizing had zero influence on any real trade. It
+          // returns its OWN absolute position size in different units than
+          // RiskEngine's (accountBalance/currentPrice-based Kelly units vs
+          // SL-distance-based risk units), so we don't substitute one for the
+          // other — instead we take the *ratio* of its post-checks size to its
+          // own pre-checks size (unit-independent, 0..1) and fold that in the
+          // same way sessionQuality/drawdownEval already scale down below.
+          let institutionalRisk = null;
+          let institutionalFactor = 1;
+          if (institutionalRiskManager?.validateAndSizePosition) {
+            try {
+              institutionalRisk = institutionalRiskManager.validateAndSizePosition(signal, currentPrice);
+              if (institutionalRisk?.positionSize > 0) {
+                const rawRatio = institutionalRisk.adjustedSize / institutionalRisk.positionSize;
+                institutionalFactor = Math.max(0, Math.min(1, rawRatio));
+              }
+            } catch (e) {
+              log.warn(`InstitutionalRiskManager sizing error: ${e.message}`);
+            }
+          }
+
           // FIX: sessionQuality.multiplier and drawdownEval.sizingFactor were
           // computed above but nothing ever applied them to the actual
           // position size — they were pure dead weight. Fold them in now.
           if (riskEvaluation?.approved && riskEvaluation.positionSize > 0) {
             const combinedFactor =
-              (sessionQuality?.multiplier ?? 1) * (drawdownEval?.sizingFactor ?? 1);
+              (sessionQuality?.multiplier ?? 1) * (drawdownEval?.sizingFactor ?? 1) * institutionalFactor;
+            riskEvaluation.institutionalRisk = institutionalRisk ? {
+              kellyPercent: institutionalRisk.kellyPercent,
+              regimeMultiplier: institutionalRisk.regimeMultiplier,
+              liquidityCheck: institutionalRisk.liquidityCheck,
+              correlationPenalty: institutionalRisk.correlationPenalty,
+              portfolioRiskCapped: institutionalRisk.portfolioRiskCapped || false,
+              correlationExposureCapped: institutionalRisk.correlationExposureCapped || false,
+              warning: institutionalRisk.warning || null,
+              factorApplied: Math.round(institutionalFactor * 100) / 100,
+            } : null;
             if (combinedFactor < 1) {
               riskEvaluation.positionSize = riskEvaluation.positionSize * combinedFactor;
               riskEvaluation.sessionMultiplier = sessionQuality?.multiplier ?? 1;
@@ -1086,7 +1137,7 @@ function buildSingletons() {
   try {
     require('./api/realtime').setEngines({
       adaptiveLearning, bayesianEng, walkForward, institutionalGates,
-      drawdownGuard, sessionFilter, riskEngine,
+      drawdownGuard, sessionFilter, riskEngine, institutionalRiskManager,
       // For GET /api/outlook (signal-pipeline/market-outlook.js)
       regimeEngine, candleStores, symbols: SYMBOLS,
     });
