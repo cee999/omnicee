@@ -266,6 +266,24 @@ async function runAnalysisCycle(symbol, timeframe) {
       wsBus.emit('regime_update', { symbol, timeframe, ...regime });
     }
 
+    // FIX: institutionalRiskManager was instantiated + connected but never fed
+    // live data — setRegime()/updateLiquidity() had zero call sites, so its
+    // regime-aware Kelly multiplier and liquidity check were permanently blind.
+    // Spread has no real feed anywhere in this codebase (grepped — confirmed),
+    // so we use candle range/close as a documented proxy, not a real quote spread.
+    if (institutionalRiskManager) {
+      if (regime?.regime && institutionalRiskManager.setRegime) {
+        institutionalRiskManager.setRegime(regime.regime);
+      }
+      if (institutionalRiskManager.updateLiquidity) {
+        const lastCandle = candles[candles.length - 1];
+        const spreadProxy = lastCandle.close > 0
+          ? (lastCandle.high - lastCandle.low) / lastCandle.close
+          : 0;
+        institutionalRiskManager.updateLiquidity(symbol, lastCandle.volume || 1, spreadProxy);
+      }
+    }
+
     // ── Conflict resolution ──
     const currentPrice = candles[candles.length - 1].close;
     const conflictCtx  = { symbol, timeframe, currentPrice };
@@ -380,12 +398,45 @@ async function runAnalysisCycle(symbol, timeframe) {
               })
             : { approved: true, reason: 'RiskEngine unavailable' };
 
+          // FIX: institutionalRiskManager.validateAndSizePosition() was never
+          // called anywhere (only .connect() was) — its Kelly/regime/liquidity/
+          // portfolio-cap sizing had zero influence on any real trade. It
+          // returns its OWN absolute position size in different units than
+          // RiskEngine's (accountBalance/currentPrice-based Kelly units vs
+          // SL-distance-based risk units), so we don't substitute one for the
+          // other — instead we take the *ratio* of its post-checks size to its
+          // own pre-checks size (unit-independent, 0..1) and fold that in the
+          // same way sessionQuality/drawdownEval already scale down below.
+          let institutionalRisk = null;
+          let institutionalFactor = 1;
+          if (institutionalRiskManager?.validateAndSizePosition) {
+            try {
+              institutionalRisk = institutionalRiskManager.validateAndSizePosition(signal, currentPrice);
+              if (institutionalRisk?.positionSize > 0) {
+                const rawRatio = institutionalRisk.adjustedSize / institutionalRisk.positionSize;
+                institutionalFactor = Math.max(0, Math.min(1, rawRatio));
+              }
+            } catch (e) {
+              log.warn(`InstitutionalRiskManager sizing error: ${e.message}`);
+            }
+          }
+
           // FIX: sessionQuality.multiplier and drawdownEval.sizingFactor were
           // computed above but nothing ever applied them to the actual
           // position size — they were pure dead weight. Fold them in now.
           if (riskEvaluation?.approved && riskEvaluation.positionSize > 0) {
             const combinedFactor =
-              (sessionQuality?.multiplier ?? 1) * (drawdownEval?.sizingFactor ?? 1);
+              (sessionQuality?.multiplier ?? 1) * (drawdownEval?.sizingFactor ?? 1) * institutionalFactor;
+            riskEvaluation.institutionalRisk = institutionalRisk ? {
+              kellyPercent: institutionalRisk.kellyPercent,
+              regimeMultiplier: institutionalRisk.regimeMultiplier,
+              liquidityCheck: institutionalRisk.liquidityCheck,
+              correlationPenalty: institutionalRisk.correlationPenalty,
+              portfolioRiskCapped: institutionalRisk.portfolioRiskCapped || false,
+              correlationExposureCapped: institutionalRisk.correlationExposureCapped || false,
+              warning: institutionalRisk.warning || null,
+              factorApplied: Math.round(institutionalFactor * 100) / 100,
+            } : null;
             if (combinedFactor < 1) {
               riskEvaluation.positionSize = riskEvaluation.positionSize * combinedFactor;
               riskEvaluation.sessionMultiplier = sessionQuality?.multiplier ?? 1;
@@ -525,22 +576,31 @@ async function runAnalysisCycle(symbol, timeframe) {
       return;
     }
 
-    // FIX: InstitutionalRiskManager was instantiated and connected (regime
-    // updates flow into it) but validateAndSizePosition() — its actual
-    // portfolio-level VaR/Kelly/correlation/liquidity check — was never
-    // called anywhere before a trade fired. It ran a full Kelly Criterion +
-    // portfolio exposure + correlated-exposure + liquidity check that simply
-    // had no effect on live decisions. Wired in here as an additional
-    // safety cap on top of (never a relaxation of) what RiskEngine and
-    // DrawdownGuard already approved.
-    if (institutionalRiskManager?.validateAndSizePosition && riskEvaluation?.positionSize > 0) {
-      const instCheck = institutionalRiskManager.validateAndSizePosition(signal, currentPrice);
-      if (instCheck?.adjustedSize <= 0) {
-        log.warn(`[INSTITUTIONAL RISK BLOCK] ${symbol} ${timeframe}: ${instCheck.warning || 'position size reduced to zero by portfolio risk checks'}`);
-        return;
-      }
-      if (Number.isFinite(instCheck?.adjustedSize) && instCheck.adjustedSize < riskEvaluation.positionSize) {
-        riskEvaluation = { ...riskEvaluation, positionSize: instCheck.adjustedSize, institutionalCap: instCheck };
+    // Safety net: if the combined session/drawdown/institutional-risk
+    // scaling above collapsed positionSize to (near) zero, don't dispatch a
+    // signal that risks nothing — institutionalGates has no positionSize
+    // check of its own, so without this a 0-size signal could otherwise
+    // still reach Telegram/the Mini App/the MT5 EA.
+    if (riskEvaluation?.positionSize != null && riskEvaluation.positionSize <= 0) {
+      log.warn(`[RISK BLOCK] ${symbol} ${timeframe}: position size scaled to zero (session/drawdown/institutional risk combined)`);
+      return;
+    }
+
+    // FIX: ExecutionManager (TWAP/VWAP/POV, ~830 lines) was instantiated but
+    // getOptimalExecution() had zero call sites — its recommendation never
+    // reached a signal or the humans/EA acting on it. This is advisory only:
+    // this system dispatches signals (Telegram + MT5 EA polling), it doesn't
+    // place orders itself, so there is no live order to "execute" here — we
+    // attach the recommended algorithm/slicing so a human or the EA can use
+    // it. Only meaningful for symbols with real order-book data (crypto via
+    // Bybit); absent for forex symbols, so we don't fabricate a recommendation.
+    let executionPlan = null;
+    const em = getExecutionManager(symbol);
+    if (em && riskEvaluation?.positionSize > 0) {
+      try {
+        executionPlan = em.getOptimalExecution(symbol, riskEvaluation.positionSize, signal.action);
+      } catch (e) {
+        log.warn(`ExecutionManager advisory error (${symbol}): ${e.message}`);
       }
     }
 
@@ -552,6 +612,7 @@ async function runAnalysisCycle(symbol, timeframe) {
       gate,
       regime,
       ensemble: ensembleResult,
+      executionPlan,
       validation: {
         monteCarlo: mcResult ? {
           approved: mcResult.approved,
@@ -691,6 +752,7 @@ function buildMTFData(symbol) {
 // could ever fire, and only if a working news fetcher was configured. This
 // builds the real object instead, including real CFTC COT data.
 const _cotCache = {}; // symbol -> { analysis, ts } — CFTC updates weekly, no need to re-fetch every cycle
+const _newsCache = {}; // category -> { articles, ts } — Finnhub free tier is rate-limited, cache by asset-class category
 
 async function buildSentimentExternalData(symbol) {
   const data = {};
@@ -723,6 +785,44 @@ async function buildSentimentExternalData(symbol) {
       }
     } catch (err) {
       log.debug(`COT fetch failed for ${symbol}: ${err.message}`);
+    }
+  }
+
+  // FIX: SentimentAgent WAS being called every cycle and DID feed a real vote
+  // into signal scoring (macroSent), but its news component was silently
+  // dead: index.js never passed `newsApiKey`, so SentimentAgent's internal
+  // NewsFetcher always fell through to a neutral synthetic placeholder
+  // article — real headlines never reached it, from any source, ever. Also
+  // fixed a NaN bug in aggregateArticles() (agents/sentiment-agent.js) that
+  // would have silently zeroed out real news scoring anyway even with a key.
+  // This system already has a connected FinnhubFeed (used for the economic
+  // calendar) with a free market-news endpoint, so reuse it instead of
+  // requiring a second, unset API key.
+  if (finnhubFeed?.enabled?.()) {
+    try {
+      const isCrypto = symbol.endsWith('USDT') || symbol.endsWith('USDC') || symbol.endsWith('BTC');
+      const category = isCrypto ? 'crypto' : 'forex';
+      const cached = _newsCache[category];
+      const stale = !cached || (Date.now() - cached.ts) > 15 * 60000;
+      let raw = cached?.articles;
+      if (stale) {
+        raw = await finnhubFeed.marketNews(category);
+        _newsCache[category] = { articles: raw, ts: Date.now() };
+      }
+      if (Array.isArray(raw) && raw.length) {
+        // Map Finnhub's {headline, summary, datetime (unix seconds), source,
+        // url} shape to what NLPAnalyzer.aggregateArticles() expects.
+        data.articles = raw.slice(0, 20).map(a => ({
+          title: a.headline,
+          description: a.summary,
+          content: '',
+          source: { name: a.source },
+          publishedAt: (a.datetime ? a.datetime * 1000 : Date.now()),
+          url: a.url,
+        }));
+      }
+    } catch (err) {
+      log.debug(`Finnhub news fetch failed for ${symbol}: ${err.message}`);
     }
   }
 
@@ -784,8 +884,24 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
 let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, institutionalGates,
     adaptiveLearning, drawdownGuard, riskEngine, sessionFilter, correlationFilter, memory,
     monteCarlo, bayesianEng, statValidator, walkForward, ensembleEng,
-    signalMonitor, institutionalRiskManager, executionManager, myfxbookFeed, openInsiderFeed,
+    signalMonitor, institutionalRiskManager, executionManagers, myfxbookFeed, openInsiderFeed,
     finnhubFeed, cftcCotFeed, cotParser;
+
+// FIX: ExecutionManager's MarketMicrostructureAnalyzer keeps a single shared
+// orderBookHistory/tradeHistory/spreadHistory with no per-symbol keying — one
+// shared instance across multiple crypto symbols would mix BTCUSDT's spread
+// with ETHUSDT's order flow. One ExecutionManager per symbol, created lazily.
+function getExecutionManager(symbol) {
+  if (!ExecutionManager) return null;
+  if (!executionManagers) executionManagers = new Map();
+  if (!executionManagers.has(symbol)) {
+    const em = new ExecutionManager();
+    em.connect().catch(e => log.warn(`ExecutionManager connect error (${symbol}): ${e.message}`));
+    executionManagers.set(symbol, em);
+    log.info(`ExecutionManager instantiated for ${symbol}`);
+  }
+  return executionManagers.get(symbol);
+}
 
 function buildSingletons() {
   // AlertDispatcher
@@ -999,10 +1115,10 @@ function buildSingletons() {
     log.info('InstitutionalRiskManager created (Kelly Criterion, Correlation Analysis, Tail Risk)');
   }
 
-  // Execution Manager - TWAP/VWAP/POV execution algorithms
+  // Execution Manager - TWAP/VWAP/POV execution algorithms (one per symbol — see getExecutionManager)
   if (ExecutionManager) {
-    executionManager = new ExecutionManager();
-    log.info('ExecutionManager created (TWAP, VWAP, POV algorithms)');
+    executionManagers = new Map();
+    log.info('ExecutionManager factory ready (TWAP, VWAP, POV algorithms) — instantiated per crypto symbol as order-book data arrives');
   }
 
   // Myfxbook Feed - Economic calendar and community sentiment
@@ -1156,6 +1272,14 @@ function buildFeeds() {
       symbols: cryptoSymbols,
       timeframes: TIMEFRAMES_STR,
       liquidations: true,
+      // FIX: ExecutionManager (TWAP/VWAP/POV) was instantiated but never
+      // consulted — its MarketMicrostructureAnalyzer needs real L2 order book
+      // depth and a trade tape, neither of which was ever streamed anywhere
+      // in this codebase (BybitFeed supports both but they were off by
+      // default). Enabling here is what makes execution advisory real instead
+      // of permanently blind (spread=0, imbalance=0 → always "optimal").
+      orderBook: true,
+      trades: true,
     });
     bybitFeed.on('open_interest', (analysis) => {
       const sym = analysis.symbol;
@@ -1172,6 +1296,23 @@ function buildFeeds() {
     bybitFeed.on('liquidation_cascade', (data) => {
       log.warn(`Bybit liquidation cascade: ${data.alert}`);
       if (wsBus) wsBus.emit('liquidation_cascade', data);
+    });
+    // FIX: feed the per-symbol ExecutionManager's microstructure analyzer with
+    // real order book depth (converting Bybit's [price, qty] tuples to the
+    // {price, quantity} shape MarketMicrostructureAnalyzer expects) and the
+    // live trade tape. Without this, getOptimalExecution() has no real data.
+    bybitFeed.on('orderbook', (snapshot) => {
+      const em = getExecutionManager(snapshot.symbol);
+      if (!em) return;
+      em.updateOrderBook({
+        bids: snapshot.bids.map(([price, quantity]) => ({ price, quantity })),
+        asks: snapshot.asks.map(([price, quantity]) => ({ price, quantity })),
+      });
+    });
+    bybitFeed.on('tick', (trade) => {
+      const em = getExecutionManager(trade.symbol);
+      if (!em) return;
+      em.addTrade({ price: trade.price, quantity: trade.size, timestamp: trade.timestamp });
     });
     bybitFeed.on('error', (err) => log.error(`BybitFeed error: ${err.message || err}`));
     bybitFeed.on('connected', () => log.info(`BybitFeed connected for: ${cryptoSymbols.join(', ')}`));
@@ -1317,15 +1458,8 @@ async function main() {
     }
   }
 
-  // i. Connect execution manager
-  if (executionManager) {
-    try {
-      await executionManager.connect();
-      log.info('ExecutionManager connected');
-    } catch (err) {
-      log.error(`ExecutionManager connection failed: ${err.message}`);
-    }
-  }
+  // i. Execution manager instances are created lazily per crypto symbol as
+  // order-book data arrives (see getExecutionManager) — nothing to connect here.
 
   if (connected === 0 && feeds.length > 0) {
     log.error('No feeds connected — check your API keys and network connection');

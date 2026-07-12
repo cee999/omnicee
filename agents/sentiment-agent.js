@@ -278,7 +278,17 @@ class NLPAnalyzer {
     const scoreList = [];
 
     for (const article of articles) {
-      const age       = now - (article.publishedAt || now);
+      // FIX: article.publishedAt arrives as an ISO string (from NewsAPI.org
+      // and from the synthetic fallback), but `now - article.publishedAt`
+      // is a numeric subtraction — it silently produced NaN for every single
+      // article (age/recency/weight/score all NaN), meaning the news
+      // component of sentiment had zero real effect on any vote, ever, even
+      // when a real NEWS_API_KEY was configured. Parse defensively so it
+      // works whether the producer gives a number (ms) or an ISO string.
+      const publishedAtMs = typeof article.publishedAt === 'number'
+        ? article.publishedAt
+        : (Date.parse(article.publishedAt) || now);
+      const age       = now - publishedAtMs;
       if (age > maxAge) continue; // skip articles older than 24h
 
       const recency   = Math.max(0, 1 - age / maxAge); // 1.0 = just published
