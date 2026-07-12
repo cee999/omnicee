@@ -37,6 +37,7 @@ const { RiskEngine } = require('../risk-engine/position-sizer');
 const { DrawdownGuard } = require('../risk-engine/drawdown-guard');
 const { CorrelationFilter } = require('../risk-engine/correlation');
 const { SessionFilter } = require('../risk-engine/session-filter');
+const { WalkForwardOptimizer } = require('../signal-pipeline/walk-forward-optimizer');
 
 const MIN_LOOKBACK = 50;          // MIRRORS index.js: candles.length < 50 guard
 const MAX_PENDING_CANDLES = 40;   // backtest-only safeguard: expire a signal
@@ -95,6 +96,17 @@ class BacktestEngine {
     this.sessionFilter = new SessionFilter();
     this.correlationFilter = new CorrelationFilter({ maxOpenPositions: 5 });
     this.conflictResolver = new ConflictResolver();
+    // FIX: WalkForwardOptimizer existed and was already wired into the LIVE
+    // pipeline's outcome feedback (index.js/api/server.js feed it real trade
+    // outcomes as they close), but the backtest harness — meant to let you
+    // validate parameters on historical data before going live — never
+    // touched it at all, so a backtest run could never report walk-forward
+    // efficiency (in-sample vs out-of-sample performance decay). Trades close
+    // in chronological order during a single replay, so feeding each one to
+    // recordOutcome() here and calling analyze() at the end gives a real
+    // IS/OOS split — the same mechanism the live pipeline uses, just applied
+    // to one full historical run instead of accumulating over live time.
+    this.walkForward = new WalkForwardOptimizer({ minSamples: cfg.wfMinSamples ?? 20 });
 
     // Per-symbol agent pool — MIRRORS index.js's agentPool[symbol] construction.
     this.agentPool = {};
@@ -171,6 +183,7 @@ class BacktestEngine {
       equityCurve: this.equityCurve,
       finalBalance: this.balance,
       rejections: this.rejections,
+      walkForward: this.walkForward?.analyze ? this.walkForward.analyze() : null,
     };
   }
 
@@ -229,6 +242,11 @@ class BacktestEngine {
     if (!this.scorer) return;
     let signal = await this.scorer.score(resolvedVotes, { symbol, timeframe: this.timeframe, currentPrice, timestamp: candle.timestamp });
     if (!signal || signal.action === 'WAIT') { this.rejections.noSignal++; return; }
+    // MIRRORS index.js: fullSignal always carries `regime` — without this,
+    // WalkForwardOptimizer.recordOutcome() would read signal.regime.regime
+    // as undefined → every record falls into the 'UNKNOWN' regime bucket,
+    // and regime-conditioned degradation detection has nothing to work with.
+    signal = { ...signal, regime };
 
     if (this.correlationFilter?.check) {
       const corrCheck = this.correlationFilter.check(symbol, signal.action, this.riskPct);
@@ -350,6 +368,9 @@ class BacktestEngine {
 
     if (this.drawdownGuard?.record) {
       this.drawdownGuard.record({ pnlPct, won: pnlR > 0, symbol, signalId: signal.id || `${symbol}-${openedAt}`, grade: signal.score?.grade, pnlR });
+    }
+    if (this.walkForward?.recordOutcome) {
+      this.walkForward.recordOutcome({ signal, outcome: { pnlR } });
     }
     delete this.openPositions[symbol];
   }

@@ -25,7 +25,7 @@
 const path = require('path');
 const fs = require('fs');
 const { BacktestEngine } = require('./engine');
-const { computeStats, printReport } = require('./stats');
+const { computeStats, printReport, printWalkForwardReport } = require('./stats');
 const { fetchBinanceKlines, loadCSV, generateSyntheticCandles } = require('./data-loader');
 
 function parseArgs(argv) {
@@ -116,10 +116,11 @@ async function main() {
 
   const stats = computeStats(result.trades, result.equityCurve, balance);
   printReport(stats, result.rejections);
+  printWalkForwardReport(result.walkForward);
 
   if (args.out) {
     const outPath = path.resolve(args.out);
-    fs.writeFileSync(outPath, JSON.stringify({ stats, trades: result.trades, equityCurve: result.equityCurve, rejections: result.rejections }, null, 2));
+    fs.writeFileSync(outPath, JSON.stringify({ stats, trades: result.trades, equityCurve: result.equityCurve, rejections: result.rejections, walkForward: result.walkForward }, null, 2));
     console.log(`Full results written to ${outPath}`);
   }
 }
