@@ -186,6 +186,13 @@ function createApp() {
         pnlR: saved.pnlR,
       });
     } catch (_) {}
+    // FIX: executePosition() tracks a position in InstitutionalRiskManager's
+    // portfolio model when a signal fires (see index.js), but nothing ever
+    // called closePosition() — tracked exposure would only ever accumulate,
+    // making its correlation/portfolio-exposure checks increasingly wrong
+    // over time (eventually blocking everything as "over-exposed" on
+    // positions that were actually closed long ago).
+    try { liveEngines.institutionalRiskManager?.closePosition(saved.symbol); } catch (_) {}
 
     bus.emit('telemetry_update', {
       type: 'outcome_recorded',
@@ -339,6 +346,7 @@ function startServer(config = {}) {
           pnlR: outcome.pnlR,
         });
       } catch (_) {}
+      try { liveEngines.institutionalRiskManager?.closePosition(outcome.symbol); } catch (_) {}
       socket.emit('outcome_saved', outcome);
       bus.emit('telemetry_update', {
         type: 'outcome_recorded',

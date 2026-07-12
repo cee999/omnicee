@@ -525,6 +525,25 @@ async function runAnalysisCycle(symbol, timeframe) {
       return;
     }
 
+    // FIX: InstitutionalRiskManager was instantiated and connected (regime
+    // updates flow into it) but validateAndSizePosition() — its actual
+    // portfolio-level VaR/Kelly/correlation/liquidity check — was never
+    // called anywhere before a trade fired. It ran a full Kelly Criterion +
+    // portfolio exposure + correlated-exposure + liquidity check that simply
+    // had no effect on live decisions. Wired in here as an additional
+    // safety cap on top of (never a relaxation of) what RiskEngine and
+    // DrawdownGuard already approved.
+    if (institutionalRiskManager?.validateAndSizePosition && riskEvaluation?.positionSize > 0) {
+      const instCheck = institutionalRiskManager.validateAndSizePosition(signal, currentPrice);
+      if (instCheck?.adjustedSize <= 0) {
+        log.warn(`[INSTITUTIONAL RISK BLOCK] ${symbol} ${timeframe}: ${instCheck.warning || 'position size reduced to zero by portfolio risk checks'}`);
+        return;
+      }
+      if (Number.isFinite(instCheck?.adjustedSize) && instCheck.adjustedSize < riskEvaluation.positionSize) {
+        riskEvaluation = { ...riskEvaluation, positionSize: instCheck.adjustedSize, institutionalCap: instCheck };
+      }
+    }
+
     fullSignal = {
       ...signal,
       tradePlan,
@@ -578,6 +597,14 @@ async function runAnalysisCycle(symbol, timeframe) {
     }
     if (mongoStore.saveSignal) {
       mongoStore.saveSignal(fullSignal).catch(e => log.warn(`Mongo signal save error: ${e.message}`));
+    }
+
+    // Track this position in the portfolio-risk model so future correlation
+    // and exposure checks (see validateAndSizePosition above) account for it.
+    if (institutionalRiskManager?.executePosition) {
+      try {
+        institutionalRiskManager.executePosition(symbol, riskEvaluation.positionSize, currentPrice, signal.action);
+      } catch (e) { log.warn(`InstitutionalRiskManager executePosition error: ${e.message}`); }
     }
 
     // ── Dispatch to Telegram ──
@@ -1086,7 +1113,7 @@ function buildSingletons() {
   try {
     require('./api/realtime').setEngines({
       adaptiveLearning, bayesianEng, walkForward, institutionalGates,
-      drawdownGuard, sessionFilter, riskEngine,
+      drawdownGuard, sessionFilter, riskEngine, institutionalRiskManager,
       // For GET /api/outlook (signal-pipeline/market-outlook.js)
       regimeEngine, candleStores, symbols: SYMBOLS,
     });
