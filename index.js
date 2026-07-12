@@ -80,6 +80,7 @@ try {
 }
 
 const { AlertDispatcher }    = loadModule('./signal-pipeline/alert-dispatcher',  'AlertDispatcher')    || {};
+const { recordOutcomeEverywhere } = loadModule('./signal-pipeline/outcome-recorder', 'OutcomeRecorder') || {};
 const { BinanceFeed }        = loadModule('./feeds/binance-ws',                  'BinanceFeed')        || {};
 const { BybitFeed }           = loadModule('./feeds/bybit-ws',                    'BybitFeed')          || {};
 const { TwelveDataFeed }     = loadModule('./feeds/twelve-data',                 'TwelveDataFeed')     || {};
@@ -890,6 +891,26 @@ function buildSingletons() {
   if (AlertDispatcher && BOT_TOKEN) {
     dispatcher = new AlertDispatcher({ token: BOT_TOKEN, chatIds: CHAT_IDS, store: mongoStore });
     log.info(`AlertDispatcher created — ${CHAT_IDS.length} chat(s) + auto-subscribe enabled`);
+
+    // FIX: the /win, /loss, /be Telegram commands emitted 'trade_outcome' but
+    // nothing in this file ever listened for it — dispatcher._recordOutcome()
+    // sent a confirmation message and recorded the outcome NOWHERE (it called
+    // `this.scorer.recordTradeOutcome()`, and `dispatcher.scorer` is never
+    // assigned anywhere in this codebase). This is the primary real-world way
+    // a manual-mode user reports a trade result, so wire it into the same
+    // pipeline /api/outcomes and the record_outcome socket event already use.
+    dispatcher.on('trade_outcome', async ({ signalId, outcome, signal }) => {
+      if (!recordOutcomeEverywhere) return;
+      const result = await recordOutcomeEverywhere({
+        signalId, signal, outcome, mongoStore,
+        engines: { adaptiveLearning, bayesianEng, walkForward, institutionalGates, sessionFilter, drawdownGuard, institutionalRiskManager },
+      });
+      if (!result.ok) {
+        log.warn(`/${outcome.result?.toLowerCase()} outcome recording failed for ${signalId}: ${result.error}`);
+      } else {
+        log.info(`Outcome recorded via Telegram command: ${signalId} → ${result.saved.result} (${result.saved.pnlR}R)`);
+      }
+    });
   } else {
     log.warn('AlertDispatcher disabled — no BOT_TOKEN or module missing');
     dispatcher = null;

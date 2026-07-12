@@ -1649,12 +1649,27 @@ class AlertDispatcher extends EventEmitter {
 
     const signal  = this._pendingSignals.get(lastSignalId);
     const pnlMap  = { WIN: this.riskPct * 1.5, LOSS: -this.riskPct, BREAKEVEN: 0 };
+    const pnlPct  = parseFloat(args[0] || pnlMap[result]);
+    // FIX: recordOutcome() (signal-pipeline/adaptive-learning-engine.js)
+    // derives WIN/LOSS/BREAKEVEN from outcome.pnlR, not from a `result`
+    // string — this object never had a pnlR field, so every /win, /loss, and
+    // /be would have been silently misrecorded as BREAKEVEN (pnlR defaults
+    // to 0) even after the scorer wiring below was fixed. riskPct is our
+    // best available proxy for 1R here, since this dispatcher only tracks
+    // percent-of-account risk, not literal R-multiples.
+    const pnlR = this.riskPct > 0 ? pnlPct / this.riskPct : (result === 'WIN' ? 1 : result === 'LOSS' ? -1 : 0);
     const outcome = {
       result,
-      pnlPct: parseFloat(args[0] || pnlMap[result]).toFixed(2),
+      pnlPct: pnlPct.toFixed(2),
+      pnlR,
       note:   `Manual via /${result.toLowerCase()}`,
     };
 
+    // FIX: this.scorer was never assigned anywhere in the codebase, so this
+    // outcome was recorded nowhere — the confirmation message sent below was
+    // the ONLY effect of /win, /loss, /be. index.js listens for the
+    // 'trade_outcome' event emitted below and feeds it through the same real
+    // pipeline used by /api/outcomes (signal-pipeline/outcome-recorder.js).
     if (this.scorer) {
       this.scorer.recordTradeOutcome(lastSignalId, outcome);
     }
