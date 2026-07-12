@@ -1212,6 +1212,87 @@ class AlertDispatcher extends EventEmitter {
     this.emit('cascade_alert', data);
   }
 
+  // FIX: manual-mode.js's ExecutionEngine (a fully-built manual/semi-auto
+  // position-tracking system) calls dispatcher.sendTPHit/sendSLHit/
+  // sendBreakeven/sendTrailUpdate — none of which existed anywhere on this
+  // class. Since those calls aren't wrapped in try/catch in
+  // ExecutionEngine._handlePositionAction, and the exception surfaces
+  // asynchronously (inside an async listener callback whose synchronous
+  // invocation IS wrapped in try/catch by PriceMonitor, but whose eventual
+  // promise rejection is NOT), wiring in ExecutionEngine without these would
+  // have produced an unhandled promise rejection on the very first TP/SL/BE/
+  // trail event of any manually-tracked position — a real crash risk.
+
+  /**
+   * Notify that a take-profit level was hit on a manually-tracked position.
+   */
+  async sendTPHit(signalId, tpNumber, price, pnlR, remainingPct, symbol) {
+    const text = `${EMOJI.GRADE_A} <b>TP${tpNumber} HIT</b> — ${symbol}\n` +
+      `Price: ${price} | +${pnlR.toFixed(2)}R\n` +
+      (remainingPct > 0 ? `Remaining position: ${remainingPct.toFixed(0)}%` : `Position closed.`);
+
+    for (const chatId of this._getAllChatIds()) {
+      this._queue.push({
+        priority: PRIORITY.HIGH,
+        chatId,
+        fn: async () => { await this._client.sendMessage(chatId, text); },
+      });
+    }
+    this.emit('tp_hit_notified', { signalId, tpNumber, price, pnlR, symbol });
+  }
+
+  /**
+   * Notify that a stop loss was hit on a manually-tracked position.
+   */
+  async sendSLHit(signalId, price, pnlR, symbol, wasBreakeven) {
+    const text = `${wasBreakeven ? EMOJI.CHART : EMOJI.ALERT} <b>${wasBreakeven ? 'BREAKEVEN STOP' : 'SL HIT'}</b> — ${symbol}\n` +
+      `Price: ${price} | ${pnlR >= 0 ? '+' : ''}${pnlR.toFixed(2)}R`;
+
+    for (const chatId of this._getAllChatIds()) {
+      this._queue.push({
+        priority: PRIORITY.HIGH,
+        chatId,
+        fn: async () => { await this._client.sendMessage(chatId, text); },
+      });
+    }
+    this.emit('sl_hit_notified', { signalId, price, pnlR, symbol, wasBreakeven });
+  }
+
+  /**
+   * Notify that a position's stop loss was moved to breakeven.
+   */
+  async sendBreakeven(positionId, symbol, newSL, direction) {
+    const text = `${EMOJI.CHART} <b>BREAKEVEN SET</b> — ${direction} ${symbol}\n` +
+      `Stop moved to ${newSL} — this trade can no longer lose.`;
+
+    for (const chatId of this._getAllChatIds()) {
+      this._queue.push({
+        priority: PRIORITY.NORMAL,
+        chatId,
+        fn: async () => { await this._client.sendMessage(chatId, text); },
+      });
+    }
+    this.emit('breakeven_notified', { positionId, symbol, newSL, direction });
+  }
+
+  /**
+   * Notify that a position's trailing stop was updated.
+   */
+  async sendTrailUpdate(positionId, symbol, direction, newSL, delta, unrealizedPnlR) {
+    const text = `${EMOJI.CHART} <b>TRAIL UPDATED</b> — ${direction} ${symbol}\n` +
+      `New stop: ${newSL} (moved ${delta > 0 ? '+' : ''}${delta})\n` +
+      `Unrealized: ${unrealizedPnlR >= 0 ? '+' : ''}${unrealizedPnlR.toFixed(2)}R`;
+
+    for (const chatId of this._getAllChatIds()) {
+      this._queue.push({
+        priority: PRIORITY.LOW,
+        chatId,
+        fn: async () => { await this._client.sendMessage(chatId, text); },
+      });
+    }
+    this.emit('trail_notified', { positionId, symbol, direction, newSL, delta });
+  }
+
   /**
    * Send whale trade detection alert
    */
