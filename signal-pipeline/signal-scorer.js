@@ -29,12 +29,21 @@ const EventEmitter = require('events');
 //  WEIGHT CONFIGURATION
 // ─────────────────────────────────────────────
 
+// FIX: PatternAgent (Wyckoff/harmonics/H&S/divergences, ~1,250 lines) was
+// instantiated in index.js's agentPool but .analyze() was never called on
+// it anywhere — its vote had zero influence on any signal, ever. Adding it
+// as a 6th weighted voting agent. This is a real strategy-parameter change,
+// not just a wiring fix: the other 5 weights are scaled down proportionally
+// (×0.92) so the total still sums to exactly 1.0 — the `margin < 0.15`
+// clear-majority check elsewhere in this file assumes weights sum to 1.0,
+// and leaving them unscaled would silently loosen that threshold.
 const AGENT_WEIGHTS = {
-  SMC:         0.35,   // Order blocks, FVG, BOS/CHoCH, sweeps
-  MTF:         0.25,   // Multi-timeframe alignment
-  MOMENTUM:    0.20,   // RSI, MACD, EMA, Ichimoku, VWAP
-  VOLUME_OI:   0.10,   // Volume profile, CVD, OI, funding
-  MACRO_SENT:  0.10,   // News NLP, COT, DXY, intermarket
+  SMC:         0.322,  // Order blocks, FVG, BOS/CHoCH, sweeps        (was 0.35)
+  MTF:         0.23,   // Multi-timeframe alignment                   (was 0.25)
+  MOMENTUM:    0.184,  // RSI, MACD, EMA, Ichimoku, VWAP               (was 0.20)
+  VOLUME_OI:   0.092,  // Volume profile, CVD, OI, funding             (was 0.10)
+  MACRO_SENT:  0.092,  // News NLP, COT, DXY, intermarket              (was 0.10)
+  PATTERN:     0.08,   // Wyckoff, harmonics, H&S, divergences         (new)
 };
 
 const MIN_SCORE_TO_FIRE    = 75;
@@ -582,6 +591,7 @@ class SignalScorer extends EventEmitter {
       { key: 'momentum',  weight: AGENT_WEIGHTS.MOMENTUM },
       { key: 'volumeOI',  weight: AGENT_WEIGHTS.VOLUME_OI },
       { key: 'macroSent', weight: AGENT_WEIGHTS.MACRO_SENT },
+      { key: 'pattern',   weight: AGENT_WEIGHTS.PATTERN },
     ];
 
     const agentDirections = [];
@@ -657,6 +667,7 @@ class SignalScorer extends EventEmitter {
       { key: 'momentum',  label: 'Momentum Agent',       weight: AGENT_WEIGHTS.MOMENTUM },
       { key: 'volumeOI',  label: 'Volume/OI Agent',      weight: AGENT_WEIGHTS.VOLUME_OI },
       { key: 'macroSent', label: 'Macro/Sentiment Agent',weight: AGENT_WEIGHTS.MACRO_SENT },
+      { key: 'pattern',   label: 'Pattern Agent',        weight: AGENT_WEIGHTS.PATTERN },
     ];
 
     for (const { key, label, weight } of agentMap) {

@@ -205,18 +205,30 @@ async function runAnalysisCycle(symbol, timeframe) {
     ]);
 
     // Sentiment/Pattern run less frequently (every 3rd cycle per symbol)
-    // FIX: was `agents.sentiment.analyze(candles)` — see buildSentimentExternalData() above.
-    const sentResult = agents.sentiment && Math.random() > 0.66
+    // FIX: this comment already documented the intent to run BOTH sentiment
+    // and pattern on a reduced cadence, but the code only ever called
+    // agents.sentiment — agents.pattern.analyze() was never called anywhere,
+    // meaning PatternAgent's vote (Wyckoff/harmonics/H&S/divergences) had
+    // zero influence on any signal ever, despite being instantiated and
+    // fully implemented. Both now share the same cadence draw.
+    const runReducedCadenceAgents = Math.random() > 0.66;
+
+    const sentResult = agents.sentiment && runReducedCadenceAgents
       ? await buildSentimentExternalData(symbol)
           .then(extData => agents.sentiment.analyze(extData))
           .catch(() => null)
       : lastVotes[symbol]?.macroSent || null;
+
+    const patternResult = agents.pattern && runReducedCadenceAgents
+      ? await agents.pattern.analyze(candles).catch(e => { log.warn(`Pattern error [${key}]: ${e.message}`); return null; })
+      : lastVotes[symbol]?.pattern || null;
 
     // Store votes for next cycle reuse
     if (smcResult)   lastVotes[symbol].smc       = smcResult;
     if (mtfResult)   lastVotes[symbol].mtf        = mtfResult;
     if (momResult)   lastVotes[symbol].momentum   = momResult;
     if (sentResult)  lastVotes[symbol].macroSent  = sentResult;
+    if (patternResult) lastVotes[symbol].pattern       = patternResult;
     if (volumeResult)  lastVotes[symbol].volumeOI       = volumeResult;
     if (microResult)   lastVotes[symbol].microstructure  = microResult;
     if (fractalResult) lastVotes[symbol].fractal         = fractalResult;
@@ -236,6 +248,7 @@ async function runAnalysisCycle(symbol, timeframe) {
       volumeOI:       votes.volumeOI || null,
       microstructure: votes.microstructure || null,
       fractal:        votes.fractal || null,
+      pattern:        votes.pattern || null,
     };
 
     const regime = regimeEngine?.classify
