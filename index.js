@@ -576,6 +576,24 @@ async function runAnalysisCycle(symbol, timeframe) {
       return;
     }
 
+    // FIX: ExecutionManager (TWAP/VWAP/POV, ~830 lines) was instantiated but
+    // getOptimalExecution() had zero call sites — its recommendation never
+    // reached a signal or the humans/EA acting on it. This is advisory only:
+    // this system dispatches signals (Telegram + MT5 EA polling), it doesn't
+    // place orders itself, so there is no live order to "execute" here — we
+    // attach the recommended algorithm/slicing so a human or the EA can use
+    // it. Only meaningful for symbols with real order-book data (crypto via
+    // Bybit); absent for forex symbols, so we don't fabricate a recommendation.
+    let executionPlan = null;
+    const em = getExecutionManager(symbol);
+    if (em && riskEvaluation?.positionSize > 0) {
+      try {
+        executionPlan = em.getOptimalExecution(symbol, riskEvaluation.positionSize, signal.action);
+      } catch (e) {
+        log.warn(`ExecutionManager advisory error (${symbol}): ${e.message}`);
+      }
+    }
+
     fullSignal = {
       ...signal,
       tradePlan,
@@ -584,6 +602,7 @@ async function runAnalysisCycle(symbol, timeframe) {
       gate,
       regime,
       ensemble: ensembleResult,
+      executionPlan,
       validation: {
         monteCarlo: mcResult ? {
           approved: mcResult.approved,
@@ -808,8 +827,24 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
 let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, institutionalGates,
     adaptiveLearning, drawdownGuard, riskEngine, sessionFilter, correlationFilter, memory,
     monteCarlo, bayesianEng, statValidator, walkForward, ensembleEng,
-    signalMonitor, institutionalRiskManager, executionManager, myfxbookFeed, openInsiderFeed,
+    signalMonitor, institutionalRiskManager, executionManagers, myfxbookFeed, openInsiderFeed,
     finnhubFeed, cftcCotFeed, cotParser;
+
+// FIX: ExecutionManager's MarketMicrostructureAnalyzer keeps a single shared
+// orderBookHistory/tradeHistory/spreadHistory with no per-symbol keying — one
+// shared instance across multiple crypto symbols would mix BTCUSDT's spread
+// with ETHUSDT's order flow. One ExecutionManager per symbol, created lazily.
+function getExecutionManager(symbol) {
+  if (!ExecutionManager) return null;
+  if (!executionManagers) executionManagers = new Map();
+  if (!executionManagers.has(symbol)) {
+    const em = new ExecutionManager();
+    em.connect().catch(e => log.warn(`ExecutionManager connect error (${symbol}): ${e.message}`));
+    executionManagers.set(symbol, em);
+    log.info(`ExecutionManager instantiated for ${symbol}`);
+  }
+  return executionManagers.get(symbol);
+}
 
 function buildSingletons() {
   // AlertDispatcher
@@ -1023,10 +1058,10 @@ function buildSingletons() {
     log.info('InstitutionalRiskManager created (Kelly Criterion, Correlation Analysis, Tail Risk)');
   }
 
-  // Execution Manager - TWAP/VWAP/POV execution algorithms
+  // Execution Manager - TWAP/VWAP/POV execution algorithms (one per symbol — see getExecutionManager)
   if (ExecutionManager) {
-    executionManager = new ExecutionManager();
-    log.info('ExecutionManager created (TWAP, VWAP, POV algorithms)');
+    executionManagers = new Map();
+    log.info('ExecutionManager factory ready (TWAP, VWAP, POV algorithms) — instantiated per crypto symbol as order-book data arrives');
   }
 
   // Myfxbook Feed - Economic calendar and community sentiment
@@ -1180,6 +1215,14 @@ function buildFeeds() {
       symbols: cryptoSymbols,
       timeframes: TIMEFRAMES_STR,
       liquidations: true,
+      // FIX: ExecutionManager (TWAP/VWAP/POV) was instantiated but never
+      // consulted — its MarketMicrostructureAnalyzer needs real L2 order book
+      // depth and a trade tape, neither of which was ever streamed anywhere
+      // in this codebase (BybitFeed supports both but they were off by
+      // default). Enabling here is what makes execution advisory real instead
+      // of permanently blind (spread=0, imbalance=0 → always "optimal").
+      orderBook: true,
+      trades: true,
     });
     bybitFeed.on('open_interest', (analysis) => {
       const sym = analysis.symbol;
@@ -1196,6 +1239,23 @@ function buildFeeds() {
     bybitFeed.on('liquidation_cascade', (data) => {
       log.warn(`Bybit liquidation cascade: ${data.alert}`);
       if (wsBus) wsBus.emit('liquidation_cascade', data);
+    });
+    // FIX: feed the per-symbol ExecutionManager's microstructure analyzer with
+    // real order book depth (converting Bybit's [price, qty] tuples to the
+    // {price, quantity} shape MarketMicrostructureAnalyzer expects) and the
+    // live trade tape. Without this, getOptimalExecution() has no real data.
+    bybitFeed.on('orderbook', (snapshot) => {
+      const em = getExecutionManager(snapshot.symbol);
+      if (!em) return;
+      em.updateOrderBook({
+        bids: snapshot.bids.map(([price, quantity]) => ({ price, quantity })),
+        asks: snapshot.asks.map(([price, quantity]) => ({ price, quantity })),
+      });
+    });
+    bybitFeed.on('tick', (trade) => {
+      const em = getExecutionManager(trade.symbol);
+      if (!em) return;
+      em.addTrade({ price: trade.price, quantity: trade.size, timestamp: trade.timestamp });
     });
     bybitFeed.on('error', (err) => log.error(`BybitFeed error: ${err.message || err}`));
     bybitFeed.on('connected', () => log.info(`BybitFeed connected for: ${cryptoSymbols.join(', ')}`));
@@ -1341,15 +1401,8 @@ async function main() {
     }
   }
 
-  // i. Connect execution manager
-  if (executionManager) {
-    try {
-      await executionManager.connect();
-      log.info('ExecutionManager connected');
-    } catch (err) {
-      log.error(`ExecutionManager connection failed: ${err.message}`);
-    }
-  }
+  // i. Execution manager instances are created lazily per crypto symbol as
+  // order-book data arrives (see getExecutionManager) — nothing to connect here.
 
   if (connected === 0 && feeds.length > 0) {
     log.error('No feeds connected — check your API keys and network connection');
