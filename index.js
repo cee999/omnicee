@@ -81,6 +81,7 @@ try {
 
 const { AlertDispatcher }    = loadModule('./signal-pipeline/alert-dispatcher',  'AlertDispatcher')    || {};
 const { BinanceFeed }        = loadModule('./feeds/binance-ws',                  'BinanceFeed')        || {};
+const { BybitFeed }           = loadModule('./feeds/bybit-ws',                    'BybitFeed')          || {};
 const { TwelveDataFeed }     = loadModule('./feeds/twelve-data',                 'TwelveDataFeed')     || {};
 const { SMCAgent }           = loadModule('./agents/smc-agent',                  'SMCAgent')           || {};
 const { MTFAgent }           = loadModule('./agents/mtf-agent',                  'MTFAgent')           || {};
@@ -123,6 +124,12 @@ const conflictResolver = ConflictResolverClass ? new ConflictResolverClass() : n
 
 /** Per-symbol candle stores — { symbol: { TF: candle[] } } */
 const candleStores = {};
+// FIX: VolumeOIAgent.analyze() already reads last.fundingRate / last.openInterest
+// directly off candle objects — that plumbing was built correctly, but nothing
+// ever attached real values to candles, so those reads always fell back to 0.
+// BybitFeed (which has a fully-built funding/OI engine) was never even
+// instantiated anywhere. Populated by bootBybitFeed() below.
+const bybitFundingOI = {}; // symbol -> { fundingRate, openInterest }
 
 /** Per-symbol agent instances */
 const agentPool = {};
@@ -718,6 +725,18 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
     if (arr.length > MAX_CANDLES_PER_TF) arr.shift();
   }
 
+  // FIX: attach real funding/OI (see bybitFundingOI declaration above) to the
+  // candle actually sitting in the store — must happen AFTER the push/replace
+  // above, and must mutate `arr[arr.length-1]` (not the raw `candle` param),
+  // since a later in-progress update would otherwise overwrite it with a
+  // fresh candle object lacking these fields.
+  const liveOI = bybitFundingOI[symbol];
+  if (liveOI) {
+    const target = arr[arr.length - 1];
+    if (liveOI.fundingRate != null) target.fundingRate = liveOI.fundingRate;
+    if (liveOI.openInterest != null) target.openInterest = liveOI.openInterest;
+  }
+
   // Only run analysis on closed candles to avoid noise
   if (isClosed) {
     // Stream latest price to Mini App
@@ -1096,6 +1115,41 @@ function buildFeeds() {
     binanceFeed.on('connected', () => log.info(`BinanceFeed connected for: ${cryptoSymbols.join(', ')}`));
     feeds.push({ name: 'BinanceFeed', instance: binanceFeed, symbols: cryptoSymbols });
     log.info(`BinanceFeed configured for: ${cryptoSymbols.join(', ')}`);
+  }
+
+  // FIX: BybitFeed (funding rate, open interest, liquidation cascades, CVD —
+  // 971 lines) was never instantiated anywhere. BinanceFeed already handles
+  // crypto candles, so this deliberately does NOT listen to BybitFeed's
+  // 'candle'/'candle_update' events (that would just be redundant duplicate
+  // candle ingestion) — only the funding/OI/liquidation side channel, which
+  // feeds bybitFundingOI so onCandle() can attach real values to candles for
+  // VolumeOIAgent's pre-existing (previously always-zero) reads.
+  if (BybitFeed && cryptoSymbols.length) {
+    const bybitFeed = new BybitFeed({
+      symbols: cryptoSymbols,
+      timeframes: TIMEFRAMES_STR,
+      liquidations: true,
+    });
+    bybitFeed.on('open_interest', (analysis) => {
+      const sym = analysis.symbol;
+      if (!bybitFundingOI[sym]) bybitFundingOI[sym] = {};
+      bybitFundingOI[sym].openInterest = analysis.oiValue ?? analysis.value ?? null;
+    });
+    bybitFeed.on('price', ({ symbol }) => {
+      const rate = bybitFeed.funding?._rates?.get(symbol)?.current;
+      if (rate != null) {
+        if (!bybitFundingOI[symbol]) bybitFundingOI[symbol] = {};
+        bybitFundingOI[symbol].fundingRate = rate;
+      }
+    });
+    bybitFeed.on('liquidation_cascade', (data) => {
+      log.warn(`Bybit liquidation cascade: ${data.alert}`);
+      if (wsBus) wsBus.emit('liquidation_cascade', data);
+    });
+    bybitFeed.on('error', (err) => log.error(`BybitFeed error: ${err.message || err}`));
+    bybitFeed.on('connected', () => log.info(`BybitFeed connected for: ${cryptoSymbols.join(', ')}`));
+    feeds.push({ name: 'BybitFeed', instance: bybitFeed, symbols: cryptoSymbols });
+    log.info(`BybitFeed configured for: ${cryptoSymbols.join(', ')}`);
   }
 
   // TwelveData feed for forex/commodities
