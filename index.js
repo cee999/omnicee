@@ -734,6 +734,7 @@ function buildMTFData(symbol) {
 // could ever fire, and only if a working news fetcher was configured. This
 // builds the real object instead, including real CFTC COT data.
 const _cotCache = {}; // symbol -> { analysis, ts } — CFTC updates weekly, no need to re-fetch every cycle
+const _newsCache = {}; // category -> { articles, ts } — Finnhub free tier is rate-limited, cache by asset-class category
 
 async function buildSentimentExternalData(symbol) {
   const data = {};
@@ -766,6 +767,44 @@ async function buildSentimentExternalData(symbol) {
       }
     } catch (err) {
       log.debug(`COT fetch failed for ${symbol}: ${err.message}`);
+    }
+  }
+
+  // FIX: SentimentAgent WAS being called every cycle and DID feed a real vote
+  // into signal scoring (macroSent), but its news component was silently
+  // dead: index.js never passed `newsApiKey`, so SentimentAgent's internal
+  // NewsFetcher always fell through to a neutral synthetic placeholder
+  // article — real headlines never reached it, from any source, ever. Also
+  // fixed a NaN bug in aggregateArticles() (agents/sentiment-agent.js) that
+  // would have silently zeroed out real news scoring anyway even with a key.
+  // This system already has a connected FinnhubFeed (used for the economic
+  // calendar) with a free market-news endpoint, so reuse it instead of
+  // requiring a second, unset API key.
+  if (finnhubFeed?.enabled?.()) {
+    try {
+      const isCrypto = symbol.endsWith('USDT') || symbol.endsWith('USDC') || symbol.endsWith('BTC');
+      const category = isCrypto ? 'crypto' : 'forex';
+      const cached = _newsCache[category];
+      const stale = !cached || (Date.now() - cached.ts) > 15 * 60000;
+      let raw = cached?.articles;
+      if (stale) {
+        raw = await finnhubFeed.marketNews(category);
+        _newsCache[category] = { articles: raw, ts: Date.now() };
+      }
+      if (Array.isArray(raw) && raw.length) {
+        // Map Finnhub's {headline, summary, datetime (unix seconds), source,
+        // url} shape to what NLPAnalyzer.aggregateArticles() expects.
+        data.articles = raw.slice(0, 20).map(a => ({
+          title: a.headline,
+          description: a.summary,
+          content: '',
+          source: { name: a.source },
+          publishedAt: (a.datetime ? a.datetime * 1000 : Date.now()),
+          url: a.url,
+        }));
+      }
+    } catch (err) {
+      log.debug(`Finnhub news fetch failed for ${symbol}: ${err.message}`);
     }
   }
 
