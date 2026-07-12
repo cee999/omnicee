@@ -91,7 +91,7 @@ class BacktestEngine {
     this.statValidator = new StatisticalValidator({ minTestsPassed: 5, significanceLevel: 0.05 });
     this.ensembleEng = new EnsembleEngine({ minConfidence: 60 });
     this.riskEngine = new RiskEngine({
-      accountBalance: this.accountBalance, riskPct: this.riskPct, sizingMethod: 'ATR', drawdownGuard: this.drawdownGuard,
+      accountBalance: this.accountBalance, riskPct: this.riskPct, sizingMethod: 'ATR', useKelly: true, drawdownGuard: this.drawdownGuard,
     });
     this.sessionFilter = new SessionFilter();
     this.correlationFilter = new CorrelationFilter({ maxOpenPositions: 5 });
@@ -371,6 +371,9 @@ class BacktestEngine {
     }
     if (this.walkForward?.recordOutcome) {
       this.walkForward.recordOutcome({ signal, outcome: { pnlR } });
+    }
+    if (this.riskEngine?.recordTrade) {
+      this.riskEngine.recordTrade({ pnlR });
     }
     delete this.openPositions[symbol];
   }

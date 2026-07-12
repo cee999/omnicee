@@ -903,7 +903,7 @@ function buildSingletons() {
       if (!recordOutcomeEverywhere) return;
       const result = await recordOutcomeEverywhere({
         signalId, signal, outcome, mongoStore,
-        engines: { adaptiveLearning, bayesianEng, walkForward, institutionalGates, sessionFilter, drawdownGuard, institutionalRiskManager },
+        engines: { adaptiveLearning, bayesianEng, walkForward, institutionalGates, sessionFilter, drawdownGuard, institutionalRiskManager, riskEngine },
       });
       if (!result.ok) {
         log.warn(`/${outcome.result?.toLowerCase()} outcome recording failed for ${signalId}: ${result.error}`);
@@ -1034,6 +1034,13 @@ function buildSingletons() {
       accountBalance: ACCOUNT_BALANCE,
       riskPct:        RISK_PCT,
       sizingMethod:   'ATR',
+      // FIX: useKelly defaulted to false and _performanceStats had zero real
+      // trade data feeding it (recordTrade() existed with no call sites) —
+      // now wired via signal-pipeline/outcome-recorder.js. Safe to enable:
+      // the Kelly overlay only ever REDUCES size below the ATR-based amount
+      // (see position-sizer.js ~line 465 — `if (kellySize < sizing.units)`),
+      // never increases it, and stays inactive until 10+ real trades exist.
+      useKelly:       true,
       // FIX: without this, DrawdownGuard's circuit breaker never actually
       // influenced position sizing/approval — see position-sizer.js.
       drawdownGuard,

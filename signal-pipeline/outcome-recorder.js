@@ -52,6 +52,12 @@ async function recordOutcomeEverywhere({ signalId, signal, outcome, mongoStore, 
     });
   } catch (_) {}
   try { engines.institutionalRiskManager?.recordTradeResult(saved.symbol, saved.pnlR, saved.closedAt); } catch (_) {}
+  // FIX: RiskEngine.recordTrade() (risk-engine/position-sizer.js) feeds the
+  // performance stats (win rate, avg win, avg loss) that its own internal
+  // Kelly Criterion overlay requires 10+ real trades of before it will ever
+  // activate — this method existed with zero call sites anywhere, so even
+  // with useKelly:true configured, the overlay could never turn on.
+  try { engines.riskEngine?.recordTrade({ pnlR: saved.pnlR }); } catch (_) {}
 
   return { ok: true, saved, isWin };
 }
