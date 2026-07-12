@@ -1609,9 +1609,9 @@ class AlertDispatcher extends EventEmitter {
         case 'LOSS':
         case 'BE': {
           const result  = action;
-          // FIX: guard against double-tapping the same button (or Telegram
-          // redelivering the callback), which would otherwise double-count
-          // this outcome across every engine in the pipeline below.
+          // Guard against double-tapping the same button (or Telegram
+          // redelivering the callback) at the UI layer, before the
+          // storage-level dedupe check in recordOutcomeEverywhere even runs.
           if (this._recordedOutcomes.has(signalId)) {
             await this._client.answerCallback(callbackQueryId, 'Already recorded for this signal', true);
             break;
@@ -1620,11 +1620,10 @@ class AlertDispatcher extends EventEmitter {
 
           // NOTE: these are placeholder R-multiples for a single quick tap —
           // a button can't capture the real P&L of a specific trade. This is
-          // a genuine UX limitation, not something the wiring fix below can
-          // solve; flagging rather than pretending otherwise.
+          // a genuine UX limitation, not something wiring can fix.
           const pnlMap  = { WIN: 1.5, LOSS: -1, BE: 0 };
           const pnlR    = pnlMap[result];
-          const outcome = { result, pnlPct: pnlR, note: `Recorded via Telegram callback` };
+          const outcome = { result, pnlPct: pnlR, pnlR, note: `Recorded via Telegram callback` };
 
           if (this.scorer) {
             this.scorer.recordTradeOutcome(signalId, outcome);
@@ -1635,26 +1634,27 @@ class AlertDispatcher extends EventEmitter {
           // scorer.recordTradeOutcome(), which updates a SEPARATE circuit
           // breaker (signal-scorer.js's own DrawdownCircuitBreaker) that is
           // NOT the same object as drawdownGuard (risk-engine/drawdown-guard.js),
-          // which is what actually gates new trades pre-signal (wired in
-          // earlier this session). It also never touched adaptiveLearning,
-          // bayesianEng, walkForward, institutionalGates, or sessionFilter.
-          // That meant every one of those systems' real-world feedback loop
-          // was blind to any trade recorded via Telegram — only outcomes
-          // recorded through the Mini App's /api/outcomes ever reached them.
+          // which is what actually gates new trades pre-signal. It also never
+          // touched adaptiveLearning, bayesianEng, walkForward,
+          // institutionalGates, sessionFilter, or institutionalRiskManager.
+          // FIX (reconciled during merge): an earlier version of this fix
+          // called the engines directly here, un-awaited, and ALSO emitted
+          // 'trade_outcome' below — which index.js listens for and records
+          // through the same pipeline again. Un-awaited + emit-right-after
+          // is a real race: the direct call's mongoStore write might not be
+          // durable yet when the listener's dedupe check runs, double-
+          // counting the outcome. Call the single shared implementation and
+          // await it here instead — one write, no race, and the emit below
+          // becomes a safe, idempotent no-op for any other listener.
           try {
-            const liveEngines = require('../api/realtime').getEngines();
-            const isWin = pnlR > 0;
-            const symbol = signal?.symbol;
-            liveEngines.adaptiveLearning?.recordOutcome?.({ signalId, signal, outcome: { pnlR, result } }).catch(() => {});
-            liveEngines.bayesianEng?.recordOutcome?.({ signal, outcome: { pnlR, result }, regime: signal?.regime, session: signal?.session });
-            liveEngines.walkForward?.recordOutcome?.({ signal, outcome: { pnlR, result } });
-            if (symbol) liveEngines.institutionalGates?.recordSymbolOutcome?.(symbol, isWin);
-            if (symbol) liveEngines.sessionFilter?.recordOutcome?.({ symbol, result: isWin ? 'WIN' : 'LOSS', pnlPct: pnlR, timestamp: Date.now() });
-            liveEngines.drawdownGuard?.record?.({
-              pnlPct: pnlR, won: isWin, symbol, signalId,
-              grade: signal?.score?.grade, pnlR,
+            const { recordOutcomeEverywhere } = require('./outcome-recorder');
+            const { getEngines } = require('../api/realtime');
+            const mongoStore = require('../db');
+            await recordOutcomeEverywhere({
+              signalId, signal, outcome: { pnlR, result },
+              mongoStore, engines: getEngines(),
             });
-          } catch (_) { /* registry not available (e.g. standalone dispatcher usage) — non-fatal */ }
+          } catch (_) { /* registry/db not available (e.g. standalone dispatcher usage) — non-fatal */ }
 
           await this._client.answerCallback(callbackQueryId, `${result} recorded!`, true);
           this.emit('trade_outcome', { signalId, outcome, signal });
