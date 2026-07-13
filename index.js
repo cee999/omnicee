@@ -81,6 +81,7 @@ try {
 
 const { AlertDispatcher }    = loadModule('./signal-pipeline/alert-dispatcher',  'AlertDispatcher')    || {};
 const { recordOutcomeEverywhere } = loadModule('./signal-pipeline/outcome-recorder', 'OutcomeRecorder') || {};
+const { ExecutionEngine }    = loadModule('./signal-pipeline/manual-mode',       'ExecutionEngine')    || {};
 const { BinanceFeed }        = loadModule('./feeds/binance-ws',                  'BinanceFeed')        || {};
 const { BybitFeed }           = loadModule('./feeds/bybit-ws',                    'BybitFeed')          || {};
 const { TwelveDataFeed }     = loadModule('./feeds/twelve-data',                 'TwelveDataFeed')     || {};
@@ -652,7 +653,18 @@ async function runAnalysisCycle(symbol, timeframe) {
     }
 
     // ── Dispatch to Telegram ──
-    if (dispatcher?.sendSignal) {
+    // FIX: when ExecutionEngine is active, route through it instead of
+    // calling dispatcher.sendSignal() directly — onSignal() calls
+    // dispatcher.sendSignal() internally (so the Telegram message is
+    // unchanged) but ALSO journals the signal and registers it in
+    // ExecutionEngine's own pending-signals map, which is required for the
+    // TAKE/WATCH buttons to find it by signalId later. Without this, those
+    // buttons would always fail with "signal not found or expired".
+    if (executionEngine?.onSignal) {
+      await executionEngine.onSignal(fullSignal).catch(e => {
+        log.error(`ExecutionEngine dispatch error: ${e.message}`);
+      });
+    } else if (dispatcher?.sendSignal) {
       await dispatcher.sendSignal(fullSignal).catch(e => {
         log.error(`Dispatch error: ${e.message}`);
       });
@@ -847,6 +859,19 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
     if (liveOI.openInterest != null) target.openInterest = liveOI.openInterest;
   }
 
+  // FIX: manual-mode.js's ExecutionEngine needs a live price feed to detect
+  // TP/SL/breakeven/trailing hits on manually-tracked positions. Runs on
+  // every tick (not gated by isClosed) for timely execution — a position
+  // shouldn't have to wait for candle close to register a stop-out.
+  // ATR is intentionally omitted for now (only affects the ATR-based
+  // trailing-distance branch inside onPrice — core TP/SL/BE detection via
+  // Position.onPrice() doesn't require it); a follow-up could source it from
+  // the same ATRCalculator sl-tp-engine.js already uses.
+  if (executionEngine?.onPrice && candle) {
+    try { executionEngine.onPrice(symbol, candle.close, null); }
+    catch (e) { log.warn(`ExecutionEngine.onPrice error [${symbol}]: ${e.message}`); }
+  }
+
   // Only run analysis on closed candles to avoid noise
   if (isClosed) {
     // Stream latest price to Mini App
@@ -868,7 +893,7 @@ let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, institutionalGates,
     adaptiveLearning, drawdownGuard, riskEngine, sessionFilter, correlationFilter, memory,
     monteCarlo, bayesianEng, statValidator, walkForward, ensembleEng,
     signalMonitor, institutionalRiskManager, executionManagers, myfxbookFeed, openInsiderFeed,
-    finnhubFeed, cftcCotFeed, cotParser;
+    finnhubFeed, cftcCotFeed, cotParser, executionEngine;
 
 // FIX: ExecutionManager's MarketMicrostructureAnalyzer keeps a single shared
 // orderBookHistory/tradeHistory/spreadHistory with no per-symbol keying — one
@@ -946,9 +971,60 @@ function buildSingletons() {
     scorer.on('signal', (sig) => {
       log.info(`[Scorer signal event] ${sig.action} ${sig.symbol} score=${sig.score?.final}`);
     });
+    // FIX: AlertDispatcher was constructed without `scorer` in its config,
+    // so this.scorer was always null in production — silently no-opping the
+    // WIN/LOSS/BE handler's scorer.recordTradeOutcome() call and leaving
+    // getStats()'s scorer/risk/signals fields permanently empty.
+    if (dispatcher) dispatcher.scorer = scorer;
     log.info('SignalScorer created');
   } else {
     log.error('SignalScorer module missing — signals cannot be scored');
+  }
+
+  // FIX: manual-mode.js's ExecutionEngine (~1,700 lines — SignalJournal,
+  // RiskEnforcer, PriceMonitor, partial TP/trailing/breakeven tracking) was
+  // imported nowhere in the entire codebase. Mode is MANUAL (not SEMI_AUTO):
+  // no exchange orders are placed — that's what the MT5 EA bridge is for.
+  // This purely tracks trades a person takes manually off the Telegram
+  // signal, with real price-driven TP/SL/BE/trail detection instead of the
+  // WIN/LOSS/BE buttons' guessed R-multiples.
+  if (ExecutionEngine && dispatcher) {
+    executionEngine = new ExecutionEngine({
+      mode: 'MANUAL',
+      dispatcher,
+      drawdownGuard,
+      maxOpenPositions: 5,
+      maxRiskPct: RISK_PCT * 3, // hard ceiling across all concurrently-tracked manual positions
+      sendJournalDaily: true,
+    });
+    dispatcher.executionEngine = executionEngine; // consumed by _handleCallback's TAKE/WATCH cases
+
+    // FIX: real, computed P&L from actual price action — closing this loop
+    // properly is what the WIN/LOSS/BE buttons could never do (they only
+    // ever recorded a placeholder R-multiple). Feed the SAME comprehensive
+    // outcome pipeline used by /api/outcomes and the WIN/LOSS/BE fix above.
+    executionEngine.on('position_closed', ({ position, outcome }) => {
+      try {
+        const liveEngines = require('./api/realtime').getEngines();
+        const signal = { symbol: position.symbol, regime: position.regime, session: position.session, score: { grade: position.grade } };
+        const isWin = outcome.pnlR > 0;
+        liveEngines.adaptiveLearning?.recordOutcome?.({ signalId: position.signalId, signal, outcome }).catch?.(() => {});
+        liveEngines.bayesianEng?.recordOutcome?.({ signal, outcome, regime: position.regime, session: position.session });
+        liveEngines.walkForward?.recordOutcome?.({ signal, outcome });
+        liveEngines.institutionalGates?.recordSymbolOutcome?.(position.symbol, isWin);
+        liveEngines.sessionFilter?.recordOutcome?.({ symbol: position.symbol, result: isWin ? 'WIN' : 'LOSS', pnlPct: outcome.pnlPct, timestamp: Date.now() });
+        // NOTE: drawdownGuard.record() is intentionally NOT called again here —
+        // ExecutionEngine._handlePositionClosed() already calls this._dd.record()
+        // directly with the real outcome (see manual-mode.js), so calling it
+        // again here would double-count this specific trade in the circuit
+        // breaker's daily PnL. All the OTHER engines above have no such
+        // built-in call, so they still need it.
+      } catch (err) {
+        log.warn(`Manual-mode outcome pipeline error: ${err.message}`);
+      }
+    });
+
+    log.info('ExecutionEngine created (MANUAL mode) — Take/Watch buttons active');
   }
 
   // SL/TP Engine

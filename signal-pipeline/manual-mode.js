@@ -276,7 +276,16 @@ class Position {
     }
 
     // ── TP3 Hit ──
-    if (!this.tp2Closed && this.tp3) {
+    // FIX: was `if (!this.tp2Closed && this.tp3)` — the outer guard required
+    // tp2Closed to be FALSE to even enter this block, but the inner
+    // condition immediately below required tp1Closed && tp2Closed to be
+    // TRUE. These can never both hold, so TP3_HIT could structurally never
+    // fire, no matter what price did — a position could never close via its
+    // final target. Confirmed by a full onSignal->onTrade->onPrice test:
+    // price hit tp3 exactly and no TP3_HIT action was ever generated.
+    // Matches the pattern from the (correctly written) TP2 guard just below:
+    // require the PRIOR tier closed, not require it NOT closed.
+    if (this.tp2Closed && this.tp3) {
       const tp3Hit = isLong ? price >= this.tp3 : price <= this.tp3;
       if (tp3Hit && this.tp1Closed && this.tp2Closed) {
         this.state = POSITION_STATE.TP3_HIT;

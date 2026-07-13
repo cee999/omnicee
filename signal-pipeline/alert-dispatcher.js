@@ -644,6 +644,16 @@ class KeyboardBuilder {
           { text: `📊 Details`,  callback_data: `DETAILS:${signalId}` },
           { text: `📈 Chart`,    callback_data: `CHART:${symbol}` },
         ],
+        // FIX: added — these are the entry point into manual-mode.js's
+        // ExecutionEngine, which was fully built but never wired anywhere.
+        // Unlike the WIN/LOSS/BE row below (a single guessed R-multiple),
+        // tapping Take starts REAL position tracking: TP/SL/breakeven/trail
+        // are detected from actual price action and the position is closed
+        // with a computed, accurate pnlR — not a placeholder.
+        [
+          { text: `📝 Take (Track)`, callback_data: `TAKE:${signalId}` },
+          { text: `👁 Watch`,         callback_data: `WATCH:${signalId}` },
+        ],
         [
           { text: `🏆 Win`,       callback_data: `WIN:${signalId}` },
           { text: `💀 Loss`,      callback_data: `LOSS:${signalId}` },
@@ -1294,6 +1304,43 @@ class AlertDispatcher extends EventEmitter {
   }
 
   /**
+   * Send an arbitrary HTML-formatted message (used by ExecutionEngine for
+   * entry-blocked/warning/order-failure notices — same missing-method
+   * pattern as sendTPHit et al above).
+   */
+  async sendCustom(text, options = {}) {
+    for (const chatId of this._getAllChatIds()) {
+      this._queue.push({
+        priority: options.silent ? PRIORITY.LOW : PRIORITY.NORMAL,
+        chatId,
+        fn: async () => { await this._client.sendMessage(chatId, text, { silent: options.silent }); },
+      });
+    }
+  }
+
+  /**
+   * Send the end-of-day manual-mode journal summary (signals, risk, best
+   * setup) — called once daily by ExecutionEngine._scheduleDailySummary().
+   */
+  async sendDailySummary({ signals = {}, risk = {}, sessions = {}, topSetup = null } = {}) {
+    const lines = [
+      `${EMOJI.BRAIN} <b>Daily Summary</b>`,
+      '',
+      `Signals fired: ${signals.fired ?? 0} | Trades: ${(signals.wins || 0) + (signals.losses || 0)}`,
+      `Win rate: ${signals.winRate != null ? signals.winRate + '%' : 'n/a'} | Profit factor: ${signals.profitFactor ?? 'n/a'}`,
+      `Avg win: ${signals.avgWin ?? 'n/a'}R | Avg loss: ${signals.avgLoss ?? 'n/a'}R`,
+      '',
+      `Daily PnL: ${risk.dailyPnl != null ? risk.dailyPnl + '%' : 'n/a'} | Drawdown: ${risk.drawdown != null ? risk.drawdown + '%' : 'n/a'}`,
+    ];
+    if (topSetup) lines.push('', `Best setup today: ${topSetup}`);
+
+    const text = lines.join('\n');
+    for (const chatId of this._getAllChatIds()) {
+      this._queue.push({ priority: PRIORITY.LOW, chatId, fn: async () => { await this._client.sendMessage(chatId, text); } });
+    }
+  }
+
+  /**
    * Send whale trade detection alert
    */
   async sendWhaleTrade(trade) {
@@ -1658,6 +1705,30 @@ class AlertDispatcher extends EventEmitter {
 
           await this._client.answerCallback(callbackQueryId, `${result} recorded!`, true);
           this.emit('trade_outcome', { signalId, outcome, signal });
+          break;
+        }
+
+        case 'TAKE': {
+          if (!this.executionEngine) {
+            await this._client.answerCallback(callbackQueryId, 'Manual tracking is not enabled.', true);
+            break;
+          }
+          const result = await this.executionEngine.onTrade(signalId, {}).catch(e => ({ success: false, reason: e.message }));
+          if (!result?.success) {
+            await this._client.answerCallback(callbackQueryId, `Could not start tracking: ${result?.reason || 'unknown error'}`, true);
+          } else {
+            await this._client.answerCallback(callbackQueryId, '📝 Tracking this trade — TP/SL/BE alerts will follow live price.', true);
+          }
+          break;
+        }
+
+        case 'WATCH': {
+          if (!this.executionEngine) {
+            await this._client.answerCallback(callbackQueryId, 'Manual tracking is not enabled.', true);
+            break;
+          }
+          await this.executionEngine.onWatch(signalId).catch(() => {});
+          await this._client.answerCallback(callbackQueryId, '👁 Watching — no position opened.', false);
           break;
         }
 
