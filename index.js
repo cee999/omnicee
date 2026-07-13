@@ -1003,22 +1003,40 @@ function buildSingletons() {
     // properly is what the WIN/LOSS/BE buttons could never do (they only
     // ever recorded a placeholder R-multiple). Feed the SAME comprehensive
     // outcome pipeline used by /api/outcomes and the WIN/LOSS/BE fix above.
-    executionEngine.on('position_closed', ({ position, outcome }) => {
+    executionEngine.on('position_closed', async ({ position, outcome }) => {
+      if (!recordOutcomeEverywhere) return;
       try {
+        // FIX: fetch the actual full stored signal (matching the pattern
+        // /api/outcomes already uses) instead of reconstructing a minimal
+        // one from Position's own limited fields — adaptiveLearning.
+        // recordOutcome()'s fingerprint() needs entry/tradePlan/riskEvaluation
+        // fields that Position doesn't carry.
+        const recent = await mongoStore.getRecentSignals?.({ limit: 200 }).catch(() => []);
+        const signal = (recent || []).find(s => s.id === position.signalId) || {
+          id: position.signalId, symbol: position.symbol, regime: position.regime,
+          session: position.session, score: { grade: position.grade },
+        };
+
         const liveEngines = require('./api/realtime').getEngines();
-        const signal = { symbol: position.symbol, regime: position.regime, session: position.session, score: { grade: position.grade } };
-        const isWin = outcome.pnlR > 0;
-        liveEngines.adaptiveLearning?.recordOutcome?.({ signalId: position.signalId, signal, outcome }).catch?.(() => {});
-        liveEngines.bayesianEng?.recordOutcome?.({ signal, outcome, regime: position.regime, session: position.session });
-        liveEngines.walkForward?.recordOutcome?.({ signal, outcome });
-        liveEngines.institutionalGates?.recordSymbolOutcome?.(position.symbol, isWin);
-        liveEngines.sessionFilter?.recordOutcome?.({ symbol: position.symbol, result: isWin ? 'WIN' : 'LOSS', pnlPct: outcome.pnlPct, timestamp: Date.now() });
-        // NOTE: drawdownGuard.record() is intentionally NOT called again here —
-        // ExecutionEngine._handlePositionClosed() already calls this._dd.record()
-        // directly with the real outcome (see manual-mode.js), so calling it
-        // again here would double-count this specific trade in the circuit
-        // breaker's daily PnL. All the OTHER engines above have no such
-        // built-in call, so they still need it.
+        // FIX: refactored to use the shared recordOutcomeEverywhere utility
+        // instead of hand-rolled duplicate calls — picks up
+        // institutionalRiskManager.recordTradeResult() and
+        // riskEngine.recordTrade() (feeds the Kelly Criterion overlay) which
+        // this listener was originally missing, and gets cross-path
+        // idempotency for free via mongoStore.getTradeOutcome() (e.g. if
+        // this same signal was somehow also WIN/LOSS/BE-tapped).
+        // drawdownGuard is deliberately OMITTED from the engines object here:
+        // ExecutionEngine._handlePositionClosed() already calls
+        // this._dd.record() directly with the real outcome (see
+        // manual-mode.js) — including it here would double-count this
+        // trade's PnL in the circuit breaker's daily total.
+        const { drawdownGuard: _omit, ...engines } = liveEngines;
+        const result = await recordOutcomeEverywhere({
+          signalId: position.signalId, signal, outcome, mongoStore, engines,
+        });
+        if (!result.ok && result.error !== 'Outcome already recorded for this signal') {
+          log.warn(`Manual-mode outcome recording failed for ${position.signalId}: ${result.error}`);
+        }
       } catch (err) {
         log.warn(`Manual-mode outcome pipeline error: ${err.message}`);
       }
