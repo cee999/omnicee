@@ -80,6 +80,8 @@ try {
 }
 
 const { AlertDispatcher }    = loadModule('./signal-pipeline/alert-dispatcher',  'AlertDispatcher')    || {};
+const { recordOutcomeEverywhere } = loadModule('./signal-pipeline/outcome-recorder', 'OutcomeRecorder') || {};
+const { ExecutionEngine }    = loadModule('./signal-pipeline/manual-mode',       'ExecutionEngine')    || {};
 const { BinanceFeed }        = loadModule('./feeds/binance-ws',                  'BinanceFeed')        || {};
 const { BybitFeed }           = loadModule('./feeds/bybit-ws',                    'BybitFeed')          || {};
 const { TwelveDataFeed }     = loadModule('./feeds/twelve-data',                 'TwelveDataFeed')     || {};
@@ -669,7 +671,18 @@ async function runAnalysisCycle(symbol, timeframe) {
     }
 
     // ── Dispatch to Telegram ──
-    if (dispatcher?.sendSignal) {
+    // FIX: when ExecutionEngine is active, route through it instead of
+    // calling dispatcher.sendSignal() directly — onSignal() calls
+    // dispatcher.sendSignal() internally (so the Telegram message is
+    // unchanged) but ALSO journals the signal and registers it in
+    // ExecutionEngine's own pending-signals map, which is required for the
+    // TAKE/WATCH buttons to find it by signalId later. Without this, those
+    // buttons would always fail with "signal not found or expired".
+    if (executionEngine?.onSignal) {
+      await executionEngine.onSignal(fullSignal).catch(e => {
+        log.error(`ExecutionEngine dispatch error: ${e.message}`);
+      });
+    } else if (dispatcher?.sendSignal) {
       await dispatcher.sendSignal(fullSignal).catch(e => {
         log.error(`Dispatch error: ${e.message}`);
       });
@@ -864,6 +877,19 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
     if (liveOI.openInterest != null) target.openInterest = liveOI.openInterest;
   }
 
+  // FIX: manual-mode.js's ExecutionEngine needs a live price feed to detect
+  // TP/SL/breakeven/trailing hits on manually-tracked positions. Runs on
+  // every tick (not gated by isClosed) for timely execution — a position
+  // shouldn't have to wait for candle close to register a stop-out.
+  // ATR is intentionally omitted for now (only affects the ATR-based
+  // trailing-distance branch inside onPrice — core TP/SL/BE detection via
+  // Position.onPrice() doesn't require it); a follow-up could source it from
+  // the same ATRCalculator sl-tp-engine.js already uses.
+  if (executionEngine?.onPrice && candle) {
+    try { executionEngine.onPrice(symbol, candle.close, null); }
+    catch (e) { log.warn(`ExecutionEngine.onPrice error [${symbol}]: ${e.message}`); }
+  }
+
   // Only run analysis on closed candles to avoid noise
   if (isClosed) {
     // Stream latest price to Mini App
@@ -885,7 +911,7 @@ let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, institutionalGates,
     adaptiveLearning, drawdownGuard, riskEngine, sessionFilter, correlationFilter, memory,
     monteCarlo, bayesianEng, statValidator, walkForward, ensembleEng,
     signalMonitor, institutionalRiskManager, executionManagers, myfxbookFeed, openInsiderFeed,
-    finnhubFeed, cftcCotFeed, cotParser;
+    finnhubFeed, cftcCotFeed, cotParser, executionEngine;
 
 // FIX: ExecutionManager's MarketMicrostructureAnalyzer keeps a single shared
 // orderBookHistory/tradeHistory/spreadHistory with no per-symbol keying — one
@@ -908,6 +934,26 @@ function buildSingletons() {
   if (AlertDispatcher && BOT_TOKEN) {
     dispatcher = new AlertDispatcher({ token: BOT_TOKEN, chatIds: CHAT_IDS, store: mongoStore });
     log.info(`AlertDispatcher created — ${CHAT_IDS.length} chat(s) + auto-subscribe enabled`);
+
+    // FIX: the /win, /loss, /be Telegram commands emitted 'trade_outcome' but
+    // nothing in this file ever listened for it — dispatcher._recordOutcome()
+    // sent a confirmation message and recorded the outcome NOWHERE (it called
+    // `this.scorer.recordTradeOutcome()`, and `dispatcher.scorer` is never
+    // assigned anywhere in this codebase). This is the primary real-world way
+    // a manual-mode user reports a trade result, so wire it into the same
+    // pipeline /api/outcomes and the record_outcome socket event already use.
+    dispatcher.on('trade_outcome', async ({ signalId, outcome, signal }) => {
+      if (!recordOutcomeEverywhere) return;
+      const result = await recordOutcomeEverywhere({
+        signalId, signal, outcome, mongoStore,
+        engines: { adaptiveLearning, bayesianEng, walkForward, institutionalGates, sessionFilter, drawdownGuard, institutionalRiskManager, riskEngine },
+      });
+      if (!result.ok) {
+        log.warn(`/${outcome.result?.toLowerCase()} outcome recording failed for ${signalId}: ${result.error}`);
+      } else {
+        log.info(`Outcome recorded via Telegram command: ${signalId} → ${result.saved.result} (${result.saved.pnlR}R)`);
+      }
+    });
   } else {
     log.warn('AlertDispatcher disabled — no BOT_TOKEN or module missing');
     dispatcher = null;
@@ -943,9 +989,78 @@ function buildSingletons() {
     scorer.on('signal', (sig) => {
       log.info(`[Scorer signal event] ${sig.action} ${sig.symbol} score=${sig.score?.final}`);
     });
+    // FIX: AlertDispatcher was constructed without `scorer` in its config,
+    // so this.scorer was always null in production — silently no-opping the
+    // WIN/LOSS/BE handler's scorer.recordTradeOutcome() call and leaving
+    // getStats()'s scorer/risk/signals fields permanently empty.
+    if (dispatcher) dispatcher.scorer = scorer;
     log.info('SignalScorer created');
   } else {
     log.error('SignalScorer module missing — signals cannot be scored');
+  }
+
+  // FIX: manual-mode.js's ExecutionEngine (~1,700 lines — SignalJournal,
+  // RiskEnforcer, PriceMonitor, partial TP/trailing/breakeven tracking) was
+  // imported nowhere in the entire codebase. Mode is MANUAL (not SEMI_AUTO):
+  // no exchange orders are placed — that's what the MT5 EA bridge is for.
+  // This purely tracks trades a person takes manually off the Telegram
+  // signal, with real price-driven TP/SL/BE/trail detection instead of the
+  // WIN/LOSS/BE buttons' guessed R-multiples.
+  if (ExecutionEngine && dispatcher) {
+    executionEngine = new ExecutionEngine({
+      mode: 'MANUAL',
+      dispatcher,
+      drawdownGuard,
+      maxOpenPositions: 5,
+      maxRiskPct: RISK_PCT * 3, // hard ceiling across all concurrently-tracked manual positions
+      sendJournalDaily: true,
+    });
+    dispatcher.executionEngine = executionEngine; // consumed by _handleCallback's TAKE/WATCH cases
+
+    // FIX: real, computed P&L from actual price action — closing this loop
+    // properly is what the WIN/LOSS/BE buttons could never do (they only
+    // ever recorded a placeholder R-multiple). Feed the SAME comprehensive
+    // outcome pipeline used by /api/outcomes and the WIN/LOSS/BE fix above.
+    executionEngine.on('position_closed', async ({ position, outcome }) => {
+      if (!recordOutcomeEverywhere) return;
+      try {
+        // FIX: fetch the actual full stored signal (matching the pattern
+        // /api/outcomes already uses) instead of reconstructing a minimal
+        // one from Position's own limited fields — adaptiveLearning.
+        // recordOutcome()'s fingerprint() needs entry/tradePlan/riskEvaluation
+        // fields that Position doesn't carry.
+        const recent = await mongoStore.getRecentSignals?.({ limit: 200 }).catch(() => []);
+        const signal = (recent || []).find(s => s.id === position.signalId) || {
+          id: position.signalId, symbol: position.symbol, regime: position.regime,
+          session: position.session, score: { grade: position.grade },
+        };
+
+        const liveEngines = require('./api/realtime').getEngines();
+        // FIX: refactored to use the shared recordOutcomeEverywhere utility
+        // instead of hand-rolled duplicate calls — picks up
+        // institutionalRiskManager.recordTradeResult() and
+        // riskEngine.recordTrade() (feeds the Kelly Criterion overlay) which
+        // this listener was originally missing, and gets cross-path
+        // idempotency for free via mongoStore.getTradeOutcome() (e.g. if
+        // this same signal was somehow also WIN/LOSS/BE-tapped).
+        // drawdownGuard is deliberately OMITTED from the engines object here:
+        // ExecutionEngine._handlePositionClosed() already calls
+        // this._dd.record() directly with the real outcome (see
+        // manual-mode.js) — including it here would double-count this
+        // trade's PnL in the circuit breaker's daily total.
+        const { drawdownGuard: _omit, ...engines } = liveEngines;
+        const result = await recordOutcomeEverywhere({
+          signalId: position.signalId, signal, outcome, mongoStore, engines,
+        });
+        if (!result.ok && result.error !== 'Outcome already recorded for this signal') {
+          log.warn(`Manual-mode outcome recording failed for ${position.signalId}: ${result.error}`);
+        }
+      } catch (err) {
+        log.warn(`Manual-mode outcome pipeline error: ${err.message}`);
+      }
+    });
+
+    log.info('ExecutionEngine created (MANUAL mode) — Take/Watch buttons active');
   }
 
   // SL/TP Engine
@@ -1031,6 +1146,13 @@ function buildSingletons() {
       accountBalance: ACCOUNT_BALANCE,
       riskPct:        RISK_PCT,
       sizingMethod:   'ATR',
+      // FIX: useKelly defaulted to false and _performanceStats had zero real
+      // trade data feeding it (recordTrade() existed with no call sites) —
+      // now wired via signal-pipeline/outcome-recorder.js. Safe to enable:
+      // the Kelly overlay only ever REDUCES size below the ATR-based amount
+      // (see position-sizer.js ~line 465 — `if (kellySize < sizing.units)`),
+      // never increases it, and stays inactive until 10+ real trades exist.
+      useKelly:       true,
       // FIX: without this, DrawdownGuard's circuit breaker never actually
       // influenced position sizing/approval — see position-sizer.js.
       drawdownGuard,

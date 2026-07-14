@@ -16,6 +16,7 @@ const { telegramAuthMiddleware, validateTelegramInitData } = require('./telegram
 const { FinnhubFeed } = require('../feeds/finnhub-feed');
 const { AdaptiveLearningEngine } = require('../signal-pipeline/adaptive-learning-engine');
 const { MarketOutlookBuilder } = require('../signal-pipeline/market-outlook');
+const { recordOutcomeEverywhere } = require('../signal-pipeline/outcome-recorder');
 
 const API_PORT = Number(process.env.PORT || process.env.WS_PORT || 3001);
 const STATIC_ROOT = path.join(__dirname, '..', 'webapp');
@@ -136,70 +137,15 @@ function createApp() {
     const { signalId, outcome } = req.body || {};
     if (!signalId || !outcome) return res.status(400).json({ ok: false, error: 'signalId and outcome are required' });
 
-    // FIX: defense-in-depth against double-recording. None of the engines
-    // this endpoint feeds (Q-table, Bayesian posteriors, drawdown daily PnL,
-    // symbol loss-streak) have their own idempotency check, so any duplicate
-    // submission for the same signalId — a double-click, a network retry, or
-    // (as found and fixed separately) the Mini App calling both this REST
-    // endpoint and the record_outcome socket event for one click — would
-    // silently double-count every learning update. Reject repeats outright.
-    const existing = await db.getTradeOutcome(signalId).catch(() => null);
-    if (existing) return res.status(409).json({ ok: false, error: 'Outcome already recorded for this signal', outcome: existing });
-
     const [signal] = await db.getRecentSignals({ limit: 200 }).then(list => list.filter(s => s.id === signalId)).catch(() => []);
-    if (!signal) return res.status(404).json({ ok: false, error: 'Signal not found in MongoDB history' });
 
-    // FIX: use the live singleton instances from index.js when running together
-    // (npm run start:all / pm2), so real outcomes update the SAME objects the
-    // signal-scoring pipeline actually consults, not a disconnected local copy.
-    const liveEngines = getEngines();
-    const activeLearningEngine = liveEngines.adaptiveLearning || learningEngine;
-
-    const saved = await activeLearningEngine.recordOutcome({ signalId, signal, outcome }).catch(err => {
-      res.status(503).json({ ok: false, error: err.message });
-      return null;
+    const result = await recordOutcomeEverywhere({
+      signalId, signal, outcome, mongoStore: db,
+      engines: getEngines(), fallbackLearningEngine: learningEngine,
     });
-    if (!saved) return;
+    if (!result.ok) return res.status(result.status || 500).json({ ok: false, error: result.error, outcome: result.outcome });
 
-    // FIX: bayesianEngine, walkForwardOptimizer, institutionalGates, and
-    // drawdownGuard were never fed real trade outcomes ANYWHERE in the
-    // codebase — their .recordOutcome()/.recordSymbolOutcome()/.record()
-    // methods existed but had zero call sites. That meant: Bayesian's
-    // symbol/regime/session models stayed at the cold 50/50 prior forever;
-    // walk-forward's out-of-sample history could never accumulate (analyze()
-    // always returned sufficient:false); the per-symbol consecutive-loss
-    // circuit breaker in institutional-gates.js could never trip; and
-    // drawdownGuard's real daily/weekly PnL and consecutive-loss tracking
-    // never updated even though evaluate() now gates on it. Wired all four in.
-    const isWin = (saved.pnlR || 0) > 0;
-    try { liveEngines.bayesianEng?.recordOutcome({ signal, outcome, regime: signal?.regime, session: signal?.session }); } catch (_) {}
-    try { liveEngines.walkForward?.recordOutcome({ signal, outcome }); } catch (_) {}
-    try { liveEngines.institutionalGates?.recordSymbolOutcome(saved.symbol, isWin); } catch (_) {}
-    try { liveEngines.sessionFilter?.recordOutcome({ symbol: saved.symbol, result: isWin ? 'WIN' : 'LOSS', pnlPct: saved.pnlPct, timestamp: saved.closedAt || Date.now() }); } catch (_) {}
-    try {
-      liveEngines.drawdownGuard?.record({
-        pnlPct: Number(saved.pnlPct || 0),
-        won: isWin,
-        symbol: saved.symbol,
-        signalId: saved.signalId,
-        grade: signal?.score?.grade,
-        pnlR: saved.pnlR,
-      });
-    } catch (_) {}
-    // FIX: executePosition() tracks a position in InstitutionalRiskManager's
-    // portfolio model when a signal fires (see index.js), but nothing ever
-    // called closePosition() — tracked exposure would only ever accumulate,
-    // making its correlation/portfolio-exposure checks increasingly wrong
-    // over time (eventually blocking everything as "over-exposed" on
-    // positions that were actually closed long ago).
-    try { liveEngines.institutionalRiskManager?.closePosition(saved.symbol); } catch (_) {}
-    // FIX: institutionalRiskManager (Kelly Criterion + correlation analysis)
-    // was instantiated and had a validateAndSizePosition() call site wired
-    // into index.js's pipeline, but it was NEVER fed real outcomes — its
-    // Kelly sizing was permanently stuck on the cold-start default and its
-    // correlation analyzer never had real per-symbol return series.
-    try { liveEngines.institutionalRiskManager?.recordTradeResult(saved.symbol, saved.pnlR, saved.closedAt); } catch (_) {}
-
+    const saved = result.saved;
     bus.emit('telemetry_update', {
       type: 'outcome_recorded',
       symbol: saved.symbol,
@@ -327,39 +273,21 @@ function startServer(config = {}) {
       socket.emit('history', { signals });
     });
     socket.on('record_outcome', async payload => {
-      // FIX: same double-recording defense as /api/outcomes — see the note there.
-      const existing = await db.getTradeOutcome(payload?.signalId).catch(() => null);
-      if (existing) return socket.emit('outcome_error', { error: 'Outcome already recorded for this signal', outcome: existing });
       const [signal] = await db.getRecentSignals({ limit: 200 }).then(list => list.filter(s => s.id === payload?.signalId)).catch(() => []);
-      if (!signal) return socket.emit('outcome_error', { error: 'Signal not found' });
-      const liveEngines = getEngines();
-      const activeLearningEngine = liveEngines.adaptiveLearning || learningEngine;
-      const outcome = await activeLearningEngine.recordOutcome({ signalId: payload.signalId, signal, outcome: payload.outcome }).catch(err => ({ error: err.message }));
-      if (outcome.error) return socket.emit('outcome_error', outcome);
-      // FIX: same missing wiring as /api/outcomes — see the detailed note there.
-      const isWin = (outcome.pnlR || 0) > 0;
-      try { liveEngines.bayesianEng?.recordOutcome({ signal, outcome: payload.outcome, regime: signal?.regime, session: signal?.session }); } catch (_) {}
-      try { liveEngines.walkForward?.recordOutcome({ signal, outcome: payload.outcome }); } catch (_) {}
-      try { liveEngines.institutionalGates?.recordSymbolOutcome(outcome.symbol, isWin); } catch (_) {}
-      try { liveEngines.sessionFilter?.recordOutcome({ symbol: outcome.symbol, result: isWin ? 'WIN' : 'LOSS', pnlPct: outcome.pnlPct, timestamp: outcome.closedAt || Date.now() }); } catch (_) {}
-      try { liveEngines.institutionalRiskManager?.recordTradeResult(outcome.symbol, outcome.pnlR, outcome.closedAt); } catch (_) {}
-      try {
-        liveEngines.drawdownGuard?.record({
-          pnlPct: Number(outcome.pnlPct || 0),
-          won: isWin,
-          symbol: outcome.symbol,
-          signalId: payload.signalId,
-          grade: signal?.score?.grade,
-          pnlR: outcome.pnlR,
-        });
-      } catch (_) {}
-      try { liveEngines.institutionalRiskManager?.closePosition(outcome.symbol); } catch (_) {}
-      socket.emit('outcome_saved', outcome);
+
+      const result = await recordOutcomeEverywhere({
+        signalId: payload?.signalId, signal, outcome: payload?.outcome, mongoStore: db,
+        engines: getEngines(), fallbackLearningEngine: learningEngine,
+      });
+      if (!result.ok) return socket.emit('outcome_error', { error: result.error, outcome: result.outcome });
+
+      const saved = result.saved;
+      socket.emit('outcome_saved', saved);
       bus.emit('telemetry_update', {
         type: 'outcome_recorded',
-        symbol: outcome.symbol,
-        timeframe: outcome.timeframe,
-        payload: { result: outcome.result, pnlR: outcome.pnlR, patternKey: outcome.patternKey },
+        symbol: saved.symbol,
+        timeframe: saved.timeframe,
+        payload: { result: saved.result, pnlR: saved.pnlR, patternKey: saved.patternKey },
         timestamp: Date.now(),
       });
     });

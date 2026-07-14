@@ -129,4 +129,30 @@ By Symbol:`);
   console.log('');
 }
 
-module.exports = { computeStats, printReport };
+function printWalkForwardReport(wf) {
+  if (!wf) return;
+  if (!wf.sufficient) {
+    console.log(`\nWalk-Forward Validation: ${wf.note}\n`);
+    return;
+  }
+  console.log(`
+───────────────────────────────────────────────────
+  WALK-FORWARD VALIDATION
+───────────────────────────────────────────────────
+  Walk-Forward Efficiency (WFE): ${wf.wfe}  ${wf.robust ? '(robust)' : '(below robustness threshold)'}
+  Needs Recalibration:  ${wf.needsRecalibration ? 'YES' : 'no'}
+
+  In-Sample  (${wf.inSample.count} trades):  ${round(wf.inSample.winRate * 100, 1)}% WR, ${wf.inSample.expectancy}R expectancy, Sharpe ${wf.inSample.sharpe}
+  Out-of-Sample (${wf.outOfSample.count} trades): ${round(wf.outOfSample.winRate * 100, 1)}% WR, ${wf.outOfSample.expectancy}R expectancy, Sharpe ${wf.outOfSample.sharpe}
+`);
+  if (wf.degradation?.degrading) {
+    console.log(`  ⚠ Performance degradation detected: ${wf.degradation.reason || ''}`);
+  }
+  if (wf.reasons?.length) {
+    console.log('  Notes:');
+    for (const r of wf.reasons) console.log(`    - ${r}`);
+  }
+  console.log('───────────────────────────────────────────────────\n');
+}
+
+module.exports = { computeStats, printReport, printWalkForwardReport };

@@ -644,6 +644,16 @@ class KeyboardBuilder {
           { text: `📊 Details`,  callback_data: `DETAILS:${signalId}` },
           { text: `📈 Chart`,    callback_data: `CHART:${symbol}` },
         ],
+        // FIX: added — these are the entry point into manual-mode.js's
+        // ExecutionEngine, which was fully built but never wired anywhere.
+        // Unlike the WIN/LOSS/BE row below (a single guessed R-multiple),
+        // tapping Take starts REAL position tracking: TP/SL/breakeven/trail
+        // are detected from actual price action and the position is closed
+        // with a computed, accurate pnlR — not a placeholder.
+        [
+          { text: `📝 Take (Track)`, callback_data: `TAKE:${signalId}` },
+          { text: `👁 Watch`,         callback_data: `WATCH:${signalId}` },
+        ],
         [
           { text: `🏆 Win`,       callback_data: `WIN:${signalId}` },
           { text: `💀 Loss`,      callback_data: `LOSS:${signalId}` },
@@ -1004,6 +1014,7 @@ class AlertDispatcher extends EventEmitter {
     this._paused        = false;
     this._pendingSignals = new Map(); // signalId → signal (for callback resolution)
     this._approvedSignals = new Map(); // signalId → signal (approved, waiting for EA execution)
+    this._recordedOutcomes = new Set(); // signalId → guards against double-tapping WIN/LOSS/BE
     this._subscribers   = new Set();  // auto-registered chat IDs from /start
     this._bot           = null;      // bot info from getMe()
 
@@ -1209,6 +1220,124 @@ class AlertDispatcher extends EventEmitter {
     }
 
     this.emit('cascade_alert', data);
+  }
+
+  // FIX: manual-mode.js's ExecutionEngine (a fully-built manual/semi-auto
+  // position-tracking system) calls dispatcher.sendTPHit/sendSLHit/
+  // sendBreakeven/sendTrailUpdate — none of which existed anywhere on this
+  // class. Since those calls aren't wrapped in try/catch in
+  // ExecutionEngine._handlePositionAction, and the exception surfaces
+  // asynchronously (inside an async listener callback whose synchronous
+  // invocation IS wrapped in try/catch by PriceMonitor, but whose eventual
+  // promise rejection is NOT), wiring in ExecutionEngine without these would
+  // have produced an unhandled promise rejection on the very first TP/SL/BE/
+  // trail event of any manually-tracked position — a real crash risk.
+
+  /**
+   * Notify that a take-profit level was hit on a manually-tracked position.
+   */
+  async sendTPHit(signalId, tpNumber, price, pnlR, remainingPct, symbol) {
+    const text = `${EMOJI.GRADE_A} <b>TP${tpNumber} HIT</b> — ${symbol}\n` +
+      `Price: ${price} | +${pnlR.toFixed(2)}R\n` +
+      (remainingPct > 0 ? `Remaining position: ${remainingPct.toFixed(0)}%` : `Position closed.`);
+
+    for (const chatId of this._getAllChatIds()) {
+      this._queue.push({
+        priority: PRIORITY.HIGH,
+        chatId,
+        fn: async () => { await this._client.sendMessage(chatId, text); },
+      });
+    }
+    this.emit('tp_hit_notified', { signalId, tpNumber, price, pnlR, symbol });
+  }
+
+  /**
+   * Notify that a stop loss was hit on a manually-tracked position.
+   */
+  async sendSLHit(signalId, price, pnlR, symbol, wasBreakeven) {
+    const text = `${wasBreakeven ? EMOJI.CHART : EMOJI.ALERT} <b>${wasBreakeven ? 'BREAKEVEN STOP' : 'SL HIT'}</b> — ${symbol}\n` +
+      `Price: ${price} | ${pnlR >= 0 ? '+' : ''}${pnlR.toFixed(2)}R`;
+
+    for (const chatId of this._getAllChatIds()) {
+      this._queue.push({
+        priority: PRIORITY.HIGH,
+        chatId,
+        fn: async () => { await this._client.sendMessage(chatId, text); },
+      });
+    }
+    this.emit('sl_hit_notified', { signalId, price, pnlR, symbol, wasBreakeven });
+  }
+
+  /**
+   * Notify that a position's stop loss was moved to breakeven.
+   */
+  async sendBreakeven(positionId, symbol, newSL, direction) {
+    const text = `${EMOJI.CHART} <b>BREAKEVEN SET</b> — ${direction} ${symbol}\n` +
+      `Stop moved to ${newSL} — this trade can no longer lose.`;
+
+    for (const chatId of this._getAllChatIds()) {
+      this._queue.push({
+        priority: PRIORITY.NORMAL,
+        chatId,
+        fn: async () => { await this._client.sendMessage(chatId, text); },
+      });
+    }
+    this.emit('breakeven_notified', { positionId, symbol, newSL, direction });
+  }
+
+  /**
+   * Notify that a position's trailing stop was updated.
+   */
+  async sendTrailUpdate(positionId, symbol, direction, newSL, delta, unrealizedPnlR) {
+    const text = `${EMOJI.CHART} <b>TRAIL UPDATED</b> — ${direction} ${symbol}\n` +
+      `New stop: ${newSL} (moved ${delta > 0 ? '+' : ''}${delta})\n` +
+      `Unrealized: ${unrealizedPnlR >= 0 ? '+' : ''}${unrealizedPnlR.toFixed(2)}R`;
+
+    for (const chatId of this._getAllChatIds()) {
+      this._queue.push({
+        priority: PRIORITY.LOW,
+        chatId,
+        fn: async () => { await this._client.sendMessage(chatId, text); },
+      });
+    }
+    this.emit('trail_notified', { positionId, symbol, direction, newSL, delta });
+  }
+
+  /**
+   * Send an arbitrary HTML-formatted message (used by ExecutionEngine for
+   * entry-blocked/warning/order-failure notices — same missing-method
+   * pattern as sendTPHit et al above).
+   */
+  async sendCustom(text, options = {}) {
+    for (const chatId of this._getAllChatIds()) {
+      this._queue.push({
+        priority: options.silent ? PRIORITY.LOW : PRIORITY.NORMAL,
+        chatId,
+        fn: async () => { await this._client.sendMessage(chatId, text, { silent: options.silent }); },
+      });
+    }
+  }
+
+  /**
+   * Send the end-of-day manual-mode journal summary (signals, risk, best
+   * setup) — called once daily by ExecutionEngine._scheduleDailySummary().
+   */
+  async sendDailySummary({ signals = {}, risk = {}, sessions = {}, topSetup = null } = {}) {
+    const lines = [
+      `${EMOJI.BRAIN} <b>Daily Summary</b>`,
+      '',
+      `Signals fired: ${signals.fired ?? 0} | Trades: ${(signals.wins || 0) + (signals.losses || 0)}`,
+      `Win rate: ${signals.winRate != null ? signals.winRate + '%' : 'n/a'} | Profit factor: ${signals.profitFactor ?? 'n/a'}`,
+      `Avg win: ${signals.avgWin ?? 'n/a'}R | Avg loss: ${signals.avgLoss ?? 'n/a'}R`,
+      '',
+      `Daily PnL: ${risk.dailyPnl != null ? risk.dailyPnl + '%' : 'n/a'} | Drawdown: ${risk.drawdown != null ? risk.drawdown + '%' : 'n/a'}`,
+    ];
+    if (topSetup) lines.push('', `Best setup today: ${topSetup}`);
+
+    const text = lines.join('\n');
+    for (const chatId of this._getAllChatIds()) {
+      this._queue.push({ priority: PRIORITY.LOW, chatId, fn: async () => { await this._client.sendMessage(chatId, text); } });
+    }
   }
 
   /**
@@ -1527,15 +1656,79 @@ class AlertDispatcher extends EventEmitter {
         case 'LOSS':
         case 'BE': {
           const result  = action;
+          // Guard against double-tapping the same button (or Telegram
+          // redelivering the callback) at the UI layer, before the
+          // storage-level dedupe check in recordOutcomeEverywhere even runs.
+          if (this._recordedOutcomes.has(signalId)) {
+            await this._client.answerCallback(callbackQueryId, 'Already recorded for this signal', true);
+            break;
+          }
+          this._recordedOutcomes.add(signalId);
+
+          // NOTE: these are placeholder R-multiples for a single quick tap —
+          // a button can't capture the real P&L of a specific trade. This is
+          // a genuine UX limitation, not something wiring can fix.
           const pnlMap  = { WIN: 1.5, LOSS: -1, BE: 0 };
-          const outcome = { result, pnlPct: pnlMap[result], note: `Recorded via Telegram callback` };
+          const pnlR    = pnlMap[result];
+          const outcome = { result, pnlPct: pnlR, pnlR, note: `Recorded via Telegram callback` };
 
           if (this.scorer) {
             this.scorer.recordTradeOutcome(signalId, outcome);
           }
 
+          // FIX: this handler — the primary way most users will record an
+          // outcome, via a single Telegram tap — only ever fed
+          // scorer.recordTradeOutcome(), which updates a SEPARATE circuit
+          // breaker (signal-scorer.js's own DrawdownCircuitBreaker) that is
+          // NOT the same object as drawdownGuard (risk-engine/drawdown-guard.js),
+          // which is what actually gates new trades pre-signal. It also never
+          // touched adaptiveLearning, bayesianEng, walkForward,
+          // institutionalGates, sessionFilter, or institutionalRiskManager.
+          // FIX (reconciled during merge): an earlier version of this fix
+          // called the engines directly here, un-awaited, and ALSO emitted
+          // 'trade_outcome' below — which index.js listens for and records
+          // through the same pipeline again. Un-awaited + emit-right-after
+          // is a real race: the direct call's mongoStore write might not be
+          // durable yet when the listener's dedupe check runs, double-
+          // counting the outcome. Call the single shared implementation and
+          // await it here instead — one write, no race, and the emit below
+          // becomes a safe, idempotent no-op for any other listener.
+          try {
+            const { recordOutcomeEverywhere } = require('./outcome-recorder');
+            const { getEngines } = require('../api/realtime');
+            const mongoStore = require('../db');
+            await recordOutcomeEverywhere({
+              signalId, signal, outcome: { pnlR, result },
+              mongoStore, engines: getEngines(),
+            });
+          } catch (_) { /* registry/db not available (e.g. standalone dispatcher usage) — non-fatal */ }
+
           await this._client.answerCallback(callbackQueryId, `${result} recorded!`, true);
           this.emit('trade_outcome', { signalId, outcome, signal });
+          break;
+        }
+
+        case 'TAKE': {
+          if (!this.executionEngine) {
+            await this._client.answerCallback(callbackQueryId, 'Manual tracking is not enabled.', true);
+            break;
+          }
+          const result = await this.executionEngine.onTrade(signalId, {}).catch(e => ({ success: false, reason: e.message }));
+          if (!result?.success) {
+            await this._client.answerCallback(callbackQueryId, `Could not start tracking: ${result?.reason || 'unknown error'}`, true);
+          } else {
+            await this._client.answerCallback(callbackQueryId, '📝 Tracking this trade — TP/SL/BE alerts will follow live price.', true);
+          }
+          break;
+        }
+
+        case 'WATCH': {
+          if (!this.executionEngine) {
+            await this._client.answerCallback(callbackQueryId, 'Manual tracking is not enabled.', true);
+            break;
+          }
+          await this.executionEngine.onWatch(signalId).catch(() => {});
+          await this._client.answerCallback(callbackQueryId, '👁 Watching — no position opened.', false);
           break;
         }
 
@@ -1649,12 +1842,27 @@ class AlertDispatcher extends EventEmitter {
 
     const signal  = this._pendingSignals.get(lastSignalId);
     const pnlMap  = { WIN: this.riskPct * 1.5, LOSS: -this.riskPct, BREAKEVEN: 0 };
+    const pnlPct  = parseFloat(args[0] || pnlMap[result]);
+    // FIX: recordOutcome() (signal-pipeline/adaptive-learning-engine.js)
+    // derives WIN/LOSS/BREAKEVEN from outcome.pnlR, not from a `result`
+    // string — this object never had a pnlR field, so every /win, /loss, and
+    // /be would have been silently misrecorded as BREAKEVEN (pnlR defaults
+    // to 0) even after the scorer wiring below was fixed. riskPct is our
+    // best available proxy for 1R here, since this dispatcher only tracks
+    // percent-of-account risk, not literal R-multiples.
+    const pnlR = this.riskPct > 0 ? pnlPct / this.riskPct : (result === 'WIN' ? 1 : result === 'LOSS' ? -1 : 0);
     const outcome = {
       result,
-      pnlPct: parseFloat(args[0] || pnlMap[result]).toFixed(2),
+      pnlPct: pnlPct.toFixed(2),
+      pnlR,
       note:   `Manual via /${result.toLowerCase()}`,
     };
 
+    // FIX: this.scorer was never assigned anywhere in the codebase, so this
+    // outcome was recorded nowhere — the confirmation message sent below was
+    // the ONLY effect of /win, /loss, /be. index.js listens for the
+    // 'trade_outcome' event emitted below and feeds it through the same real
+    // pipeline used by /api/outcomes (signal-pipeline/outcome-recorder.js).
     if (this.scorer) {
       this.scorer.recordTradeOutcome(lastSignalId, outcome);
     }
