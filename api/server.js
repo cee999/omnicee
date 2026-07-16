@@ -159,6 +159,14 @@ function createApp() {
   // ── EA (MetaTrader 5) API endpoints ──
 
   const EA_SECRET = process.env.EA_SECRET || '';
+  // FIX: EA_SECRET was undocumented in .env.example and, when unset, silently
+  // left /api/ea/signals — the endpoint that hands out live trading signals
+  // to the MT5 EA — open to anyone who finds the URL, with no warning logged
+  // anywhere. Same "warn at startup" pattern index.js already uses for
+  // TELEGRAM_BOT_TOKEN etc., so this doesn't fail as quietly.
+  if (!EA_SECRET) {
+    console.warn('[API] EA_SECRET not set — /api/ea/signals is open access (no auth required)');
+  }
   function eaAuth(req, res, next) {
     const token = req.headers['x-ea-secret'] || req.query.secret;
     if (!EA_SECRET) return next(); // no secret configured = open access
