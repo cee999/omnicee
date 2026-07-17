@@ -129,6 +129,17 @@ function createApp() {
     res.json({ ok: true, opportunities, relativeStrength });
   });
 
+  // ── Data Integrity / Feed Health (doc item: Connection & Data Integrity
+  // Monitor) ────────────────────────────────────────────────────────────
+  app.get('/api/health', telegramAuthMiddleware, async (req, res) => {
+    const live = getEngines();
+    if (!live.dataIntegrityMonitor || !live.candleStores) {
+      return res.status(503).json({ ok: false, error: 'Health monitor unavailable — trading engine not yet initialized' });
+    }
+    const report = live.dataIntegrityMonitor.check(live.candleStores);
+    res.json({ ok: true, ...report });
+  });
+
   app.get('/api/telemetry', telegramAuthMiddleware, async (req, res) => {
     const telemetry = await db.getTelemetry({ limit: req.query.limit || 100 }).catch(err => {
       res.status(503).json({ ok: false, error: err.message });
@@ -345,6 +356,10 @@ function startServer(config = {}) {
   // Opportunity Ranker scoreboard — pushed every cycle so the Mini App's
   // watchlist view updates live instead of only on poll of /api/watchlist.
   forward('watchlist_update', 'watchlist');
+  // Data Integrity Monitor — feed/staleness health, so the dashboard shows a
+  // warning banner instead of the trader only finding out a feed died when
+  // signals quietly stop arriving.
+  forward('feed_health', 'feed_health');
 
   const port = Number(config.port || API_PORT);
   httpServer.listen(port, () => {

@@ -120,6 +120,7 @@ const { CFTCCotFeed }        = loadModule('./feeds/cftc-cot-feed',              
 const { COTReportParser }    = loadModule('./feeds/news-feed',                   'COTReportParser')   || {};
 const { OpportunityRanker }  = loadModule('./signal-pipeline/opportunity-ranker', 'OpportunityRanker') || {};
 const { RelativeStrengthEngine } = loadModule('./risk-engine/relative-strength', 'RelativeStrengthEngine') || {};
+const { DataIntegrityMonitor } = loadModule('./feeds/data-integrity-monitor', 'DataIntegrityMonitor') || {};
 
 // ConflictResolver is instantiated (not static) — create one singleton
 const conflictResolver = ConflictResolverClass ? new ConflictResolverClass() : null;
@@ -934,7 +935,8 @@ let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, institutionalGates,
     adaptiveLearning, drawdownGuard, riskEngine, sessionFilter, correlationFilter, memory,
     monteCarlo, bayesianEng, statValidator, walkForward, ensembleEng,
     signalMonitor, institutionalRiskManager, executionManagers, myfxbookFeed, openInsiderFeed,
-    finnhubFeed, cftcCotFeed, cotParser, executionEngine, opportunityRanker, relativeStrength;
+    finnhubFeed, cftcCotFeed, cotParser, executionEngine, opportunityRanker, relativeStrength,
+    dataIntegrityMonitor;
 
 // FIX: ExecutionManager's MarketMicrostructureAnalyzer keeps a single shared
 // orderBookHistory/tradeHistory/spreadHistory with no per-symbol keying — one
@@ -1111,6 +1113,11 @@ function buildSingletons() {
   if (RelativeStrengthEngine) {
     relativeStrength = new RelativeStrengthEngine({ lookback: 20 });
     log.info('RelativeStrengthEngine created');
+  }
+
+  if (DataIntegrityMonitor) {
+    dataIntegrityMonitor = new DataIntegrityMonitor({ staleFactor: 3 });
+    log.info('DataIntegrityMonitor created');
   }
 
   if (InstitutionalGates) {
@@ -1385,7 +1392,7 @@ function buildSingletons() {
     require('./api/realtime').setEngines({
       adaptiveLearning, bayesianEng, walkForward, institutionalGates,
       drawdownGuard, sessionFilter, riskEngine, institutionalRiskManager,
-      opportunityRanker, relativeStrength,
+      opportunityRanker, relativeStrength, dataIntegrityMonitor,
       // For GET /api/outlook (signal-pipeline/market-outlook.js)
       regimeEngine, candleStores, symbols: SYMBOLS,
     });
@@ -1414,6 +1421,7 @@ function buildFeeds() {
     binanceFeed.on('connected', () => log.info(`BinanceFeed connected for: ${cryptoSymbols.join(', ')}`));
     feeds.push({ name: 'BinanceFeed', instance: binanceFeed, symbols: cryptoSymbols });
     log.info(`BinanceFeed configured for: ${cryptoSymbols.join(', ')}`);
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('BinanceFeed', binanceFeed, cryptoSymbols);
   }
 
   // FIX: BybitFeed (funding rate, open interest, liquidation cascades, CVD —
@@ -1474,6 +1482,7 @@ function buildFeeds() {
     bybitFeed.on('connected', () => log.info(`BybitFeed connected for: ${cryptoSymbols.join(', ')}`));
     feeds.push({ name: 'BybitFeed', instance: bybitFeed, symbols: cryptoSymbols });
     log.info(`BybitFeed configured for: ${cryptoSymbols.join(', ')}`);
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('BybitFeed', bybitFeed, cryptoSymbols);
   }
 
   // TwelveData feed for forex/commodities
@@ -1489,6 +1498,7 @@ function buildFeeds() {
     tdFeed.on('connected', () => log.info(`TwelveDataFeed connected for: ${fxSymbols.join(', ')}`));
     feeds.push({ name: 'TwelveDataFeed', instance: tdFeed, symbols: fxSymbols });
     log.info(`TwelveDataFeed configured for: ${fxSymbols.join(', ')}`);
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('TwelveDataFeed', tdFeed, fxSymbols);
   } else if (fxSymbols.length && !TWELVE_KEY) {
     log.warn(`Forex symbols ${fxSymbols.join(',')} configured but TWELVE_DATA_API_KEY is missing`);
   }
@@ -1624,6 +1634,32 @@ async function main() {
   if (feeds.length === 0) {
     log.warn('No feeds configured. Add BINANCE_API_KEY and/or TWELVE_DATA_API_KEY to .env');
     log.info('Running in dry-run mode — use the test script to inject synthetic candles');
+  }
+
+  // j. Data integrity watchdog — was previously nothing here at all: a feed
+  // that stopped pushing candles without firing an 'error' event (dropped
+  // WS connection, exchange outage) would silently keep the pipeline
+  // scoring against stale, non-moving candles with no log line and no
+  // alert. Checked every 2 minutes; first check delayed 90s to let feeds
+  // finish their initial connect/backfill.
+  if (dataIntegrityMonitor) {
+    const runIntegrityCheck = () => {
+      const report = dataIntegrityMonitor.check(candleStores);
+      if (!report.ok) {
+        for (const f of report.feeds.filter(x => x.connected === false)) {
+          log.warn(`DataIntegrity: ${f.name} reports disconnected (symbols: ${f.symbols.join(', ')})`);
+        }
+        for (const s of report.staleSeries) {
+          log.warn(`DataIntegrity: ${s.symbol} ${s.timeframe} stale — last candle ${Math.round(s.ageMs / 1000)}s ago (threshold ${Math.round(s.thresholdMs / 1000)}s)`);
+        }
+      }
+      if (wsBus) wsBus.emit('feed_health', report);
+    };
+    setTimeout(() => {
+      runIntegrityCheck();
+      setInterval(runIntegrityCheck, 2 * 60000);
+    }, 90000);
+    log.info('DataIntegrityMonitor watchdog scheduled (every 2m, first check at +90s)');
   }
 
   log.info('OMNICEE boot complete. Waiting for market data...');

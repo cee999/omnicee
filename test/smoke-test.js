@@ -355,6 +355,22 @@ async function runTests() {
     pass(`RelativeStrengthEngine: leader=${ranked[0].symbol} (${ranked[0].changePct.toFixed(2)}%)`);
   } catch (e) { fail('RelativeStrengthEngine', e); }
 
+  try {
+    const { DataIntegrityMonitor } = require(path.join(ROOT, 'feeds/data-integrity-monitor'));
+    const dim = new DataIntegrityMonitor({ staleFactor: 3 });
+    dim.registerFeed('FakeFeed', { isConnected: () => true }, ['BTCUSDT']);
+    const freshStores = { BTCUSDT: { H1: [{ timestamp: Date.now(), close: 100 }] } };
+    const freshReport = dim.check(freshStores);
+    if (!freshReport.ok) throw new Error('expected ok=true for fresh candles');
+
+    const staleStores = { BTCUSDT: { H1: [{ timestamp: Date.now() - 5 * 3600000, close: 100 }] } };
+    const staleReport = dim.check(staleStores);
+    if (staleReport.ok || staleReport.staleSeries.length !== 1) {
+      throw new Error(`expected 1 stale series, got ${JSON.stringify(staleReport.staleSeries)}`);
+    }
+    pass(`DataIntegrityMonitor: fresh=ok, stale detected after ${Math.round(staleReport.staleSeries[0].ageMs / 3600000)}h`);
+  } catch (e) { fail('DataIntegrityMonitor', e); }
+
   // ── 12. Syntax check all modules ──────────────────────────────────────
 
   console.log('\n12. index.js syntax check');
