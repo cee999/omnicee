@@ -397,6 +397,28 @@ async function runTests() {
     pass(`AbnormalMarketDetector: clean=ok, spike flagged (${spikeReport.severity}: ${spikeReport.reasons[0]})`);
   } catch (e) { fail('AbnormalMarketDetector', e); }
 
+  try {
+    const { SignalJournal } = require(path.join(ROOT, 'signal-pipeline/manual-mode'));
+    const journal = new SignalJournal();
+    const mkSignal = (id, agent, contribution) => ({
+      id, symbol: 'BTCUSDT', timeframe: 'H1', action: 'LONG',
+      score: { final: 82, grade: 'A' }, session: { current: 'LONDON' },
+      agentBreakdown: [{ agent, status: 'CONFIRMS', contribution }],
+    });
+    journal.logSignal(mkSignal('sig1', 'smc', 20), {});
+    journal.logSignal(mkSignal('sig2', 'mtf', 25), {});
+    journal.recordOutcome('pos1', 'sig1', { entryPrice: 100, exitPrice: 105, pnlR: 1.5, pnlPct: 1.2, state: 'WIN' });
+    journal.recordOutcome('pos2', 'sig2', { entryPrice: 100, exitPrice: 95, pnlR: -1, pnlPct: -1, state: 'LOSS' });
+    const stats = journal.getStats();
+    if (!stats.bySetup?.smc || !stats.bySetup?.mtf) {
+      throw new Error(`expected bySetup to have smc+mtf keys, got ${JSON.stringify(Object.keys(stats.bySetup || {}))}`);
+    }
+    if (stats.bySetup.smc.winRate !== 100 || stats.bySetup.mtf.winRate !== 0) {
+      throw new Error('bySetup win rates incorrect');
+    }
+    pass(`Setup Analytics: bySetup correctly split smc(100% WR) vs mtf(0% WR)`);
+  } catch (e) { fail('Setup Analytics (bySetup)', e); }
+
   // ── 12. Syntax check all modules ──────────────────────────────────────
 
   console.log('\n12. index.js syntax check');

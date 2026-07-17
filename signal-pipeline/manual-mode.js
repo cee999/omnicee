@@ -112,6 +112,24 @@ const MAX_OPEN_POSITIONS = 5;
 
 function _round(n, d = 5)  { return parseFloat((+n).toFixed(d)); }
 function _now()            { return Date.now(); }
+
+// FIX: getStats() broke performance down by symbol/session/grade but never
+// by *what kind of setup* fired — in a multi-agent system, "setup type" is
+// naturally "which agent's read was the dominant driver of this signal"
+// (SMC order-block-led vs MTF-confluence-led vs momentum-led, etc). That
+// question — "which of my six strategies is actually making money?" — had
+// no way to be answered before now. Derived once at signal-log time from
+// the same agentBreakdown the scorer already produces, so no new data
+// source or agent change is required.
+function _dominantSetup(signal) {
+  const breakdown = signal?.agentBreakdown;
+  if (!Array.isArray(breakdown) || !breakdown.length) return 'UNKNOWN';
+  const confirming = breakdown.filter(b => b.status === 'CONFIRMS');
+  const pool = confirming.length ? confirming : breakdown;
+  const top = pool.reduce((best, b) =>
+    (b.contribution || 0) > (best?.contribution || -Infinity) ? b : best, null);
+  return top?.agent || top?.label || 'UNKNOWN';
+}
 function _uuid()           {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`.toUpperCase();
 }
@@ -577,6 +595,7 @@ class SignalJournal {
       tp3:         signal.targets?.tp3?.price,
       tp1RR:       signal.targets?.tp1?.rr,
       htfBias:     signal.htfBias?.direction,
+      setupType:   _dominantSetup(signal),
       agentScores: {
         smc:      signal.agentVotes?.smc?.score,
         mtf:      signal.agentVotes?.mtf?.score,
@@ -614,6 +633,7 @@ class SignalJournal {
       symbol:       signal?.symbol,
       direction:    signal?.direction,
       grade:        signal?.grade,
+      setupType:    signal?.setupType || 'UNKNOWN',
       session:      signal?.session,
       entryPrice:   outcome.entryPrice,
       exitPrice:    outcome.exitPrice,
@@ -645,6 +665,7 @@ class SignalJournal {
     if (filter.direction) outcomes = outcomes.filter(o => o.direction === filter.direction);
     if (filter.grade)     outcomes = outcomes.filter(o => o.grade     === filter.grade);
     if (filter.session)   outcomes = outcomes.filter(o => o.session   === filter.session);
+    if (filter.setup)     outcomes = outcomes.filter(o => o.setupType === filter.setup);
     if (filter.since)     outcomes = outcomes.filter(o => o.closedAt  >= filter.since);
 
     const total   = outcomes.length;
@@ -705,6 +726,20 @@ class SignalJournal {
       };
     }
 
+    // By setup type (dominant contributing agent — SMC/MTF/momentum/etc)
+    const bySetup = {};
+    const setupTypes = [...new Set(outcomes.map(o => o.setupType || 'UNKNOWN'))];
+    for (const setup of setupTypes) {
+      const s  = outcomes.filter(o => (o.setupType || 'UNKNOWN') === setup);
+      const sw = s.filter(o => o.won).length;
+      bySetup[setup] = {
+        total: s.length, wins: sw, losses: s.length - sw,
+        winRate: _round(sw / s.length * 100, 2),
+        totalPnl: _round(s.reduce((a, o) => a + (o.pnlR || 0), 0), 3),
+        avgPnl:  _round(s.reduce((a, o) => a + (o.pnlR || 0), 0) / s.length, 3),
+      };
+    }
+
     // Consecutive stats
     let maxConsecW = 0, maxConsecL = 0, curW = 0, curL = 0;
     for (const o of outcomes) {
@@ -725,7 +760,7 @@ class SignalJournal {
       expectancy,
       maxConsecWins:  maxConsecW,
       maxConsecLoss:  maxConsecL,
-      byGrade, bySymbol, bySession,
+      byGrade, bySymbol, bySession, bySetup,
       signalStats: { dispatched, taken, skipped, takeRate },
       period: filter.since ? `Since ${new Date(filter.since).toUTCString()}` : 'All time',
     };

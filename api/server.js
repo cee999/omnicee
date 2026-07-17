@@ -106,6 +106,26 @@ function createApp() {
 
   // ── Watchlist / Opportunity Ranking (doc items: Market Scanner, Watchlist
   // AI, Opportunity Ranking, Relative Strength Engine) ────────────────────
+  // ── Trading Journal / Setup Analytics (doc items: AI Trading Journal,
+  // Setup Analytics — 'which of my strategies is actually making money')
+  // ─────────────────────────────────────────────────────────────────────
+  app.get('/api/journal', telegramAuthMiddleware, async (req, res) => {
+    const live = getEngines();
+    if (!live.executionEngine) {
+      return res.status(503).json({ ok: false, error: 'Journal unavailable — execution engine not yet initialized' });
+    }
+    const filter = {};
+    if (req.query.symbol)    filter.symbol    = req.query.symbol;
+    if (req.query.direction) filter.direction = req.query.direction;
+    if (req.query.grade)     filter.grade     = req.query.grade;
+    if (req.query.session)   filter.session   = req.query.session;
+    if (req.query.setup)     filter.setup     = req.query.setup;
+    if (req.query.since)     filter.since     = Number(req.query.since);
+
+    const stats = live.executionEngine.getJournalStats(filter);
+    res.json({ ok: true, stats });
+  });
+
   app.get('/api/watchlist', telegramAuthMiddleware, async (req, res) => {
     const live = getEngines();
     if (!live.opportunityRanker) {

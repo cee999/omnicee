@@ -1454,7 +1454,7 @@ function buildSingletons() {
     require('./api/realtime').setEngines({
       adaptiveLearning, bayesianEng, walkForward, institutionalGates,
       drawdownGuard, sessionFilter, riskEngine, institutionalRiskManager,
-      opportunityRanker, relativeStrength, dataIntegrityMonitor,
+      opportunityRanker, relativeStrength, dataIntegrityMonitor, executionEngine,
       // For GET /api/outlook (signal-pipeline/market-outlook.js)
       regimeEngine, candleStores, symbols: SYMBOLS,
     });
