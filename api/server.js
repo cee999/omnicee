@@ -360,6 +360,10 @@ function startServer(config = {}) {
   // warning banner instead of the trader only finding out a feed died when
   // signals quietly stop arriving.
   forward('feed_health', 'feed_health');
+  // Abnormal Market Detector — flash-crash wicks, frozen feeds, liquidity
+  // vacuums. Pushed live so the dashboard can show a banner the moment a
+  // symbol gets flagged, not just when it shows up in server logs.
+  forward('abnormal_market', 'abnormal_market', payload => db.saveTelemetry({ type: 'abnormal_market', ...payload }));
 
   const port = Number(config.port || API_PORT);
   httpServer.listen(port, () => {

@@ -123,6 +123,7 @@ const { RelativeStrengthEngine } = loadModule('./risk-engine/relative-strength',
 const { DataIntegrityMonitor } = loadModule('./feeds/data-integrity-monitor', 'DataIntegrityMonitor') || {};
 const { TrapDetector }       = loadModule('./signal-pipeline/trap-detector',      'TrapDetector')      || {};
 const { CompressionDetector }= loadModule('./signal-pipeline/compression-detector','CompressionDetector') || {};
+const { AbnormalMarketDetector } = loadModule('./signal-pipeline/abnormal-market-detector', 'AbnormalMarketDetector') || {};
 
 // ConflictResolver is instantiated (not static) — create one singleton
 const conflictResolver = ConflictResolverClass ? new ConflictResolverClass() : null;
@@ -131,6 +132,7 @@ const conflictResolver = ConflictResolverClass ? new ConflictResolverClass() : n
 // to share across symbols; CompressionDetector is fully stateless.
 const trapDetector        = TrapDetector        ? new TrapDetector()        : null;
 const compressionDetector = CompressionDetector ? new CompressionDetector() : null;
+const abnormalMarketDetector = AbnormalMarketDetector ? new AbnormalMarketDetector() : null;
 
 // ── 3. System state ────────────────────────────────────────────────────────
 
@@ -195,6 +197,27 @@ async function runAnalysisCycle(symbol, timeframe) {
     if (!candles || candles.length < 50) {
       log.debug(`${key}: not enough candles (${candles?.length || 0}/50) — waiting`);
       return;
+    }
+
+    // FIX: nothing in this pipeline ever asked "is the data I'm about to
+    // trade on actually trustworthy?" — a flash-crash wick, a frozen/stale
+    // feed repeating the same price, or a huge range on almost no volume
+    // would flow straight into all six agents and the scorer exactly like
+    // clean data. Gate severe cases before spending any compute on them (and
+    // before they pollute lastVotes[symbol] for reuse next cycle); elevated
+    // cases are logged and annotated but allowed through, same "dampen not
+    // block" philosophy as TrapDetector below.
+    let abnormalMarket = null;
+    if (abnormalMarketDetector) {
+      abnormalMarket = abnormalMarketDetector.analyze({ candles, symbol });
+      if (abnormalMarket.abnormal) {
+        log.warn(`${key}: abnormal market (${abnormalMarket.severity}) — ${abnormalMarket.reasons.join('; ')}`);
+        if (wsBus) wsBus.emit('abnormal_market', { symbol, timeframe, ...abnormalMarket });
+        if (abnormalMarket.severity === 'severe') {
+          log.warn(`${key}: severe — skipping this cycle entirely`);
+          return;
+        }
+      }
     }
 
     const agents  = agentPool[symbol];

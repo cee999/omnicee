@@ -371,6 +371,32 @@ async function runTests() {
     pass(`DataIntegrityMonitor: fresh=ok, stale detected after ${Math.round(staleReport.staleSeries[0].ageMs / 3600000)}h`);
   } catch (e) { fail('DataIntegrityMonitor', e); }
 
+  try {
+    const { AbnormalMarketDetector } = require(path.join(ROOT, 'signal-pipeline/abnormal-market-detector'));
+    const amd = new AbnormalMarketDetector();
+
+    // Clean, normal candles -> not abnormal
+    const cleanReport = amd.analyze({ candles, symbol: 'BTCUSDT' });
+    if (cleanReport.abnormal) {
+      throw new Error(`expected clean synthetic candles to be normal, got: ${cleanReport.reasons.join('; ')}`);
+    }
+
+    // Inject a flash-crash wick + gap on the final candle
+    const spiked = candles.map(c => ({ ...c }));
+    const last = spiked[spiked.length - 1];
+    const base = last.close;
+    spiked[spiked.length - 1] = {
+      ...last,
+      open: base,
+      high: base * 1.15,
+      low: base * 0.80,
+      close: base * 1.001, // reverted back near open — big wick, tiny body
+    };
+    const spikeReport = amd.analyze({ candles: spiked, symbol: 'BTCUSDT' });
+    if (!spikeReport.abnormal) throw new Error('expected flash-spike candle to be flagged abnormal');
+    pass(`AbnormalMarketDetector: clean=ok, spike flagged (${spikeReport.severity}: ${spikeReport.reasons[0]})`);
+  } catch (e) { fail('AbnormalMarketDetector', e); }
+
   // ── 12. Syntax check all modules ──────────────────────────────────────
 
   console.log('\n12. index.js syntax check');
