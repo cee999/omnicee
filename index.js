@@ -127,6 +127,7 @@ const { AbnormalMarketDetector } = loadModule('./signal-pipeline/abnormal-market
 const { TimeCycleEngine }    = loadModule('./signal-pipeline/time-cycle-engine',   'TimeCycleEngine')   || {};
 const { StrategySelector }   = loadModule('./signal-pipeline/strategy-selector',    'StrategySelector')  || {};
 const { CandleIntelligence } = loadModule('./signal-pipeline/candle-intelligence',  'CandleIntelligence') || {};
+const { AIAdvisor }          = loadModule('./signal-pipeline/ai-advisor',           'AIAdvisor')          || {};
 
 // ConflictResolver is instantiated (not static) — create one singleton
 const conflictResolver = ConflictResolverClass ? new ConflictResolverClass() : null;
@@ -141,6 +142,15 @@ const abnormalMarketDetector = AbnormalMarketDetector ? new AbnormalMarketDetect
 const timeCycleEngine     = TimeCycleEngine     ? new TimeCycleEngine()     : null;
 const strategySelector    = StrategySelector    ? new StrategySelector()    : null;
 const candleIntelligence  = CandleIntelligence  ? new CandleIntelligence()  : null;
+// AIAdvisor no-ops safely (fails open) if ANTHROPIC_API_KEY isn't set — see
+// signal-pipeline/ai-advisor.js. Logged once at startup below so it's obvious
+// from the boot log whether the agentic layer is actually active.
+const aiAdvisor = AIAdvisor ? new AIAdvisor({ apiKey: process.env.ANTHROPIC_API_KEY }) : null;
+if (aiAdvisor) {
+  log.info(aiAdvisor.enabled
+    ? `AI Advisor active (model=${aiAdvisor.model}) — advisory-only, fails open on any error`
+    : 'AI Advisor loaded but disabled — ANTHROPIC_API_KEY not set in .env');
+}
 
 // ── 3. System state ────────────────────────────────────────────────────────
 
@@ -822,12 +832,55 @@ async function runAnalysisCycle(symbol, timeframe) {
       };
     }
 
+    // ── AI Advisor (agentic layer) ──
+    // The one LLM-based check in the pipeline, deliberately placed last —
+    // it only ever runs on a signal that has already cleared every
+    // deterministic gate (scoring, trap/compression/abnormal-market,
+    // regime-fit floor) and has its full entry/SL/TP plan built, so it's
+    // reviewing a complete, real setup rather than a partial one. Advisory
+    // only: it can say SKIP or REDUCE_SIZE, but it never adjusts risk
+    // parameters or touches execution directly, and any error/timeout/
+    // missing-key fails OPEN (proceeds as TAKE) rather than blocking a
+    // trade on an LLM outage.
+    let aiAdvisorVerdict = null;
+    if (aiAdvisor) {
+      aiAdvisorVerdict = await aiAdvisor.evaluate({
+        signal: fullSignal,
+        regime,
+        strategyContext,
+        candleContext,
+        compressionContext,
+        abnormalMarket,
+        timeCycleContext,
+        trapContext,
+      });
+      fullSignal.aiAdvisor = {
+        recommendation: aiAdvisorVerdict.recommendation,
+        confidence: aiAdvisorVerdict.confidence,
+        reasoning: aiAdvisorVerdict.reasoning,
+        source: aiAdvisorVerdict.source,
+      };
+      if (aiAdvisorVerdict.recommendation === 'REDUCE_SIZE') {
+        fullSignal.riskFlags = { ...(fullSignal.riskFlags || {}), aiAdvisorReduceSize: true };
+        log.info(`${key}: AI Advisor recommends REDUCE_SIZE — ${aiAdvisorVerdict.reasoning}`);
+      }
+    }
+
     // ── Store in memory ──
     if (memory?.saveSignal) {
       memory.saveSignal(fullSignal).catch(e => log.warn(`Memory save error: ${e.message}`));
     }
     if (mongoStore.saveSignal) {
       mongoStore.saveSignal(fullSignal).catch(e => log.warn(`Mongo signal save error: ${e.message}`));
+    }
+
+    // AI Advisor SKIP is checked here — after journaling (so vetoed setups
+    // are still visible for review, e.g. "was the advisor right to skip
+    // this one?"), but before this signal consumes any risk-model budget
+    // or reaches dispatch/execution.
+    if (aiAdvisorVerdict?.recommendation === 'SKIP') {
+      log.info(`${key}: AI Advisor recommends SKIP — ${aiAdvisorVerdict.reasoning}`);
+      return;
     }
 
     // Track this position in the portfolio-risk model so future correlation

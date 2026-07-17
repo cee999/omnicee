@@ -502,6 +502,21 @@ async function runTests() {
     pass(`CandleIntelligence: type=${result.type} quality=${result.qualityScore} exhaustion=${result.rejection.isExhaustionCandidate}`);
   } catch (e) { fail('CandleIntelligence', e); }
 
+  try {
+    const { AIAdvisor } = require(path.join(ROOT, 'signal-pipeline/ai-advisor'));
+    // No API key in smoke-test env — must fail open immediately with no network call.
+    const advisor = new AIAdvisor({ apiKey: '' });
+    if (advisor.enabled) throw new Error('expected advisor to be disabled with no API key');
+    const result = await advisor.evaluate({
+      signal: { symbol: 'BTCUSDT', timeframe: 'H1', action: 'LONG', currentPrice: 65000, score: { final: 82, grade: 'A' } },
+      regime: { regime: 'BULL_TREND', trend: 'BULL_TREND', structure: 'DIRECTIONAL', volatility: 'NORMAL', tradeability: 85 },
+    });
+    if (result.recommendation !== 'TAKE' || result.source !== 'fallback') {
+      throw new Error(`expected fail-open TAKE/fallback, got ${JSON.stringify(result)}`);
+    }
+    pass(`AIAdvisor: disabled-without-key fails open correctly (recommendation=${result.recommendation})`);
+  } catch (e) { fail('AIAdvisor', e); }
+
   // ── 12. Syntax check all modules ──────────────────────────────────────
 
 
