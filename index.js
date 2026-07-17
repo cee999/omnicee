@@ -124,15 +124,23 @@ const { DataIntegrityMonitor } = loadModule('./feeds/data-integrity-monitor', 'D
 const { TrapDetector }       = loadModule('./signal-pipeline/trap-detector',      'TrapDetector')      || {};
 const { CompressionDetector }= loadModule('./signal-pipeline/compression-detector','CompressionDetector') || {};
 const { AbnormalMarketDetector } = loadModule('./signal-pipeline/abnormal-market-detector', 'AbnormalMarketDetector') || {};
+const { TimeCycleEngine }    = loadModule('./signal-pipeline/time-cycle-engine',   'TimeCycleEngine')   || {};
+const { StrategySelector }   = loadModule('./signal-pipeline/strategy-selector',    'StrategySelector')  || {};
+const { CandleIntelligence } = loadModule('./signal-pipeline/candle-intelligence',  'CandleIntelligence') || {};
 
 // ConflictResolver is instantiated (not static) — create one singleton
 const conflictResolver = ConflictResolverClass ? new ConflictResolverClass() : null;
 
 // TrapDetector keeps its own rolling per-call history but is stateless enough
-// to share across symbols; CompressionDetector is fully stateless.
+// to share across symbols; CompressionDetector, TimeCycleEngine,
+// AbnormalMarketDetector, StrategySelector, and CandleIntelligence are all
+// fully stateless per call — safe to share across symbols too.
 const trapDetector        = TrapDetector        ? new TrapDetector()        : null;
 const compressionDetector = CompressionDetector ? new CompressionDetector() : null;
 const abnormalMarketDetector = AbnormalMarketDetector ? new AbnormalMarketDetector() : null;
+const timeCycleEngine     = TimeCycleEngine     ? new TimeCycleEngine()     : null;
+const strategySelector    = StrategySelector    ? new StrategySelector()    : null;
+const candleIntelligence  = CandleIntelligence  ? new CandleIntelligence()  : null;
 
 // ── 3. System state ────────────────────────────────────────────────────────
 
@@ -421,6 +429,57 @@ async function runAnalysisCycle(symbol, timeframe) {
       compressionContext = compressionDetector.analyze({ candles });
     }
 
+    // Abnormal market detector: severe cases were already gated out entirely
+    // near the top of this cycle (before agents even ran). 'elevated' cases
+    // were allowed through but should still flag the signal for the risk
+    // engine to consider sizing down, same "dampen not block" pattern as
+    // trap/compression above.
+    if (abnormalMarket?.abnormal && abnormalMarket.severity === 'elevated') {
+      signal = { ...signal, riskFlags: { ...(signal.riskFlags || {}), abnormalMarket: true, abnormalReasons: abnormalMarket.reasons } };
+    }
+
+    // Time cycle engine: informational only — historical hour-of-day /
+    // day-of-week edge (or lack of one) for this symbol, attached to the
+    // signal for display/journaling. Never blocks or resizes on its own;
+    // sample sizes from a single symbol's own history aren't strong enough
+    // evidence for that, but they're useful context on the signal card.
+    let timeCycleContext = null;
+    if (timeCycleEngine) {
+      timeCycleContext = timeCycleEngine.currentWindowBias({ candles });
+    }
+
+    // AI Strategy Selector: does THIS signal's direction/setup fit the
+    // regime that's actually in play right now? Trend-following calls get
+    // a lean in DIRECTIONAL regimes, breakout-style calls get discounted
+    // in CHOP. This tilts the already-scored confidence and can raise
+    // (never lower) the minimum-score bar for choppier/less tradeable
+    // regimes — it does not mutate the shared scorer instance, so there's
+    // no cross-symbol race condition from concurrent regimes.
+    let strategyContext = null;
+    if (strategySelector) {
+      strategyContext = strategySelector.select({ regime, signalAction: signal.action, adaptiveLearningEngine: adaptiveLearning });
+      if (strategyContext.confidenceMultiplier !== 1 && signal.score?.final != null) {
+        const tilted = parseFloat((signal.score.final * strategyContext.confidenceMultiplier).toFixed(2));
+        log.debug(`${key}: strategy-fit (${strategyContext.profile}) tilting score ${signal.score.final} -> ${tilted}`);
+        signal = { ...signal, score: { ...signal.score, final: tilted, strategyTilted: true } };
+      }
+      const effectiveFloor = Math.max(scorer.minScore ?? 0, strategyContext.minScoreFloor || 0);
+      if ((signal.score?.final ?? 0) < effectiveFloor) {
+        log.debug(`${key}: below regime-adjusted floor (${effectiveFloor}) for ${strategyContext.profile} — filtered`);
+        return;
+      }
+    }
+
+    // Candle Intelligence: does the most recent candle itself look like a
+    // decisive, well-formed bar, or a low-conviction non-event? Attached as
+    // context rather than a hard filter — a low candle-quality score on an
+    // otherwise well-confirmed multi-agent signal is a caution flag, not
+    // an automatic reject.
+    let candleContext = null;
+    if (candleIntelligence) {
+      candleContext = candleIntelligence.analyze({ candles });
+    }
+
     if (!signal || signal.action === 'WAIT' || (signal.score?.final ?? 0) < (scorer.minScore ?? 0)) {
       log.debug(`${key}: filtered post trap/compression check — score=${signal?.score?.final}`);
       return;
@@ -440,7 +499,30 @@ async function runAnalysisCycle(symbol, timeframe) {
     }
 
     // ── Refine entry, build SL/TP, then gate the setup ──
-    let fullSignal = { ...signal, regime };
+    let fullSignal = {
+      ...signal,
+      regime,
+      compressionContext: compressionContext ? {
+        isCompressed: compressionContext.isCompressed,
+        compressionScore: compressionContext.compressionScore,
+        biasHint: compressionContext.biasHint,
+      } : null,
+      abnormalMarket: abnormalMarket?.abnormal ? {
+        severity: abnormalMarket.severity,
+        reasons: abnormalMarket.reasons,
+      } : null,
+      timeCycle: timeCycleContext,
+      strategy: strategyContext ? {
+        profile: strategyContext.profile,
+        confidenceMultiplier: strategyContext.confidenceMultiplier,
+        note: strategyContext.note,
+      } : null,
+      candleIntelligence: candleContext ? {
+        type: candleContext.type,
+        qualityScore: candleContext.qualityScore,
+        note: candleContext.note,
+      } : null,
+    };
     let entryOptimization = null;
     let tradePlan = null;
     let riskEvaluation = null;

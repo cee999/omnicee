@@ -437,7 +437,73 @@ async function runTests() {
     pass(`Scenario Simulator: DIRECTIONAL=100% WR, CHOP=0% WR, NORMAL=100% WR, COMPRESSION=0% WR`);
   } catch (e) { fail('Scenario Simulator (byMarketStructure/byVolatilityRegime)', e); }
 
+  try {
+    const { TrapDetector } = require(path.join(ROOT, 'signal-pipeline/trap-detector'));
+    const candles = syntheticCandles(150, 2000, 'RANGE');
+    const trap = new TrapDetector();
+    const result = trap.analyze({ candles });
+    if (!Array.isArray(result.traps)) throw new Error('expected traps array');
+    if (typeof result.trapRisk !== 'number') throw new Error('expected numeric trapRisk');
+    pass(`TrapDetector: traps=${result.traps.length} trapRisk=${result.trapRisk}`);
+  } catch (e) { fail('TrapDetector', e); }
+
+  try {
+    const { CompressionDetector } = require(path.join(ROOT, 'signal-pipeline/compression-detector'));
+    const candles = syntheticCandles(150, 2000, 'RANGE');
+    const comp = new CompressionDetector();
+    const result = comp.analyze({ candles });
+    if (typeof result.compressionScore !== 'number') throw new Error('expected numeric compressionScore');
+    pass(`CompressionDetector: score=${result.compressionScore} compressed=${result.isCompressed}`);
+  } catch (e) { fail('CompressionDetector', e); }
+
+  try {
+    const { TimeCycleEngine } = require(path.join(ROOT, 'signal-pipeline/time-cycle-engine'));
+    const candles = syntheticCandles(1500, 2000, 'RANGE');
+    const tce = new TimeCycleEngine();
+    const result = tce.analyze({ candles, forwardBars: 1 });
+    if (!Array.isArray(result.hourOfDay) || result.hourOfDay.length === 0) throw new Error('expected populated hourOfDay buckets');
+    pass(`TimeCycleEngine: hourBuckets=${result.hourOfDay.length} dowBuckets=${result.dayOfWeek.length}`);
+  } catch (e) { fail('TimeCycleEngine', e); }
+
+
+  try {
+    const { StrategySelector } = require(path.join(ROOT, 'signal-pipeline/strategy-selector'));
+    const sel = new StrategySelector();
+    const aligned = sel.select({ regime: { regime: 'BULL_TREND', trend: 'BULL_TREND', structure: 'DIRECTIONAL', volatility: 'NORMAL', tradeability: 80 }, signalAction: 'LONG' });
+    const fighting = sel.select({ regime: { regime: 'BULL_TREND', trend: 'BULL_TREND', structure: 'DIRECTIONAL', volatility: 'NORMAL', tradeability: 80 }, signalAction: 'SHORT' });
+    if (!(aligned.confidenceMultiplier > fighting.confidenceMultiplier)) {
+      throw new Error(`expected trend-aligned multiplier > counter-trend, got ${aligned.confidenceMultiplier} vs ${fighting.confidenceMultiplier}`);
+    }
+    const chop = sel.select({ regime: { regime: 'CHOP_EXPANSION', trend: 'BALANCED', structure: 'CHOP', volatility: 'EXPANSION', tradeability: 30 }, signalAction: 'LONG' });
+    if (chop.confidenceMultiplier >= 1 || !chop.minScoreFloor) throw new Error('expected CHOP to discount confidence and set a min-score floor');
+    pass(`StrategySelector: aligned=${aligned.confidenceMultiplier} counterTrend=${fighting.confidenceMultiplier} chop=${chop.confidenceMultiplier}/floor=${chop.minScoreFloor}`);
+  } catch (e) { fail('StrategySelector', e); }
+
+  try {
+    const { CandleIntelligence } = require(path.join(ROOT, 'signal-pipeline/candle-intelligence'));
+    const ci = new CandleIntelligence();
+    // Deterministic, monotonically-declining series — syntheticCandles' drift
+    // is dominated by its own random noise over a short window and can't
+    // reliably produce a classifiable down-trend for this assertion.
+    const candles = [];
+    let price = 2000;
+    for (let i = 0; i < 40; i++) {
+      const o = price;
+      const c = price - price * 0.004;
+      candles.push({ open: o, high: o + price * 0.0005, low: c - price * 0.0005, close: c, volume: 1000, timestamp: Date.now() - (40 - i) * 3600000 });
+      price = c;
+    }
+    const last = candles[candles.length - 1];
+    // Force a hammer-shaped rejection candle after the down-trend
+    candles[candles.length - 1] = { ...last, open: last.close, close: last.close + last.close * 0.003, high: last.close + last.close * 0.0035, low: last.close - last.close * 0.018, volume: (last.volume || 1000) * 3 };
+    const result = ci.analyze({ candles });
+    if (result.type !== 'HAMMER_REJECTION') throw new Error(`expected HAMMER_REJECTION, got ${result.type}`);
+    if (!result.rejection.isExhaustionCandidate) throw new Error('expected exhaustion candidate flag on hammer after downtrend');
+    pass(`CandleIntelligence: type=${result.type} quality=${result.qualityScore} exhaustion=${result.rejection.isExhaustionCandidate}`);
+  } catch (e) { fail('CandleIntelligence', e); }
+
   // ── 12. Syntax check all modules ──────────────────────────────────────
+
 
   console.log('\n12. index.js syntax check');
   try {
