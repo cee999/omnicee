@@ -120,9 +120,17 @@ const { CFTCCotFeed }        = loadModule('./feeds/cftc-cot-feed',              
 const { COTReportParser }    = loadModule('./feeds/news-feed',                   'COTReportParser')   || {};
 const { OpportunityRanker }  = loadModule('./signal-pipeline/opportunity-ranker', 'OpportunityRanker') || {};
 const { RelativeStrengthEngine } = loadModule('./risk-engine/relative-strength', 'RelativeStrengthEngine') || {};
+const { TrapDetector }       = loadModule('./signal-pipeline/trap-detector',      'TrapDetector')      || {};
+const { CompressionDetector }= loadModule('./signal-pipeline/compression-detector','CompressionDetector') || {};
 
 // ConflictResolver is instantiated (not static) — create one singleton
 const conflictResolver = ConflictResolverClass ? new ConflictResolverClass() : null;
+
+// TrapDetector keeps its own rolling per-call history but is stateless enough
+// TrapDetector keeps its own rolling per-call history but is stateless enough
+// to share across symbols; CompressionDetector is fully stateless.
+const trapDetector        = TrapDetector        ? new TrapDetector()        : null;
+const compressionDetector = CompressionDetector ? new CompressionDetector() : null;
 
 // ── 3. System state ────────────────────────────────────────────────────────
 
@@ -360,6 +368,38 @@ async function runAnalysisCycle(symbol, timeframe) {
 
     if (!signal || signal.action === 'WAIT') {
       log.debug(`${key}: score=${signal?.score?.final || 0} — no signal`);
+      return;
+    }
+
+    // ── Trap + compression context ──
+    // Trap detector: is this signal firing right at a level that just
+    // produced a bull/bear trap (failed breakout + reversal)? If so, dampen
+    // conviction rather than blocking outright — the reversal itself may
+    // still be tradeable in the opposite direction next cycle.
+    let trapContext = null;
+    if (trapDetector) {
+      trapContext = trapDetector.shouldDampenBreakout({
+        candles,
+        smcAnalysis: smcResult?.analysis || lastVotes[symbol].smc?.analysis,
+        direction: signal.action,
+      });
+      if (trapContext.dampen && signal.score?.final != null) {
+        const dampened = parseFloat((signal.score.final * trapContext.factor).toFixed(2));
+        log.debug(`${key}: trap risk dampening score ${signal.score.final} -> ${dampened} (${trapContext.reason})`);
+        signal = { ...signal, score: { ...signal.score, final: dampened, trapDampened: true } };
+      }
+    }
+
+    // Compression detector: purely informational context attached to the
+    // signal (and fed to the scanner below) — a squeeze doesn't block a
+    // signal, but it flags elevated expansion/whipsaw risk around it.
+    let compressionContext = null;
+    if (compressionDetector) {
+      compressionContext = compressionDetector.analyze({ candles });
+    }
+
+    if (!signal || signal.action === 'WAIT' || (signal.score?.final ?? 0) < (scorer.minScore ?? 0)) {
+      log.debug(`${key}: filtered post trap/compression check — score=${signal?.score?.final}`);
       return;
     }
 
