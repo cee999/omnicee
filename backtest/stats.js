@@ -41,6 +41,13 @@ function computeStats(trades, equityCurve, startBalance) {
   const bySymbol = groupStats(trades, t => t.symbol);
   const byGrade = groupStats(trades, t => t.grade || 'UNGRADED');
   const byDirection = groupStats(trades, t => t.direction);
+  // Doc item 47 (Scenario Simulator): "trending, ranging, volatile,
+  // low-volatility" — bucketing this single run's trades by the regime
+  // active at each trade's entry answers the same question a suite of
+  // separate curated-window backtests would, without needing to hunt down
+  // and hand-pick historical date ranges for each scenario.
+  const byMarketStructure  = groupStats(trades, t => t.structure  || 'UNKNOWN'); // DIRECTIONAL / RANGE / CHOP
+  const byVolatilityRegime = groupStats(trades, t => t.volatility || 'UNKNOWN'); // EXPANSION / NORMAL / COMPRESSION
 
   const finalBalance = equityCurve.length ? equityCurve[equityCurve.length - 1].balance : startBalance;
   const totalReturnPct = ((finalBalance - startBalance) / startBalance) * 100;
@@ -62,6 +69,8 @@ function computeStats(trades, equityCurve, startBalance) {
     bySymbol,
     byGrade,
     byDirection,
+    byMarketStructure,
+    byVolatilityRegime,
   };
 }
 
@@ -116,6 +125,14 @@ By Symbol:`);
   console.log('\nBy Grade:');
   for (const [g, s] of Object.entries(stats.byGrade)) {
     console.log(`  ${g.padEnd(10)} ${s.trades} trades, ${s.winRate}% WR, ${s.avgR}R avg`);
+  }
+  console.log('\nScenario Simulator — By Market Structure (trending / ranging / choppy):');
+  for (const [k, s] of Object.entries(stats.byMarketStructure || {})) {
+    console.log(`  ${k.padEnd(12)} ${s.trades} trades, ${s.winRate}% WR, ${s.avgR}R avg`);
+  }
+  console.log('\nScenario Simulator — By Volatility Regime (expansion / normal / compression):');
+  for (const [k, s] of Object.entries(stats.byVolatilityRegime || {})) {
+    console.log(`  ${k.padEnd(12)} ${s.trades} trades, ${s.winRate}% WR, ${s.avgR}R avg`);
   }
   if (rejections) {
     console.log('\nSignals filtered out before firing (this is normal — it means the risk/quality gates are doing their job):');

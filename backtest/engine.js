@@ -362,6 +362,13 @@ class BacktestEngine {
       score: signal.score?.final, openedAt, closedAt: closeTimestamp,
       entryPrice: position.entryPrice, pnlR, pnlPct, riskPct, forced,
       balanceAfter: Math.round(this.balance * 100) / 100,
+      // Doc item 47 (Scenario Simulator): "trending, ranging, volatile,
+      // low-volatility" maps directly onto RegimeEngine's own structure
+      // (DIRECTIONAL/RANGE/CHOP) and volatility (EXPANSION/NORMAL/
+      // COMPRESSION) fields, captured at the moment this trade was opened.
+      regime: signal.regime?.regime || 'UNKNOWN',
+      structure: signal.regime?.structure || 'UNKNOWN',
+      volatility: signal.regime?.volatility || 'UNKNOWN',
     };
     this.closedTrades.push(trade);
     this.equityCurve.push({ timestamp: closeTimestamp, balance: this.balance });

@@ -419,6 +419,24 @@ async function runTests() {
     pass(`Setup Analytics: bySetup correctly split smc(100% WR) vs mtf(0% WR)`);
   } catch (e) { fail('Setup Analytics (bySetup)', e); }
 
+  try {
+    const { computeStats } = require(path.join(ROOT, 'backtest/stats'));
+    const trades = [
+      { symbol: 'BTCUSDT', direction: 'LONG', grade: 'A', pnlR: 1.5, pnlPct: 1.2, structure: 'DIRECTIONAL', volatility: 'NORMAL' },
+      { symbol: 'BTCUSDT', direction: 'LONG', grade: 'A', pnlR: -1,  pnlPct: -1,  structure: 'CHOP',        volatility: 'COMPRESSION' },
+      { symbol: 'ETHUSDT', direction: 'SHORT', grade: 'B', pnlR: 2,  pnlPct: 1.5, structure: 'DIRECTIONAL', volatility: 'NORMAL' },
+    ];
+    const equityCurve = [{ timestamp: 1, balance: 10000 }, { timestamp: 2, balance: 10120 }, { timestamp: 3, balance: 10300 }];
+    const stats = computeStats(trades, equityCurve, 10000);
+    if (stats.byMarketStructure?.DIRECTIONAL?.trades !== 2 || stats.byMarketStructure?.CHOP?.trades !== 1) {
+      throw new Error(`byMarketStructure incorrect: ${JSON.stringify(stats.byMarketStructure)}`);
+    }
+    if (stats.byVolatilityRegime?.NORMAL?.winRate !== 100 || stats.byVolatilityRegime?.COMPRESSION?.winRate !== 0) {
+      throw new Error(`byVolatilityRegime incorrect: ${JSON.stringify(stats.byVolatilityRegime)}`);
+    }
+    pass(`Scenario Simulator: DIRECTIONAL=100% WR, CHOP=0% WR, NORMAL=100% WR, COMPRESSION=0% WR`);
+  } catch (e) { fail('Scenario Simulator (byMarketStructure/byVolatilityRegime)', e); }
+
   // ── 12. Syntax check all modules ──────────────────────────────────────
 
   console.log('\n12. index.js syntax check');
