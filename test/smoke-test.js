@@ -334,6 +334,27 @@ async function runTests() {
     pass(`FractalAgent: direction=${fractalResult.direction} score=${fractalResult.score}`);
   } catch (e) { fail('FractalAgent', e); }
 
+  try {
+    const { OpportunityRanker } = require(path.join(ROOT, 'signal-pipeline/opportunity-ranker'));
+    const ranker = new OpportunityRanker();
+    ranker.update('BTCUSDT', { action: 'BUY', score: 78, grade: 'A', fired: true, price: 65000 });
+    ranker.update('ETHUSDT', { action: 'WAIT', score: 30, grade: 'D', fired: false, price: 3200 });
+    const ranked = ranker.getRanked();
+    if (ranked.length !== 2 || ranked[0].symbol !== 'BTCUSDT') {
+      throw new Error(`expected BTCUSDT ranked first, got ${JSON.stringify(ranked.map(r => r.symbol))}`);
+    }
+    pass(`OpportunityRanker: top=${ranked[0].symbol} score=${ranked[0].score}`);
+  } catch (e) { fail('OpportunityRanker', e); }
+
+  try {
+    const { RelativeStrengthEngine } = require(path.join(ROOT, 'risk-engine/relative-strength'));
+    const rs = new RelativeStrengthEngine({ lookback: 10 });
+    const stores = { BTCUSDT: { H1: candles }, ETHUSDT: { H1: syntheticCandles(200, 3000, 'DOWN') } };
+    const ranked = rs.rank(stores, ['BTCUSDT', 'ETHUSDT'], 'H1');
+    if (ranked.length !== 2) throw new Error(`expected 2 ranked symbols, got ${ranked.length}`);
+    pass(`RelativeStrengthEngine: leader=${ranked[0].symbol} (${ranked[0].changePct.toFixed(2)}%)`);
+  } catch (e) { fail('RelativeStrengthEngine', e); }
+
   // ── 12. Syntax check all modules ──────────────────────────────────────
 
   console.log('\n12. index.js syntax check');

@@ -118,6 +118,8 @@ const { OpenInsiderFeed }    = loadModule('./feeds/openinsider-feed',           
 const { FinnhubFeed }        = loadModule('./feeds/finnhub-feed',                'FinnhubFeed')       || {};
 const { CFTCCotFeed }        = loadModule('./feeds/cftc-cot-feed',               'CFTCCotFeed')       || {};
 const { COTReportParser }    = loadModule('./feeds/news-feed',                   'COTReportParser')   || {};
+const { OpportunityRanker }  = loadModule('./signal-pipeline/opportunity-ranker', 'OpportunityRanker') || {};
+const { RelativeStrengthEngine } = loadModule('./risk-engine/relative-strength', 'RelativeStrengthEngine') || {};
 
 // ConflictResolver is instantiated (not static) — create one singleton
 const conflictResolver = ConflictResolverClass ? new ConflictResolverClass() : null;
@@ -334,6 +336,27 @@ async function runAnalysisCycle(symbol, timeframe) {
       currentPrice,
       timestamp: Date.now(),
     });
+
+    // Record this cycle's evaluation on the watchlist scoreboard regardless
+    // of whether it fires — this is what lets /api/watchlist answer "what's
+    // close to setting up?" instead of only ever showing signals that
+    // already cleared every gate.
+    if (opportunityRanker) {
+      opportunityRanker.update(symbol, {
+        action:       signal?.action || 'WAIT',
+        score:        signal?.score?.final || 0,
+        grade:        signal?.score?.grade || null,
+        regime:       regime?.regime || null,
+        tradeability: regime?.tradeability ?? null,
+        session:      sessionQuality?.session || null,
+        fired:        !!(signal && signal.action !== 'WAIT'),
+        price:        currentPrice,
+        timestamp:    Date.now(),
+      });
+      if (wsBus) {
+        wsBus.emit('watchlist_update', opportunityRanker.getRanked({ limit: 20 }));
+      }
+    }
 
     if (!signal || signal.action === 'WAIT') {
       log.debug(`${key}: score=${signal?.score?.final || 0} — no signal`);
@@ -911,7 +934,7 @@ let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, institutionalGates,
     adaptiveLearning, drawdownGuard, riskEngine, sessionFilter, correlationFilter, memory,
     monteCarlo, bayesianEng, statValidator, walkForward, ensembleEng,
     signalMonitor, institutionalRiskManager, executionManagers, myfxbookFeed, openInsiderFeed,
-    finnhubFeed, cftcCotFeed, cotParser, executionEngine;
+    finnhubFeed, cftcCotFeed, cotParser, executionEngine, opportunityRanker, relativeStrength;
 
 // FIX: ExecutionManager's MarketMicrostructureAnalyzer keeps a single shared
 // orderBookHistory/tradeHistory/spreadHistory with no per-symbol keying — one
@@ -1078,6 +1101,16 @@ function buildSingletons() {
   if (RegimeEngine) {
     regimeEngine = new RegimeEngine({ lookback: 120 });
     log.info('RegimeEngine created');
+  }
+
+  if (OpportunityRanker) {
+    opportunityRanker = new OpportunityRanker({ staleAfterMs: 15 * 60 * 1000 });
+    log.info('OpportunityRanker created — watchlist scoreboard active');
+  }
+
+  if (RelativeStrengthEngine) {
+    relativeStrength = new RelativeStrengthEngine({ lookback: 20 });
+    log.info('RelativeStrengthEngine created');
   }
 
   if (InstitutionalGates) {
@@ -1352,6 +1385,7 @@ function buildSingletons() {
     require('./api/realtime').setEngines({
       adaptiveLearning, bayesianEng, walkForward, institutionalGates,
       drawdownGuard, sessionFilter, riskEngine, institutionalRiskManager,
+      opportunityRanker, relativeStrength,
       // For GET /api/outlook (signal-pipeline/market-outlook.js)
       regimeEngine, candleStores, symbols: SYMBOLS,
     });

@@ -104,6 +104,31 @@ function createApp() {
     res.json({ ok: true, outlook: { ...outlook, news } });
   });
 
+  // ── Watchlist / Opportunity Ranking (doc items: Market Scanner, Watchlist
+  // AI, Opportunity Ranking, Relative Strength Engine) ────────────────────
+  app.get('/api/watchlist', telegramAuthMiddleware, async (req, res) => {
+    const live = getEngines();
+    if (!live.opportunityRanker) {
+      return res.status(503).json({ ok: false, error: 'Watchlist unavailable — trading engine not yet initialized' });
+    }
+    const opportunities = live.opportunityRanker.getRanked({
+      limit: req.query.limit ? Number(req.query.limit) : 20,
+    });
+
+    let relativeStrength = { leaders: [], laggards: [], all: [] };
+    if (live.relativeStrength && live.candleStores && live.symbols) {
+      try {
+        relativeStrength = live.relativeStrength.leadersAndLaggards(
+          live.candleStores, live.symbols, req.query.timeframe || 'H1', 3,
+        );
+      } catch (err) {
+        console.warn(`[API] RelativeStrength ranking error: ${err.message}`);
+      }
+    }
+
+    res.json({ ok: true, opportunities, relativeStrength });
+  });
+
   app.get('/api/telemetry', telegramAuthMiddleware, async (req, res) => {
     const telemetry = await db.getTelemetry({ limit: req.query.limit || 100 }).catch(err => {
       res.status(503).json({ ok: false, error: err.message });
@@ -317,6 +342,9 @@ function startServer(config = {}) {
   // FIX: myfxbook/openinsider events previously only reached Telegram —
   // now relayed to the live dashboard as well (see index.js wsBus.emit('intel', ...)).
   forward('intel', 'intel', payload => db.saveTelemetry({ type: 'intel_' + payload.kind, ...payload }));
+  // Opportunity Ranker scoreboard — pushed every cycle so the Mini App's
+  // watchlist view updates live instead of only on poll of /api/watchlist.
+  forward('watchlist_update', 'watchlist');
 
   const port = Number(config.port || API_PORT);
   httpServer.listen(port, () => {
