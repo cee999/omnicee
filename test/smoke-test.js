@@ -517,6 +517,27 @@ async function runTests() {
     pass(`AIAdvisor: disabled-without-key fails open correctly (recommendation=${result.recommendation})`);
   } catch (e) { fail('AIAdvisor', e); }
 
+  try {
+    const { SignalExplainer } = require(path.join(ROOT, 'signal-pipeline/signal-explainer'));
+    const explainer = new SignalExplainer();
+    const strong = explainer.explain({
+      signal: {
+        symbol: 'BTCUSDT', action: 'LONG', score: { final: 88, grade: 'A' },
+        directionAnalysis: { confirmedBy: ['smc', 'mtf', 'momentum', 'volumeOI'], agentVotes: [1, 2, 3, 4, 5, 6] },
+        agentBreakdown: [{ agent: 'SMC', weight: 0.322, direction: 'LONG', topReasons: ['Bullish order block mitigated'] }],
+      },
+      candleContext: { type: 'BULL_MARUBOZU', qualityScore: 91, note: 'Strong bullish candle.' },
+      compressionContext: { isCompressed: false, compressionScore: 20 },
+    });
+    if (strong.confidenceLabel !== 'WELL_SUPPORTED') throw new Error(`expected WELL_SUPPORTED, got ${strong.confidenceLabel}`);
+    if (!strong.supports.length || strong.cautions.length) throw new Error('expected supports only, no cautions, for a clean strong signal');
+
+    const minimal = explainer.explain({ signal: { symbol: 'XAUUSD', action: 'LONG', score: { final: 76, grade: 'B' } } });
+    if (!minimal.summary || minimal.confidenceLabel !== 'STANDARD') throw new Error('expected graceful degrade to STANDARD with only signal context');
+
+    pass(`SignalExplainer: strong=${strong.confidenceLabel} minimal-context=${minimal.confidenceLabel} (free, no API key required)`);
+  } catch (e) { fail('SignalExplainer', e); }
+
   // ── 12. Syntax check all modules ──────────────────────────────────────
 
 
