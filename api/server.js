@@ -17,6 +17,7 @@ const { FinnhubFeed } = require('../feeds/finnhub-feed');
 const { AdaptiveLearningEngine } = require('../signal-pipeline/adaptive-learning-engine');
 const { MarketOutlookBuilder } = require('../signal-pipeline/market-outlook');
 const { recordOutcomeEverywhere } = require('../signal-pipeline/outcome-recorder');
+const { MarketHeatMap } = require('../automation/market-heatmap');
 
 const API_PORT = Number(process.env.PORT || process.env.WS_PORT || 3001);
 const STATIC_ROOT = path.join(__dirname, '..', 'webapp');
@@ -147,6 +148,30 @@ function createApp() {
     }
 
     res.json({ ok: true, opportunities, relativeStrength });
+  });
+
+  // ── Market Heat Map (doc item #56) ──────────────────────────────────
+  // Composites the same OpportunityRanker + RelativeStrengthEngine data
+  // above into per-symbol heat buckets for a grid-style dashboard view.
+  app.get('/api/heatmap', telegramAuthMiddleware, async (req, res) => {
+    const live = getEngines();
+    if (!live.opportunityRanker) {
+      return res.status(503).json({ ok: false, error: 'Heat map unavailable — trading engine not yet initialized' });
+    }
+    try {
+      const heatmap = new MarketHeatMap();
+      const grid = heatmap.build({
+        opportunityRanker: live.opportunityRanker,
+        relativeStrength: live.relativeStrength,
+        candleStores: live.candleStores,
+        symbols: live.symbols,
+        timeframe: req.query.timeframe || 'H1',
+      });
+      res.json({ ok: true, ...grid });
+    } catch (err) {
+      console.warn(`[API] MarketHeatMap build error: ${err.message}`);
+      res.status(500).json({ ok: false, error: 'Heat map build failed' });
+    }
   });
 
   // ── Data Integrity / Feed Health (doc item: Connection & Data Integrity

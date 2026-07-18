@@ -135,6 +135,7 @@ const { TimeCycleEngine }    = loadModule('./signal-pipeline/time-cycle-engine',
 const { StrategySelector }   = loadModule('./signal-pipeline/strategy-selector',    'StrategySelector')  || {};
 const { CandleIntelligence } = loadModule('./signal-pipeline/candle-intelligence',  'CandleIntelligence') || {};
 const { AIAdvisor }          = loadModule('./signal-pipeline/ai-advisor',           'AIAdvisor')          || {};
+const { SignalExplainer }    = loadModule('./signal-pipeline/signal-explainer',     'SignalExplainer')    || {};
 
 // ConflictResolver is instantiated (not static) — create one singleton
 const conflictResolver = ConflictResolverClass ? new ConflictResolverClass() : null;
@@ -158,6 +159,10 @@ if (aiAdvisor) {
     ? `AI Advisor active (model=${aiAdvisor.model}) — advisory-only, fails open on any error`
     : 'AI Advisor loaded but disabled — ANTHROPIC_API_KEY not set in .env');
 }
+// SignalExplainer is the free counterpart to AIAdvisor — pure template-driven
+// natural-language breakdown of the pipeline's own already-computed context,
+// no API key, no network call, no cost, never fails. Always on.
+const signalExplainer = SignalExplainer ? new SignalExplainer() : null;
 
 // ── 3. System state ────────────────────────────────────────────────────────
 
@@ -893,6 +898,25 @@ async function runAnalysisCycle(symbol, timeframe) {
         fullSignal.riskFlags = { ...(fullSignal.riskFlags || {}), aiAdvisorReduceSize: true };
         log.info(`${key}: AI Advisor recommends REDUCE_SIZE — ${aiAdvisorVerdict.reasoning}`);
       }
+    }
+
+    // ── Signal Explainer (free, no LLM) ──
+    // Runs unconditionally — no key, no network, no cost. This is what
+    // populates the "why did I get this signal" breakdown in the Mini App
+    // and Telegram message even when the paid AI Advisor above is disabled
+    // (which it is by default).
+    if (signalExplainer) {
+      const explanation = signalExplainer.explain({
+        signal: fullSignal,
+        regime,
+        strategyContext,
+        candleContext,
+        compressionContext,
+        abnormalMarket,
+        trapContext,
+        timeCycleContext,
+      });
+      fullSignal.explanation = explanation;
     }
 
     // ── Store in memory ──

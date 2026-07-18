@@ -551,6 +551,40 @@ async function runTests() {
     pass(`IntermarketAnalyzer: EURUSD confirmed=${eurusdLong.confirmed}, USDCAD confirmed=${usdcadLong.confirmed}, GBPJPY(quote-currency) confirmed=${gbpjpyLong.confirmed}`);
   } catch (e) { fail('IntermarketAnalyzer', e); }
 
+  try {
+    const { SignalExplainer } = require(path.join(ROOT, 'signal-pipeline/signal-explainer'));
+    const explainer = new SignalExplainer();
+    const strong = explainer.explain({
+      signal: {
+        symbol: 'BTCUSDT', action: 'LONG', score: { final: 88, grade: 'A' },
+        directionAnalysis: { confirmedBy: ['smc', 'mtf', 'momentum', 'volumeOI'], agentVotes: [1, 2, 3, 4, 5, 6] },
+        agentBreakdown: [{ agent: 'SMC', weight: 0.322, direction: 'LONG', topReasons: ['Bullish order block mitigated'] }],
+      },
+      candleContext: { type: 'BULL_MARUBOZU', qualityScore: 91, note: 'Strong bullish candle.' },
+      compressionContext: { isCompressed: false, compressionScore: 20 },
+    });
+    if (strong.confidenceLabel !== 'WELL_SUPPORTED') throw new Error(`expected WELL_SUPPORTED, got ${strong.confidenceLabel}`);
+    if (!strong.supports.length || strong.cautions.length) throw new Error('expected supports only, no cautions, for a clean strong signal');
+
+    const minimal = explainer.explain({ signal: { symbol: 'XAUUSD', action: 'LONG', score: { final: 76, grade: 'B' } } });
+    if (!minimal.summary || minimal.confidenceLabel !== 'STANDARD') throw new Error('expected graceful degrade to STANDARD with only signal context');
+
+    pass(`SignalExplainer: strong=${strong.confidenceLabel} minimal-context=${minimal.confidenceLabel} (free, no API key required)`);
+  } catch (e) { fail('SignalExplainer', e); }
+
+  try {
+    const { MarketHeatMap } = require(path.join(ROOT, 'automation/market-heatmap'));
+    const { OpportunityRanker } = require(path.join(ROOT, 'signal-pipeline/opportunity-ranker'));
+    const ranker = new OpportunityRanker();
+    ranker.update('BTCUSDT', { action: 'LONG', score: 88, grade: 'A', fired: true });
+    ranker.update('ETHUSDT', { action: 'WAIT', score: 45, grade: 'C', fired: false, blockedReason: 'below min score' });
+    const heatmap = new MarketHeatMap();
+    const grid = heatmap.build({ opportunityRanker: ranker });
+    if (!Array.isArray(grid.tiles) || grid.tiles.length !== 2) throw new Error(`expected 2 tiles, got ${grid.tiles?.length}`);
+    if (grid.tiles[0].symbol !== 'BTCUSDT') throw new Error('expected BTCUSDT (higher score) ranked first');
+    pass(`MarketHeatMap: ${grid.tiles.length} tiles, top=${grid.tiles[0].symbol} (${grid.tiles[0].bucket})`);
+  } catch (e) { fail('MarketHeatMap', e); }
+
   // ── 12. Syntax check all modules ──────────────────────────────────────
 
 

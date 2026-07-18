@@ -1160,6 +1160,17 @@ class AlertDispatcher extends EventEmitter {
       ? `\n\n${EMOJI.CHART} <a href="${chartUrl}">View ${signal.symbol} chart on TradingView</a>`
       : '';
 
+    // Free, no-cost explainability layer (signal-pipeline/signal-explainer.js) —
+    // shows the "why" breakdown even when the paid AI Advisor is disabled.
+    let explanationText = '';
+    if (signal.explanation) {
+      const { summary, cautions } = signal.explanation;
+      explanationText = `\n\n${EMOJI.CHART} <b>Why this signal:</b> ${summary}`;
+      if (cautions?.length > 1) {
+        explanationText += `\n${cautions.slice(1).map(c => `⚠️ ${c}`).join('\n')}`;
+      }
+    }
+
     // Queue delivery to all configured chats + subscribers
     const allChatIds = this._getAllChatIds();
     for (const chatId of allChatIds) {
@@ -1170,7 +1181,7 @@ class AlertDispatcher extends EventEmitter {
           try {
             const msg = await this._client.sendMessage(
               chatId,
-              text + posCalcText + chartLinkText,
+              text + posCalcText + chartLinkText + explanationText,
               { replyMarkup: keyboard }
             );
             this._delivery.record(signal.id, chatId, msg.message_id);
