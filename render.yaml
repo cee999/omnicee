@@ -22,6 +22,15 @@ envVarGroups:
       - key: TELEGRAM_ALLOWED_USER_IDS
         sync: false
 
+      # ── EA (MT5 Expert Advisor) auth ────────────────────────
+      # FIX: was missing from this blueprint entirely. Without it,
+      # api/server.js's EA_SECRET defaults to '' and /api/ea/signals — the
+      # live signal feed an MT5 EA polls to place real trades — runs with
+      # NO authentication (see the explicit warning api/server.js logs on
+      # boot when this is unset). Required for a production deployment.
+      - key: EA_SECRET
+        sync: false
+
       # ── Data feeds ────────────────────────────────────────
       - key: TWELVE_DATA_API_KEY
         sync: false

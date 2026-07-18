@@ -409,6 +409,12 @@ function startServer(config = {}) {
   // vacuums. Pushed live so the dashboard can show a banner the moment a
   // symbol gets flagged, not just when it shows up in server logs.
   forward('abnormal_market', 'abnormal_market', payload => db.saveTelemetry({ type: 'abnormal_market', ...payload }));
+  // FIX: BybitFeed emits liquidation_cascade (real risk event — large forced
+  // liquidations in a short window) and index.js relays it onto wsBus, but
+  // it was never added to this forward() whitelist — it reached nowhere
+  // past a server-side log.warn(). A liquidation cascade is exactly the
+  // kind of event a trader wants to see live, not discover after the fact.
+  forward('liquidation_cascade', 'liquidation_cascade', payload => db.saveTelemetry({ type: 'liquidation_cascade', ...payload }));
 
   const port = Number(config.port || API_PORT);
   httpServer.listen(port, () => {
