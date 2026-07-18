@@ -401,6 +401,7 @@ button:focus-visible, .chip:focus-visible, [tabindex]:focus-visible { outline: 2
       <button class="sidebar-btn active" data-view="dashboard" title="Dashboard"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
       <button class="sidebar-btn" data-view="signals" title="Signals"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></button>
       <button class="sidebar-btn" data-view="intel" title="Intel"><svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+      <button class="sidebar-btn" data-view="monitor" title="Monitor"><svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></button>
       <button class="sidebar-btn" data-view="validation" title="Validation"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></button>
       <button class="sidebar-btn" data-view="tape" title="Event Tape"><svg viewBox="0 0 24 24"><line x1="17" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="17" y1="18" x2="3" y2="18"/></svg></button>
       <button class="sidebar-btn" data-view="risk" title="Risk"><svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></button>
@@ -536,6 +537,32 @@ button:focus-visible, .chip:focus-visible, [tabindex]:focus-visible { outline: 2
           <div class="card-head"><span>Watchlist</span></div>
           <div class="card-body" id="watchlist-panel">
             <div class="text-faint text-xs text-mono">Live prices appear once the feed connects.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Monitor: Opportunity Board, Feed Health, Market Alerts -->
+    <div class="view" id="view-monitor">
+      <div class="section-gap" style="overflow:auto;">
+        <div class="card" style="flex:1;">
+          <div class="card-head"><span>Opportunity Board</span><span class="text-faint text-xs" id="board-count">0 tracked</span></div>
+          <div class="card-body flush" id="board-panel">
+            <div class="empty-state">Every evaluated symbol/timeframe gets ranked here, not just what fires — including setups currently blocked by a gate.</div>
+          </div>
+        </div>
+      </div>
+      <div class="section-gap" style="overflow:auto;">
+        <div class="card">
+          <div class="card-head"><span>Feed Health</span><span class="text-faint text-xs" id="health-status">--</span></div>
+          <div class="card-body" id="health-panel">
+            <div class="text-faint text-xs text-mono">No health check yet.</div>
+          </div>
+        </div>
+        <div class="card" style="flex:1;">
+          <div class="card-head"><span>Market Alerts</span><span class="text-faint text-xs" id="alerts-count">0 events</span></div>
+          <div class="card-body flush" id="alerts-feed">
+            <div class="empty-state">Abnormal price action (flash spikes/crashes) and liquidation cascades appear here.</div>
           </div>
         </div>
       </div>
@@ -687,6 +714,7 @@ button:focus-visible, .chip:focus-visible, [tabindex]:focus-visible { outline: 2
     <button class="nav-btn active" data-view="dashboard"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>DASH</button>
     <button class="nav-btn" data-view="signals"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>SIGNALS</button>
     <button class="nav-btn" data-view="intel"><svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>INTEL</button>
+    <button class="nav-btn" data-view="monitor"><svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>MONITOR</button>
     <button class="nav-btn" data-view="validation"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>VALID</button>
     <button class="nav-btn" data-view="tape"><svg viewBox="0 0 24 24"><line x1="17" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="17" y1="18" x2="3" y2="18"/></svg>TAPE</button>
     <button class="nav-btn" data-view="risk"><svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>RISK</button>
@@ -723,6 +751,9 @@ const state = {
   regimes: {},
   telemetry: [],
   intel: [],
+  watchlist: [],
+  feedHealth: null,
+  marketAlerts: [],
   learning: [],
   stats: { total: 0, gradeA: 0 },
   risk: { dailyPnl: 0, drawdown: 0, consecLoss: 0, netSizingFactor: 1, state: 'CLOSED', maxDailyLoss: 3, maxDrawdown: 10 },
@@ -790,6 +821,32 @@ socket.on('intel', data => {
   haptic('nav');
   renderAll();
 });
+// FIX: these three were already forwarded by api/server.js (watchlist_update,
+// feed_health, abnormal_market) — the backend engines behind them were fully
+// live, but nothing in this file ever listened, so none of it ever reached
+// the dashboard. liquidation_cascade was ALSO forwarded in the same pass
+// this panel was built (previously only reached a server-side log.warn()).
+socket.on('watchlist', data => {
+  state.watchlist = Array.isArray(data) ? data : [];
+  renderWatchlistBoard();
+});
+socket.on('feed_health', data => {
+  state.feedHealth = data;
+  renderFeedHealth();
+});
+socket.on('abnormal_market', data => {
+  if (!data?.abnormal) return; // only surface genuine flags, not every clean check
+  state.marketAlerts.unshift({ kind: 'abnormal_market', ...data, receivedAt: Date.now() });
+  state.marketAlerts = state.marketAlerts.slice(0, 60);
+  haptic('nav');
+  renderMarketAlerts();
+});
+socket.on('liquidation_cascade', data => {
+  state.marketAlerts.unshift({ kind: 'liquidation_cascade', ...data, receivedAt: Date.now() });
+  state.marketAlerts = state.marketAlerts.slice(0, 60);
+  haptic('nav');
+  renderMarketAlerts();
+});
 
 async function hydrateFromApi() {
   const headers = initData ? { 'x-telegram-init-data': initData } : {};
@@ -820,6 +877,22 @@ async function hydrateOutlook() {
   } catch (_) {}
   renderOutlook();
 }
+// FIX: /api/watchlist and /api/health existed and responded correctly but
+// were never fetched anywhere in this file — this is the initial-load path
+// (the socket handlers above keep it live after that).
+async function hydrateBoard() {
+  const headers = initData ? { 'x-telegram-init-data': initData } : {};
+  try {
+    const res = await fetch('/api/watchlist', { headers }).then(r => r.json());
+    if (res.ok) state.watchlist = res.opportunities || [];
+  } catch (_) {}
+  try {
+    const res = await fetch('/api/health', { headers }).then(r => r.json());
+    if (res.ok) state.feedHealth = res;
+  } catch (_) {}
+  renderWatchlistBoard();
+  renderFeedHealth();
+}
 
 function ingestSignal(sig, rerender = true) {
   if (!sig || sig.action === 'WAIT') return;
@@ -840,6 +913,7 @@ function switchView(viewId) {
   document.querySelectorAll('.sidebar-btn, .nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === viewId));
   haptic('nav');
   if (viewId === 'outlook' && !state.outlook) hydrateOutlook();
+  if (viewId === 'monitor' && !state.watchlist.length && !state.feedHealth) hydrateBoard();
   renderAll();
 }
 document.querySelectorAll('[data-view]').forEach(btn => btn.addEventListener('click', () => switchView(btn.dataset.view)));
@@ -872,6 +946,9 @@ function renderAll() {
   renderLearning();
   renderIntel();
   renderWatchlist();
+  renderWatchlistBoard();
+  renderFeedHealth();
+  renderMarketAlerts();
 }
 
 function renderTicker() {
@@ -1203,6 +1280,85 @@ function renderWatchlist() {
   el.innerHTML = items.map(m => {
     const ch = Number(m.change || 0);
     return `<div class="kv-row"><span class="kv-key">${esc(m.symbol)}</span><span class="kv-val ${ch >= 0 ? 'good' : 'bad'}">${formatPrice(m.price)} (${ch >= 0 ? '+' : ''}${ch.toFixed(2)}%)</span></div>`;
+  }).join('');
+}
+
+// FIX: OpportunityRanker ranks EVERY evaluated setup each cycle — not just
+// the one that fires — but nothing surfaced that anywhere in this UI. This
+// is that missing view: the best current setups across the whole watchlist,
+// including ones currently blocked by a gate (shown with their reason).
+function renderWatchlistBoard() {
+  const el = document.getElementById('board-panel');
+  const countEl = document.getElementById('board-count');
+  if (!el) return;
+  const items = state.watchlist || [];
+  if (countEl) countEl.textContent = `${items.length} tracked`;
+  if (!items.length) return; // keep the static empty state markup
+  el.innerHTML = items.slice(0, 30).map(o => {
+    const score = Math.round(Number(o.score) || 0);
+    const tone = o.fired ? 'good' : score >= 60 ? '' : 'text-faint';
+    const statusLabel = o.fired ? 'FIRED' : o.blockedReason ? 'BLOCKED' : o.action === 'WAIT' ? 'WAIT' : 'READY';
+    const statusClass = o.fired ? 'good' : o.blockedReason ? 'bad' : 'text-faint';
+    return `<div class="intel-item">
+      <div class="intel-icon" style="background:#3b82f61c;color:#3b82f6">${esc((o.grade || '-').slice(0, 2))}</div>
+      <div class="intel-body">
+        <div class="intel-title">${esc(o.symbol)} <span class="${tone}">${score}</span> <span class="text-faint text-xs">${esc(o.action || 'WAIT')}</span></div>
+        <div class="intel-desc">${o.blockedReason ? esc(o.blockedReason) : (o.regime ? `Regime: ${esc(o.regime)}` : 'No blocking reason recorded')}${o.session ? ` · ${esc(o.session)}` : ''}</div>
+        <div class="intel-time"><span class="${statusClass}">${statusLabel}</span> · ${time(o.timestamp)}${o.stale ? ' · stale' : ''}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// FIX: DataIntegrityMonitor.check() runs live (every 2min server-side) but
+// its result never reached this dashboard — a trader would only find out a
+// feed died when signals quietly stopped arriving, not from a warning here.
+function renderFeedHealth() {
+  const el = document.getElementById('health-panel');
+  const statusEl = document.getElementById('health-status');
+  if (!el) return;
+  const h = state.feedHealth;
+  if (!h) return; // keep static placeholder
+  if (statusEl) {
+    statusEl.textContent = h.ok ? 'OK' : 'ISSUES';
+    statusEl.className = 'text-faint text-xs ' + (h.ok ? 'good' : 'bad');
+  }
+  const feedRows = (h.feeds || []).map(f => {
+    const stateLabel = f.connected === true ? 'CONNECTED' : f.connected === false ? 'DISCONNECTED' : 'UNKNOWN';
+    const cls = f.connected === true ? 'good' : f.connected === false ? 'bad' : 'text-faint';
+    return `<div class="kv-row"><span class="kv-key">${esc(f.name)}</span><span class="kv-val ${cls}">${stateLabel}</span></div>`;
+  }).join('');
+  const staleRows = (h.staleSeries || []).map(s =>
+    `<div class="kv-row"><span class="kv-key">${esc(s.symbol)} ${esc(s.timeframe)}</span><span class="kv-val bad">stale ${Math.round(s.ageMs / 60000)}m</span></div>`
+  ).join('');
+  el.innerHTML = feedRows + staleRows + (!feedRows && !staleRows ? '<div class="text-faint text-xs text-mono">No feeds registered yet.</div>' : '');
+}
+
+// FIX: AbnormalMarketDetector and BybitFeed's liquidation-cascade alert both
+// fire real, live risk events, but neither reached this dashboard before —
+// the cascade alert only ever reached a server-side log.warn().
+function renderMarketAlerts() {
+  const el = document.getElementById('alerts-feed');
+  const countEl = document.getElementById('alerts-count');
+  if (!el) return;
+  const items = state.marketAlerts || [];
+  if (countEl) countEl.textContent = `${items.length} event${items.length === 1 ? '' : 's'}`;
+  if (!items.length) return; // keep the static empty state markup
+  el.innerHTML = items.slice(0, 40).map(a => {
+    const isLiq = a.kind === 'liquidation_cascade';
+    const color = isLiq ? '#ff5470' : (a.severity === 'severe' ? '#ff5470' : '#f5a623');
+    const title = isLiq ? 'Liquidation Cascade' : `Abnormal Market — ${esc(a.symbol || '')}`;
+    const desc = isLiq
+      ? (a.alert || `$${((a.totalUSDT || 0) / 1e6).toFixed(2)}M liquidated — ${esc(a.dominance || '')}`)
+      : (a.reasons || []).join('; ') || 'Flagged abnormal';
+    return `<div class="intel-item">
+      <div class="intel-icon" style="background:${color}1c;color:${color}">⚠</div>
+      <div class="intel-body">
+        <div class="intel-title">${title}</div>
+        <div class="intel-desc">${esc(desc)}</div>
+        <div class="intel-time">${time(a.receivedAt || a.timestamp)}</div>
+      </div>
+    </div>`;
   }).join('');
 }
 
