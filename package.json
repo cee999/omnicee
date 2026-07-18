@@ -10,7 +10,7 @@
     "start": "node index.js",
     "start:api": "node api/server.js",
     "start:ws": "node api/server.js",
-    "start:all": "node -e \"require('./api/server').startServer(); require('./index.js').main()\"",
+    "start:all": "node start-all.js",
     "pm2:start": "pm2 start ecosystem.config.js",
     "pm2:reload": "pm2 reload ecosystem.config.js",
     "dev": "node --watch index.js",
