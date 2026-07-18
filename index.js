@@ -55,6 +55,12 @@ const MAX_DRAWDOWN    = parseFloat(requireEnv('MAX_DRAWDOWN_PCT', '10.0'));
 const ACCOUNT_BALANCE = parseFloat(requireEnv('ACCOUNT_BALANCE', '10000'));
 const REQUIRE_KZ      = requireEnv('REQUIRE_KILLZONE', 'false') === 'true';
 const TWELVE_KEY      = requireEnv('TWELVE_DATA_API_KEY', '');
+// FIX: intermarket analysis (DXY/equity cross-confirmation) — the last item
+// on the original audit's "does not exist" list. Configurable since not
+// every TwelveData plan/region resolves 'DXY' the same way; SPX500 matches
+// the existing convention used in correlation.js/session-filter.js.
+const DXY_SYMBOL          = process.env.DXY_SYMBOL          || 'DXY';
+const EQUITY_INDEX_SYMBOL = process.env.EQUITY_INDEX_SYMBOL || 'SPX500';
 
 // ── 2. Load modules ────────────────────────────────────────────────────────
 
@@ -121,6 +127,7 @@ const { COTReportParser }    = loadModule('./feeds/news-feed',                  
 const { OpportunityRanker }  = loadModule('./signal-pipeline/opportunity-ranker', 'OpportunityRanker') || {};
 const { RelativeStrengthEngine } = loadModule('./risk-engine/relative-strength', 'RelativeStrengthEngine') || {};
 const { DataIntegrityMonitor } = loadModule('./feeds/data-integrity-monitor', 'DataIntegrityMonitor') || {};
+const { IntermarketAnalyzer } = loadModule('./risk-engine/intermarket-analyzer', 'IntermarketAnalyzer') || {};
 const { TrapDetector }       = loadModule('./signal-pipeline/trap-detector',      'TrapDetector')      || {};
 const { CompressionDetector }= loadModule('./signal-pipeline/compression-detector','CompressionDetector') || {};
 const { AbnormalMarketDetector } = loadModule('./signal-pipeline/abnormal-market-detector', 'AbnormalMarketDetector') || {};
@@ -784,6 +791,27 @@ async function runAnalysisCycle(symbol, timeframe) {
       }
     }
 
+    // FIX: intermarket analysis (DXY/equity-index cross-confirmation) — the
+    // last item from the original audit's "does not exist" list. Advisory
+    // only, matching the pattern above: this is a well-known FX heuristic,
+    // not a physical law (see risk-engine/intermarket-analyzer.js), so it
+    // informs rather than gates. Logged as a warning on genuine divergence
+    // so it's visible without silently blocking a signal that passed every
+    // deterministic filter already.
+    let intermarketCheck = null;
+    if (intermarketAnalyzer) {
+      try {
+        intermarketCheck = intermarketAnalyzer.checkConfirmation(symbol, signal.action, {
+          dxySymbol: DXY_SYMBOL, equitySymbol: EQUITY_INDEX_SYMBOL,
+        });
+        if (intermarketCheck.available && intermarketCheck.confirmed === false) {
+          log.warn(`[INTERMARKET DIVERGENCE] ${symbol} ${signal.action}: ${intermarketCheck.reasons.join('; ')}`);
+        }
+      } catch (e) {
+        log.warn(`IntermarketAnalyzer error (${symbol}): ${e.message}`);
+      }
+    }
+
     fullSignal = {
       ...signal,
       tradePlan,
@@ -793,6 +821,7 @@ async function runAnalysisCycle(symbol, timeframe) {
       regime,
       ensemble: ensembleResult,
       executionPlan,
+      intermarketCheck,
       validation: {
         monteCarlo: mcResult ? {
           approved: mcResult.approved,
@@ -1133,7 +1162,7 @@ let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, institutionalGates,
     monteCarlo, bayesianEng, statValidator, walkForward, ensembleEng,
     signalMonitor, institutionalRiskManager, executionManagers, myfxbookFeed, openInsiderFeed,
     finnhubFeed, cftcCotFeed, cotParser, executionEngine, opportunityRanker, relativeStrength,
-    dataIntegrityMonitor;
+    dataIntegrityMonitor, intermarketAnalyzer;
 
 // FIX: ExecutionManager's MarketMicrostructureAnalyzer keeps a single shared
 // orderBookHistory/tradeHistory/spreadHistory with no per-symbol keying — one
@@ -1315,6 +1344,11 @@ function buildSingletons() {
   if (DataIntegrityMonitor) {
     dataIntegrityMonitor = new DataIntegrityMonitor({ staleFactor: 3 });
     log.info('DataIntegrityMonitor created');
+  }
+
+  if (IntermarketAnalyzer) {
+    intermarketAnalyzer = new IntermarketAnalyzer({ lookback: 10 });
+    log.info('IntermarketAnalyzer created (DXY/equity-index cross-confirmation, advisory only)');
   }
 
   if (InstitutionalGates) {
@@ -1684,17 +1718,25 @@ function buildFeeds() {
 
   // TwelveData feed for forex/commodities
   if (TwelveDataFeed && fxSymbols.length && TWELVE_KEY) {
+    // FIX: DXY/equity-index candles must NOT go through onCandle() — it
+    // early-returns for any symbol not in the tradeable SYMBOLS list, so a
+    // macro symbol added there would be silently discarded, not analyzed.
+    // Subscribe them separately and route explicitly to intermarketAnalyzer.
+    const macroSymbols = intermarketAnalyzer ? [DXY_SYMBOL, EQUITY_INDEX_SYMBOL] : [];
+    const tdSymbols = [...new Set([...fxSymbols, ...macroSymbols])];
+
     const tdFeed = new TwelveDataFeed({
       apiKey:     TWELVE_KEY,
-      symbols:    fxSymbols,
+      symbols:    tdSymbols,
       timeframes: TIMEFRAMES_STR,
     });
-    tdFeed.on('candle',        onCandle);
-    tdFeed.on('candle_update', onCandle);
+    tdFeed.on('candle',        (d) => macroSymbols.includes(d.symbol) ? intermarketAnalyzer.updatePrice(d.symbol, d.candle.close, d.candle.timestamp || Date.now()) : onCandle(d));
+    tdFeed.on('candle_update', (d) => macroSymbols.includes(d.symbol) ? intermarketAnalyzer.updatePrice(d.symbol, d.candle.close, d.candle.timestamp || Date.now()) : onCandle(d));
+    tdFeed.on('price',         (d) => macroSymbols.includes(d.symbol) && intermarketAnalyzer.updatePrice(d.symbol, d.price, d.timestamp || Date.now()));
     tdFeed.on('error', (err) => log.error(`TwelveData error: ${err.message}`));
-    tdFeed.on('connected', () => log.info(`TwelveDataFeed connected for: ${fxSymbols.join(', ')}`));
+    tdFeed.on('connected', () => log.info(`TwelveDataFeed connected for: ${tdSymbols.join(', ')}`));
     feeds.push({ name: 'TwelveDataFeed', instance: tdFeed, symbols: fxSymbols });
-    log.info(`TwelveDataFeed configured for: ${fxSymbols.join(', ')}`);
+    log.info(`TwelveDataFeed configured for: ${fxSymbols.join(', ')}${macroSymbols.length ? ` (+ macro: ${macroSymbols.join(', ')})` : ''}`);
     if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('TwelveDataFeed', tdFeed, fxSymbols);
   } else if (fxSymbols.length && !TWELVE_KEY) {
     log.warn(`Forex symbols ${fxSymbols.join(',')} configured but TWELVE_DATA_API_KEY is missing`);

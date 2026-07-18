@@ -517,6 +517,40 @@ async function runTests() {
     pass(`AIAdvisor: disabled-without-key fails open correctly (recommendation=${result.recommendation})`);
   } catch (e) { fail('AIAdvisor', e); }
 
+  try {
+    const { IntermarketAnalyzer } = require(path.join(ROOT, 'risk-engine/intermarket-analyzer'));
+    const ia = new IntermarketAnalyzer({ lookback: 10 });
+
+    // Simulate DXY falling (USD weak) and equities rising (risk-on)
+    let dxy = 105.0, spx = 5000;
+    for (let i = 0; i < 10; i++) { dxy -= 0.15; spx += 8; ia.updatePrice('DXY', dxy); ia.updatePrice('SPX500', spx); }
+
+    const eurusdLong = ia.checkConfirmation('EURUSD', 'LONG');
+    if (eurusdLong.confirmed !== true) throw new Error(`expected EURUSD LONG to be confirmed by falling DXY, got ${JSON.stringify(eurusdLong)}`);
+
+    // Note: USDJPY here is a genuinely MIXED signal, not a clean divergence —
+    // DXY falling hurts a USD-base long, but JPY (as the quote currency) is
+    // also a haven that weakens with risk-on equities, which helps a USD/JPY
+    // long. Both effects are real; asserting a forced single answer here
+    // would be wrong. USDCAD isolates a clean case instead: CAD is a risk
+    // currency, so quote-currency risk-on strength ALSO hurts a USD/CAD long
+    // (short a risk currency into risk-on) — both legs diverge cleanly.
+    const usdcadLong = ia.checkConfirmation('USDCAD', 'LONG');
+    if (usdcadLong.confirmed !== false) throw new Error(`expected USDCAD LONG to diverge from falling DXY + risk-on equities, got ${JSON.stringify(usdcadLong)}`);
+
+    // Regression check for a real bug caught during development: JPY as the
+    // QUOTE currency (not base) must still be evaluated against equities.
+    const gbpjpyLong = ia.checkConfirmation('GBPJPY', 'LONG');
+    if (gbpjpyLong.available !== true || gbpjpyLong.confirmed !== true) {
+      throw new Error(`expected GBPJPY LONG to be confirmed via quote-currency (JPY) equity relevance, got ${JSON.stringify(gbpjpyLong)}`);
+    }
+
+    const btcCheck = ia.checkConfirmation('BTCUSDT', 'LONG');
+    if (btcCheck.available !== false) throw new Error('expected no macro relevance for BTCUSDT');
+
+    pass(`IntermarketAnalyzer: EURUSD confirmed=${eurusdLong.confirmed}, USDCAD confirmed=${usdcadLong.confirmed}, GBPJPY(quote-currency) confirmed=${gbpjpyLong.confirmed}`);
+  } catch (e) { fail('IntermarketAnalyzer', e); }
+
   // ── 12. Syntax check all modules ──────────────────────────────────────
 
 
