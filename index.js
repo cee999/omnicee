@@ -135,6 +135,8 @@ const { TimeCycleEngine }    = loadModule('./signal-pipeline/time-cycle-engine',
 const { StrategySelector }   = loadModule('./signal-pipeline/strategy-selector',    'StrategySelector')  || {};
 const { CandleIntelligence } = loadModule('./signal-pipeline/candle-intelligence',  'CandleIntelligence') || {};
 const { AIAdvisor }          = loadModule('./signal-pipeline/ai-advisor',           'AIAdvisor')          || {};
+const { MarketHoursGate, SymbolManager } = loadModule('./orchestrator/scheduling-gate', 'MarketHoursGate') || {};
+const { AuditTrail }          = loadModule('./orchestrator/audit-trail',             'AuditTrail')         || {};
 const { SignalExplainer }    = loadModule('./signal-pipeline/signal-explainer',     'SignalExplainer')    || {};
 
 // ConflictResolver is instantiated (not static) — create one singleton
@@ -163,6 +165,17 @@ if (aiAdvisor) {
 // natural-language breakdown of the pipeline's own already-computed context,
 // no API key, no network call, no cost, never fails. Always on.
 const signalExplainer = SignalExplainer ? new SignalExplainer() : null;
+
+// SymbolManager (extracted from orphaned task-planner.js) — seeded with the
+// exact SYMBOLS list already configured via .env, so nothing changes by
+// default; it exists so a symbol can be blacklisted at runtime (e.g. via a
+// future admin action) without touching the SYMBOLS env var or restarting.
+const symbolManager = SymbolManager ? new SymbolManager({ symbols: SYMBOLS }) : null;
+
+// AuditTrail (extracted from orphaned task-planner.js) — records every
+// analysis cycle result, fired or not, so "what did the pipeline decide
+// about X in the last hour" doesn't require grepping logs.
+const auditTrail = AuditTrail ? new AuditTrail() : null;
 
 // ── 3. System state ────────────────────────────────────────────────────────
 
@@ -220,6 +233,18 @@ async function runAnalysisCycle(symbol, timeframe) {
     log.debug(`Analysis already in flight for ${key} — skipping`);
     return;
   }
+
+  // Symbol/hours gates run before anything else — no point running the full
+  // agent pipeline on a blacklisted symbol or during a confirmed dead zone.
+  if (symbolManager && !symbolManager.isAllowed(symbol)) {
+    log.debug(`${key}: symbol blacklisted/not whitelisted — skipping`);
+    return;
+  }
+  if (MarketHoursGate && !MarketHoursGate.shouldAnalyze(timeframe)) {
+    log.debug(`${key}: market-hours gate — skipping (dead zone / weekend M1-M15)`);
+    return;
+  }
+
   inFlight.add(key);
 
   try {
@@ -421,6 +446,9 @@ async function runAnalysisCycle(symbol, timeframe) {
 
     if (!signal || signal.action === 'WAIT') {
       log.debug(`${key}: score=${signal?.score?.final || 0} — no signal`);
+      if (auditTrail) {
+        auditTrail.record({ symbol, timeframe, signalFired: false, blockedReason: 'no_signal_or_wait', score: signal?.score?.final ?? 0 });
+      }
       return;
     }
 
@@ -488,6 +516,9 @@ async function runAnalysisCycle(symbol, timeframe) {
       const effectiveFloor = Math.max(scorer.minScore ?? 0, strategyContext.minScoreFloor || 0);
       if ((signal.score?.final ?? 0) < effectiveFloor) {
         log.debug(`${key}: below regime-adjusted floor (${effectiveFloor}) for ${strategyContext.profile} — filtered`);
+        if (auditTrail) {
+          auditTrail.record({ symbol, timeframe, signalFired: false, blockedReason: `below_regime_floor_${strategyContext.profile}`, score: signal.score?.final ?? 0 });
+        }
         return;
       }
     }
@@ -504,6 +535,9 @@ async function runAnalysisCycle(symbol, timeframe) {
 
     if (!signal || signal.action === 'WAIT' || (signal.score?.final ?? 0) < (scorer.minScore ?? 0)) {
       log.debug(`${key}: filtered post trap/compression check — score=${signal?.score?.final}`);
+      if (auditTrail) {
+        auditTrail.record({ symbol, timeframe, signalFired: false, blockedReason: 'filtered_post_trap_compression', score: signal?.score?.final ?? 0 });
+      }
       return;
     }
 
@@ -933,7 +967,13 @@ async function runAnalysisCycle(symbol, timeframe) {
     // or reaches dispatch/execution.
     if (aiAdvisorVerdict?.recommendation === 'SKIP') {
       log.info(`${key}: AI Advisor recommends SKIP — ${aiAdvisorVerdict.reasoning}`);
+      if (auditTrail) {
+        auditTrail.record({ symbol, timeframe, signalFired: false, blockedReason: 'ai_advisor_skip', score: fullSignal.score?.final ?? 0 });
+      }
       return;
+    }
+    if (auditTrail) {
+      auditTrail.record({ symbol, timeframe, signalFired: true, action: fullSignal.action, score: fullSignal.score?.final ?? 0, grade: fullSignal.score?.grade });
     }
 
     // Track this position in the portfolio-risk model so future correlation
@@ -1648,6 +1688,7 @@ function buildSingletons() {
       adaptiveLearning, bayesianEng, walkForward, institutionalGates,
       drawdownGuard, sessionFilter, riskEngine, institutionalRiskManager,
       opportunityRanker, relativeStrength, dataIntegrityMonitor, executionEngine,
+      auditTrail, symbolManager,
       // For GET /api/outlook (signal-pipeline/market-outlook.js)
       regimeEngine, candleStores, symbols: SYMBOLS,
     });

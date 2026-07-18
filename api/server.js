@@ -174,6 +174,20 @@ function createApp() {
     }
   });
 
+  // ── Audit Trail (extracted from orphaned task-planner.js) ───────────
+  // Every analysis cycle result, fired or not — "what did the pipeline
+  // decide about symbol X in the last hour" without grepping logs.
+  app.get('/api/audit-trail', telegramAuthMiddleware, async (req, res) => {
+    const live = getEngines();
+    if (!live.auditTrail) {
+      return res.status(503).json({ ok: false, error: 'Audit trail unavailable — trading engine not yet initialized' });
+    }
+    const entries = req.query.symbol
+      ? live.auditTrail.getBySymbol(req.query.symbol, req.query.limit ? Number(req.query.limit) : 10)
+      : live.auditTrail.getRecent(req.query.limit ? Number(req.query.limit) : 20);
+    res.json({ ok: true, entries, total: live.auditTrail.size() });
+  });
+
   // ── Data Integrity / Feed Health (doc item: Connection & Data Integrity
   // Monitor) ────────────────────────────────────────────────────────────
   app.get('/api/health', telegramAuthMiddleware, async (req, res) => {

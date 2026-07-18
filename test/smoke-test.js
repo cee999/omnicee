@@ -317,7 +317,17 @@ async function runTests() {
   try {
     const { EnsembleEngine } = require(path.join(ROOT, 'signal-pipeline/ensemble-engine'));
     const ee = new EnsembleEngine();
-    pass('EnsembleEngine loaded');
+    const result = ee.evaluate(
+      {
+        monteCarlo: { simulations: 1000, approved: true, winProbability: 0.62, expectedR: 1.4, riskOfRuin: 0.02 },
+        agentVotes: { LONG: 4, SHORT: 1, WAIT: 1 },
+        regime: { regime: 'BULL_TREND', structure: 'DIRECTIONAL' },
+      },
+      { action: 'LONG', score: { final: 82 } },
+    );
+    if (typeof result.approved !== 'boolean') throw new Error('expected evaluate() to return a boolean approved field');
+    if (typeof result.ensembleScore !== 'number') throw new Error('expected numeric ensembleScore');
+    pass(`EnsembleEngine: evaluate() approved=${result.approved} ensembleScore=${result.ensembleScore} layers=${result.layerCount}`);
   } catch (e) { fail('EnsembleEngine', e); }
 
   try {
@@ -584,6 +594,35 @@ async function runTests() {
     if (grid.tiles[0].symbol !== 'BTCUSDT') throw new Error('expected BTCUSDT (higher score) ranked first');
     pass(`MarketHeatMap: ${grid.tiles.length} tiles, top=${grid.tiles[0].symbol} (${grid.tiles[0].bucket})`);
   } catch (e) { fail('MarketHeatMap', e); }
+
+  try {
+    const { MarketHoursGate, SymbolManager } = require(path.join(ROOT, 'orchestrator/scheduling-gate'));
+    const sunday2200 = new Date('2026-07-19T22:00:00Z').getTime();
+    const tuesday1400 = new Date('2026-07-21T14:00:00Z').getTime();
+    if (MarketHoursGate.shouldAnalyze('M5', sunday2200) !== false) throw new Error('expected Sunday dead-zone M5 to be blocked');
+    if (MarketHoursGate.shouldAnalyze('H1', tuesday1400) !== true) throw new Error('expected Tuesday H1 to be allowed');
+    const quality = MarketHoursGate.getQuality(tuesday1400);
+    if (quality.label !== 'London/NY Overlap') throw new Error(`expected London/NY Overlap at 14:00 UTC, got ${quality.label}`);
+
+    const sm = new SymbolManager({ symbols: ['BTCUSDT', 'ETHUSDT'] });
+    if (!sm.isAllowed('BTCUSDT')) throw new Error('expected whitelisted symbol to be allowed');
+    if (sm.isAllowed('SOLUSDT')) throw new Error('expected non-whitelisted symbol to be blocked');
+    sm.blacklist('ETHUSDT');
+    if (sm.isAllowed('ETHUSDT')) throw new Error('expected blacklisted symbol to be blocked');
+    pass('MarketHoursGate + SymbolManager: dead-zone/session-quality and whitelist/blacklist gating correct');
+  } catch (e) { fail('MarketHoursGate/SymbolManager', e); }
+
+  try {
+    const { AuditTrail } = require(path.join(ROOT, 'orchestrator/audit-trail'));
+    const at = new AuditTrail();
+    at.record({ symbol: 'BTCUSDT', signalFired: true, score: 88 });
+    at.record({ symbol: 'BTCUSDT', signalFired: false, blockedReason: 'below min score', score: 45 });
+    at.record({ symbol: 'ETHUSDT', signalFired: false, blockedReason: 'chop regime', score: 30 });
+    if (at.size() !== 3) throw new Error(`expected 3 entries, got ${at.size()}`);
+    if (at.getBySymbol('BTCUSDT').length !== 2) throw new Error('expected 2 BTCUSDT entries');
+    if (at.getSignalFired().length !== 1) throw new Error('expected 1 fired entry');
+    pass(`AuditTrail: size=${at.size()} bySymbol=${at.getBySymbol('BTCUSDT').length} fired=${at.getSignalFired().length}`);
+  } catch (e) { fail('AuditTrail', e); }
 
   // ── 12. Syntax check all modules ──────────────────────────────────────
 
