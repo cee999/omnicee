@@ -538,6 +538,19 @@ async function runTests() {
     pass(`SignalExplainer: strong=${strong.confidenceLabel} minimal-context=${minimal.confidenceLabel} (free, no API key required)`);
   } catch (e) { fail('SignalExplainer', e); }
 
+  try {
+    const { MarketHeatMap } = require(path.join(ROOT, 'automation/market-heatmap'));
+    const { OpportunityRanker } = require(path.join(ROOT, 'signal-pipeline/opportunity-ranker'));
+    const ranker = new OpportunityRanker();
+    ranker.update('BTCUSDT', { action: 'LONG', score: 88, grade: 'A', fired: true });
+    ranker.update('ETHUSDT', { action: 'WAIT', score: 45, grade: 'C', fired: false, blockedReason: 'below min score' });
+    const heatmap = new MarketHeatMap();
+    const grid = heatmap.build({ opportunityRanker: ranker });
+    if (!Array.isArray(grid.tiles) || grid.tiles.length !== 2) throw new Error(`expected 2 tiles, got ${grid.tiles?.length}`);
+    if (grid.tiles[0].symbol !== 'BTCUSDT') throw new Error('expected BTCUSDT (higher score) ranked first');
+    pass(`MarketHeatMap: ${grid.tiles.length} tiles, top=${grid.tiles[0].symbol} (${grid.tiles[0].bucket})`);
+  } catch (e) { fail('MarketHeatMap', e); }
+
   // ── 12. Syntax check all modules ──────────────────────────────────────
 
 
