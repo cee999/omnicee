@@ -17,6 +17,7 @@ const { FinnhubFeed } = require('../feeds/finnhub-feed');
 const { AdaptiveLearningEngine } = require('../signal-pipeline/adaptive-learning-engine');
 const { MarketOutlookBuilder } = require('../signal-pipeline/market-outlook');
 const { recordOutcomeEverywhere } = require('../signal-pipeline/outcome-recorder');
+const { MarketHeatMap } = require('../automation/market-heatmap');
 
 const API_PORT = Number(process.env.PORT || process.env.WS_PORT || 3001);
 const STATIC_ROOT = path.join(__dirname, '..', 'webapp');
@@ -87,6 +88,7 @@ function createApp() {
         candleStores: live.candleStores,
         regimeEngine: live.regimeEngine,
         sessionFilter: live.sessionFilter,
+        cotParser: live.cotParser,
         timeframe: 'H1',
       });
     } catch (err) {
@@ -147,6 +149,44 @@ function createApp() {
     }
 
     res.json({ ok: true, opportunities, relativeStrength });
+  });
+
+  // ── Market Heat Map (doc item #56) ──────────────────────────────────
+  // Composites the same OpportunityRanker + RelativeStrengthEngine data
+  // above into per-symbol heat buckets for a grid-style dashboard view.
+  app.get('/api/heatmap', telegramAuthMiddleware, async (req, res) => {
+    const live = getEngines();
+    if (!live.opportunityRanker) {
+      return res.status(503).json({ ok: false, error: 'Heat map unavailable — trading engine not yet initialized' });
+    }
+    try {
+      const heatmap = new MarketHeatMap();
+      const grid = heatmap.build({
+        opportunityRanker: live.opportunityRanker,
+        relativeStrength: live.relativeStrength,
+        candleStores: live.candleStores,
+        symbols: live.symbols,
+        timeframe: req.query.timeframe || 'H1',
+      });
+      res.json({ ok: true, ...grid });
+    } catch (err) {
+      console.warn(`[API] MarketHeatMap build error: ${err.message}`);
+      res.status(500).json({ ok: false, error: 'Heat map build failed' });
+    }
+  });
+
+  // ── Audit Trail (extracted from orphaned task-planner.js) ───────────
+  // Every analysis cycle result, fired or not — "what did the pipeline
+  // decide about symbol X in the last hour" without grepping logs.
+  app.get('/api/audit-trail', telegramAuthMiddleware, async (req, res) => {
+    const live = getEngines();
+    if (!live.auditTrail) {
+      return res.status(503).json({ ok: false, error: 'Audit trail unavailable — trading engine not yet initialized' });
+    }
+    const entries = req.query.symbol
+      ? live.auditTrail.getBySymbol(req.query.symbol, req.query.limit ? Number(req.query.limit) : 10)
+      : live.auditTrail.getRecent(req.query.limit ? Number(req.query.limit) : 20);
+    res.json({ ok: true, entries, total: live.auditTrail.size() });
   });
 
   // ── Data Integrity / Feed Health (doc item: Connection & Data Integrity
@@ -399,6 +439,12 @@ function startServer(config = {}) {
   // vacuums. Pushed live so the dashboard can show a banner the moment a
   // symbol gets flagged, not just when it shows up in server logs.
   forward('abnormal_market', 'abnormal_market', payload => db.saveTelemetry({ type: 'abnormal_market', ...payload }));
+  // FIX: BybitFeed emits liquidation_cascade (real risk event — large forced
+  // liquidations in a short window) and index.js relays it onto wsBus, but
+  // it was never added to this forward() whitelist — it reached nowhere
+  // past a server-side log.warn(). A liquidation cascade is exactly the
+  // kind of event a trader wants to see live, not discover after the fact.
+  forward('liquidation_cascade', 'liquidation_cascade', payload => db.saveTelemetry({ type: 'liquidation_cascade', ...payload }));
 
   const port = Number(config.port || API_PORT);
   httpServer.listen(port, () => {

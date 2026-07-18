@@ -83,6 +83,7 @@ const BOT_COMMANDS = [
   { command: 'signals',   description: 'Last 5 signals fired' },
   { command: 'stats',     description: 'Win rate and performance stats' },
   { command: 'risk',      description: 'Current risk engine status' },
+  { command: 'outlook',   description: 'This week + next week: calendar, regime, institutional positioning' },
   { command: 'balance',   description: 'Set or view account balance' },
   { command: 'pause',     description: 'Pause signal delivery' },
   { command: 'resume',    description: 'Resume signal delivery' },
@@ -1160,6 +1161,17 @@ class AlertDispatcher extends EventEmitter {
       ? `\n\n${EMOJI.CHART} <a href="${chartUrl}">View ${signal.symbol} chart on TradingView</a>`
       : '';
 
+    // Free, no-cost explainability layer (signal-pipeline/signal-explainer.js) —
+    // shows the "why" breakdown even when the paid AI Advisor is disabled.
+    let explanationText = '';
+    if (signal.explanation) {
+      const { summary, cautions } = signal.explanation;
+      explanationText = `\n\n${EMOJI.CHART} <b>Why this signal:</b> ${summary}`;
+      if (cautions?.length > 1) {
+        explanationText += `\n${cautions.slice(1).map(c => `⚠️ ${c}`).join('\n')}`;
+      }
+    }
+
     // Queue delivery to all configured chats + subscribers
     const allChatIds = this._getAllChatIds();
     for (const chatId of allChatIds) {
@@ -1170,7 +1182,7 @@ class AlertDispatcher extends EventEmitter {
           try {
             const msg = await this._client.sendMessage(
               chatId,
-              text + posCalcText + chartLinkText,
+              text + posCalcText + chartLinkText + explanationText,
               { replyMarkup: keyboard }
             );
             this._delivery.record(signal.id, chatId, msg.message_id);
@@ -1449,6 +1461,10 @@ class AlertDispatcher extends EventEmitter {
 
       case '/risk':
         await this._sendRiskStatus(chatId);
+        break;
+
+      case '/outlook':
+        await this._sendMarketOutlook(chatId);
         break;
 
       case '/pause':
@@ -1830,6 +1846,62 @@ class AlertDispatcher extends EventEmitter {
       `Circuit breaker: ${risk.isPaused ? '🔴 PAUSED — ' + risk.pausedReason : '🟢 Active'}`,
       `Signals paused: ${this._paused ? '🔴 Yes' : '🟢 No'}`,
     ];
+    await this._client.sendMessage(chatId, lines.join('\n'));
+  }
+
+  /**
+   * /outlook — this week + next week: economic calendar (real, from
+   * FinnhubFeed), regime per symbol, and real CFTC institutional
+   * (commercial/hedge-fund) positioning where it's at a historical
+   * extreme. Not a prediction — a summary of what's actually scheduled
+   * and what's actually already known.
+   */
+  async _sendMarketOutlook(chatId) {
+    if (typeof this.getMarketOutlookDeps !== 'function') {
+      await this._client.sendMessage(chatId, `${EMOJI.WARNING} Outlook unavailable — trading engine not yet initialized.`);
+      return;
+    }
+    let outlook;
+    try {
+      const { MarketOutlookBuilder } = require('./market-outlook');
+      const deps = this.getMarketOutlookDeps();
+      outlook = MarketOutlookBuilder.build({ ...deps, timeframe: 'H1' });
+    } catch (err) {
+      await this._client.sendMessage(chatId, `${EMOJI.WARNING} Could not build outlook: ${err.message}`);
+      return;
+    }
+
+    const lines = [`${EMOJI.CHART} <b>Market Outlook — This Week &amp; Next</b>`, ''];
+    lines.push(outlook.narrative);
+    lines.push('');
+
+    if (outlook.week.tier1Events.length) {
+      lines.push('<b>This week (Tier 1):</b>');
+      for (const e of outlook.week.tier1Events.slice(0, 6)) {
+        lines.push(`  • ${e.name} (${e.currency}) — in ${e.hoursAway.toFixed(0)}h`);
+      }
+    }
+    if (outlook.nextWeek.tier1Events.length) {
+      lines.push('');
+      lines.push('<b>Next week (Tier 1):</b>');
+      for (const e of outlook.nextWeek.tier1Events.slice(0, 6)) {
+        lines.push(`  • ${e.name} (${e.currency}) — in ${(e.hoursAway / 24).toFixed(1)}d`);
+      }
+    }
+
+    const withPositioning = outlook.symbols.filter(s => s.institutionalPositioning);
+    if (withPositioning.length) {
+      lines.push('');
+      lines.push('<b>Institutional positioning (CFTC, weekly):</b>');
+      for (const s of withPositioning) {
+        const p = s.institutionalPositioning;
+        lines.push(`  • ${s.symbol}: large-spec (hedge fund) net ${p.largeSpecNet > 0 ? '+' : ''}${p.largeSpecNet.toLocaleString()}, ${Math.round(p.largeSpecPercentile)}th percentile${p.isExtreme ? ' ⚠️ EXTREME' : ''}`);
+      }
+    }
+
+    lines.push('');
+    lines.push('<i>This is a summary of scheduled events and known positioning, not a forecast — treat it as context, not a guarantee.</i>');
+
     await this._client.sendMessage(chatId, lines.join('\n'));
   }
 

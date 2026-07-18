@@ -28,10 +28,12 @@ envVarGroups:
       - key: APP_ACCESS_TOKEN
         sync: false
 
-      # ── MT5 EA bridge auth ──────────────────────────────────
-      # FIX: this was never in the blueprint at all — deployed without it,
-      # /api/ea/signals (the live signal feed the MT5 EA polls) is open to
-      # anyone who finds the URL. Required, not optional.
+      # ── EA (MT5 Expert Advisor) auth ────────────────────────
+      # FIX: was missing from this blueprint entirely. Without it,
+      # api/server.js's EA_SECRET defaults to '' and /api/ea/signals — the
+      # live signal feed an MT5 EA polls to place real trades — runs with
+      # NO authentication (see the explicit warning api/server.js logs on
+      # boot when this is unset). Required for a production deployment.
       - key: EA_SECRET
         sync: false
 

@@ -55,6 +55,12 @@ const MAX_DRAWDOWN    = parseFloat(requireEnv('MAX_DRAWDOWN_PCT', '10.0'));
 const ACCOUNT_BALANCE = parseFloat(requireEnv('ACCOUNT_BALANCE', '10000'));
 const REQUIRE_KZ      = requireEnv('REQUIRE_KILLZONE', 'false') === 'true';
 const TWELVE_KEY      = requireEnv('TWELVE_DATA_API_KEY', '');
+// FIX: intermarket analysis (DXY/equity cross-confirmation) — the last item
+// on the original audit's "does not exist" list. Configurable since not
+// every TwelveData plan/region resolves 'DXY' the same way; SPX500 matches
+// the existing convention used in correlation.js/session-filter.js.
+const DXY_SYMBOL          = process.env.DXY_SYMBOL          || 'DXY';
+const EQUITY_INDEX_SYMBOL = process.env.EQUITY_INDEX_SYMBOL || 'SPX500';
 
 // ── 2. Load modules ────────────────────────────────────────────────────────
 
@@ -121,18 +127,55 @@ const { COTReportParser }    = loadModule('./feeds/news-feed',                  
 const { OpportunityRanker }  = loadModule('./signal-pipeline/opportunity-ranker', 'OpportunityRanker') || {};
 const { RelativeStrengthEngine } = loadModule('./risk-engine/relative-strength', 'RelativeStrengthEngine') || {};
 const { DataIntegrityMonitor } = loadModule('./feeds/data-integrity-monitor', 'DataIntegrityMonitor') || {};
+const { IntermarketAnalyzer } = loadModule('./risk-engine/intermarket-analyzer', 'IntermarketAnalyzer') || {};
 const { TrapDetector }       = loadModule('./signal-pipeline/trap-detector',      'TrapDetector')      || {};
 const { CompressionDetector }= loadModule('./signal-pipeline/compression-detector','CompressionDetector') || {};
 const { AbnormalMarketDetector } = loadModule('./signal-pipeline/abnormal-market-detector', 'AbnormalMarketDetector') || {};
+const { TimeCycleEngine }    = loadModule('./signal-pipeline/time-cycle-engine',   'TimeCycleEngine')   || {};
+const { StrategySelector }   = loadModule('./signal-pipeline/strategy-selector',    'StrategySelector')  || {};
+const { CandleIntelligence } = loadModule('./signal-pipeline/candle-intelligence',  'CandleIntelligence') || {};
+const { AIAdvisor }          = loadModule('./signal-pipeline/ai-advisor',           'AIAdvisor')          || {};
+const { MarketHoursGate, SymbolManager } = loadModule('./orchestrator/scheduling-gate', 'MarketHoursGate') || {};
+const { AuditTrail }          = loadModule('./orchestrator/audit-trail',             'AuditTrail')         || {};
+const { SignalExplainer }    = loadModule('./signal-pipeline/signal-explainer',     'SignalExplainer')    || {};
 
 // ConflictResolver is instantiated (not static) — create one singleton
 const conflictResolver = ConflictResolverClass ? new ConflictResolverClass() : null;
 
 // TrapDetector keeps its own rolling per-call history but is stateless enough
-// to share across symbols; CompressionDetector is fully stateless.
+// to share across symbols; CompressionDetector, TimeCycleEngine,
+// AbnormalMarketDetector, StrategySelector, and CandleIntelligence are all
+// fully stateless per call — safe to share across symbols too.
 const trapDetector        = TrapDetector        ? new TrapDetector()        : null;
 const compressionDetector = CompressionDetector ? new CompressionDetector() : null;
 const abnormalMarketDetector = AbnormalMarketDetector ? new AbnormalMarketDetector() : null;
+const timeCycleEngine     = TimeCycleEngine     ? new TimeCycleEngine()     : null;
+const strategySelector    = StrategySelector    ? new StrategySelector()    : null;
+const candleIntelligence  = CandleIntelligence  ? new CandleIntelligence()  : null;
+// AIAdvisor no-ops safely (fails open) if ANTHROPIC_API_KEY isn't set — see
+// signal-pipeline/ai-advisor.js. Logged once at startup below so it's obvious
+// from the boot log whether the agentic layer is actually active.
+const aiAdvisor = AIAdvisor ? new AIAdvisor({ apiKey: process.env.ANTHROPIC_API_KEY }) : null;
+if (aiAdvisor) {
+  log.info(aiAdvisor.enabled
+    ? `AI Advisor active (model=${aiAdvisor.model}) — advisory-only, fails open on any error`
+    : 'AI Advisor loaded but disabled — ANTHROPIC_API_KEY not set in .env');
+}
+// SignalExplainer is the free counterpart to AIAdvisor — pure template-driven
+// natural-language breakdown of the pipeline's own already-computed context,
+// no API key, no network call, no cost, never fails. Always on.
+const signalExplainer = SignalExplainer ? new SignalExplainer() : null;
+
+// SymbolManager (extracted from orphaned task-planner.js) — seeded with the
+// exact SYMBOLS list already configured via .env, so nothing changes by
+// default; it exists so a symbol can be blacklisted at runtime (e.g. via a
+// future admin action) without touching the SYMBOLS env var or restarting.
+const symbolManager = SymbolManager ? new SymbolManager({ symbols: SYMBOLS }) : null;
+
+// AuditTrail (extracted from orphaned task-planner.js) — records every
+// analysis cycle result, fired or not, so "what did the pipeline decide
+// about X in the last hour" doesn't require grepping logs.
+const auditTrail = AuditTrail ? new AuditTrail() : null;
 
 // ── 3. System state ────────────────────────────────────────────────────────
 
@@ -190,6 +233,18 @@ async function runAnalysisCycle(symbol, timeframe) {
     log.debug(`Analysis already in flight for ${key} — skipping`);
     return;
   }
+
+  // Symbol/hours gates run before anything else — no point running the full
+  // agent pipeline on a blacklisted symbol or during a confirmed dead zone.
+  if (symbolManager && !symbolManager.isAllowed(symbol)) {
+    log.debug(`${key}: symbol blacklisted/not whitelisted — skipping`);
+    return;
+  }
+  if (MarketHoursGate && !MarketHoursGate.shouldAnalyze(timeframe)) {
+    log.debug(`${key}: market-hours gate — skipping (dead zone / weekend M1-M15)`);
+    return;
+  }
+
   inFlight.add(key);
 
   try {
@@ -391,6 +446,9 @@ async function runAnalysisCycle(symbol, timeframe) {
 
     if (!signal || signal.action === 'WAIT') {
       log.debug(`${key}: score=${signal?.score?.final || 0} — no signal`);
+      if (auditTrail) {
+        auditTrail.record({ symbol, timeframe, signalFired: false, blockedReason: 'no_signal_or_wait', score: signal?.score?.final ?? 0 });
+      }
       return;
     }
 
@@ -421,8 +479,65 @@ async function runAnalysisCycle(symbol, timeframe) {
       compressionContext = compressionDetector.analyze({ candles });
     }
 
+    // Abnormal market detector: severe cases were already gated out entirely
+    // near the top of this cycle (before agents even ran). 'elevated' cases
+    // were allowed through but should still flag the signal for the risk
+    // engine to consider sizing down, same "dampen not block" pattern as
+    // trap/compression above.
+    if (abnormalMarket?.abnormal && abnormalMarket.severity === 'elevated') {
+      signal = { ...signal, riskFlags: { ...(signal.riskFlags || {}), abnormalMarket: true, abnormalReasons: abnormalMarket.reasons } };
+    }
+
+    // Time cycle engine: informational only — historical hour-of-day /
+    // day-of-week edge (or lack of one) for this symbol, attached to the
+    // signal for display/journaling. Never blocks or resizes on its own;
+    // sample sizes from a single symbol's own history aren't strong enough
+    // evidence for that, but they're useful context on the signal card.
+    let timeCycleContext = null;
+    if (timeCycleEngine) {
+      timeCycleContext = timeCycleEngine.currentWindowBias({ candles });
+    }
+
+    // AI Strategy Selector: does THIS signal's direction/setup fit the
+    // regime that's actually in play right now? Trend-following calls get
+    // a lean in DIRECTIONAL regimes, breakout-style calls get discounted
+    // in CHOP. This tilts the already-scored confidence and can raise
+    // (never lower) the minimum-score bar for choppier/less tradeable
+    // regimes — it does not mutate the shared scorer instance, so there's
+    // no cross-symbol race condition from concurrent regimes.
+    let strategyContext = null;
+    if (strategySelector) {
+      strategyContext = strategySelector.select({ regime, signalAction: signal.action, adaptiveLearningEngine: adaptiveLearning });
+      if (strategyContext.confidenceMultiplier !== 1 && signal.score?.final != null) {
+        const tilted = parseFloat((signal.score.final * strategyContext.confidenceMultiplier).toFixed(2));
+        log.debug(`${key}: strategy-fit (${strategyContext.profile}) tilting score ${signal.score.final} -> ${tilted}`);
+        signal = { ...signal, score: { ...signal.score, final: tilted, strategyTilted: true } };
+      }
+      const effectiveFloor = Math.max(scorer.minScore ?? 0, strategyContext.minScoreFloor || 0);
+      if ((signal.score?.final ?? 0) < effectiveFloor) {
+        log.debug(`${key}: below regime-adjusted floor (${effectiveFloor}) for ${strategyContext.profile} — filtered`);
+        if (auditTrail) {
+          auditTrail.record({ symbol, timeframe, signalFired: false, blockedReason: `below_regime_floor_${strategyContext.profile}`, score: signal.score?.final ?? 0 });
+        }
+        return;
+      }
+    }
+
+    // Candle Intelligence: does the most recent candle itself look like a
+    // decisive, well-formed bar, or a low-conviction non-event? Attached as
+    // context rather than a hard filter — a low candle-quality score on an
+    // otherwise well-confirmed multi-agent signal is a caution flag, not
+    // an automatic reject.
+    let candleContext = null;
+    if (candleIntelligence) {
+      candleContext = candleIntelligence.analyze({ candles });
+    }
+
     if (!signal || signal.action === 'WAIT' || (signal.score?.final ?? 0) < (scorer.minScore ?? 0)) {
       log.debug(`${key}: filtered post trap/compression check — score=${signal?.score?.final}`);
+      if (auditTrail) {
+        auditTrail.record({ symbol, timeframe, signalFired: false, blockedReason: 'filtered_post_trap_compression', score: signal?.score?.final ?? 0 });
+      }
       return;
     }
 
@@ -440,7 +555,30 @@ async function runAnalysisCycle(symbol, timeframe) {
     }
 
     // ── Refine entry, build SL/TP, then gate the setup ──
-    let fullSignal = { ...signal, regime };
+    let fullSignal = {
+      ...signal,
+      regime,
+      compressionContext: compressionContext ? {
+        isCompressed: compressionContext.isCompressed,
+        compressionScore: compressionContext.compressionScore,
+        biasHint: compressionContext.biasHint,
+      } : null,
+      abnormalMarket: abnormalMarket?.abnormal ? {
+        severity: abnormalMarket.severity,
+        reasons: abnormalMarket.reasons,
+      } : null,
+      timeCycle: timeCycleContext,
+      strategy: strategyContext ? {
+        profile: strategyContext.profile,
+        confidenceMultiplier: strategyContext.confidenceMultiplier,
+        note: strategyContext.note,
+      } : null,
+      candleIntelligence: candleContext ? {
+        type: candleContext.type,
+        qualityScore: candleContext.qualityScore,
+        note: candleContext.note,
+      } : null,
+    };
     let entryOptimization = null;
     let tradePlan = null;
     let riskEvaluation = null;
@@ -692,6 +830,27 @@ async function runAnalysisCycle(symbol, timeframe) {
       }
     }
 
+    // FIX: intermarket analysis (DXY/equity-index cross-confirmation) — the
+    // last item from the original audit's "does not exist" list. Advisory
+    // only, matching the pattern above: this is a well-known FX heuristic,
+    // not a physical law (see risk-engine/intermarket-analyzer.js), so it
+    // informs rather than gates. Logged as a warning on genuine divergence
+    // so it's visible without silently blocking a signal that passed every
+    // deterministic filter already.
+    let intermarketCheck = null;
+    if (intermarketAnalyzer) {
+      try {
+        intermarketCheck = intermarketAnalyzer.checkConfirmation(symbol, signal.action, {
+          dxySymbol: DXY_SYMBOL, equitySymbol: EQUITY_INDEX_SYMBOL,
+        });
+        if (intermarketCheck.available && intermarketCheck.confirmed === false) {
+          log.warn(`[INTERMARKET DIVERGENCE] ${symbol} ${signal.action}: ${intermarketCheck.reasons.join('; ')}`);
+        }
+      } catch (e) {
+        log.warn(`IntermarketAnalyzer error (${symbol}): ${e.message}`);
+      }
+    }
+
     fullSignal = {
       ...signal,
       tradePlan,
@@ -701,6 +860,7 @@ async function runAnalysisCycle(symbol, timeframe) {
       regime,
       ensemble: ensembleResult,
       executionPlan,
+      intermarketCheck,
       validation: {
         monteCarlo: mcResult ? {
           approved: mcResult.approved,
@@ -740,12 +900,80 @@ async function runAnalysisCycle(symbol, timeframe) {
       };
     }
 
+    // ── AI Advisor (agentic layer) ──
+    // The one LLM-based check in the pipeline, deliberately placed last —
+    // it only ever runs on a signal that has already cleared every
+    // deterministic gate (scoring, trap/compression/abnormal-market,
+    // regime-fit floor) and has its full entry/SL/TP plan built, so it's
+    // reviewing a complete, real setup rather than a partial one. Advisory
+    // only: it can say SKIP or REDUCE_SIZE, but it never adjusts risk
+    // parameters or touches execution directly, and any error/timeout/
+    // missing-key fails OPEN (proceeds as TAKE) rather than blocking a
+    // trade on an LLM outage.
+    let aiAdvisorVerdict = null;
+    if (aiAdvisor) {
+      aiAdvisorVerdict = await aiAdvisor.evaluate({
+        signal: fullSignal,
+        regime,
+        strategyContext,
+        candleContext,
+        compressionContext,
+        abnormalMarket,
+        timeCycleContext,
+        trapContext,
+      });
+      fullSignal.aiAdvisor = {
+        recommendation: aiAdvisorVerdict.recommendation,
+        confidence: aiAdvisorVerdict.confidence,
+        reasoning: aiAdvisorVerdict.reasoning,
+        source: aiAdvisorVerdict.source,
+      };
+      if (aiAdvisorVerdict.recommendation === 'REDUCE_SIZE') {
+        fullSignal.riskFlags = { ...(fullSignal.riskFlags || {}), aiAdvisorReduceSize: true };
+        log.info(`${key}: AI Advisor recommends REDUCE_SIZE — ${aiAdvisorVerdict.reasoning}`);
+      }
+    }
+
+    // ── Signal Explainer (free, no LLM) ──
+    // Runs unconditionally — no key, no network, no cost. This is what
+    // populates the "why did I get this signal" breakdown in the Mini App
+    // and Telegram message even when the paid AI Advisor above is disabled
+    // (which it is by default).
+    if (signalExplainer) {
+      const explanation = signalExplainer.explain({
+        signal: fullSignal,
+        regime,
+        strategyContext,
+        candleContext,
+        compressionContext,
+        abnormalMarket,
+        trapContext,
+        timeCycleContext,
+      });
+      fullSignal.explanation = explanation;
+    }
+
     // ── Store in memory ──
     if (memory?.saveSignal) {
       memory.saveSignal(fullSignal).catch(e => log.warn(`Memory save error: ${e.message}`));
     }
     if (mongoStore.saveSignal) {
       mongoStore.saveSignal(fullSignal).catch(e => log.warn(`Mongo signal save error: ${e.message}`));
+    }
+
+    // AI Advisor SKIP is checked here — after journaling (so vetoed setups
+    // are still visible for review, e.g. "was the advisor right to skip
+    // this one?"), but before this signal consumes any risk-model budget
+    // or reaches dispatch/execution.
+    if (aiAdvisorVerdict?.recommendation === 'SKIP') {
+      log.info(`${key}: AI Advisor recommends SKIP — ${aiAdvisorVerdict.reasoning}`);
+      if (auditTrail) {
+        auditTrail.record({ symbol, timeframe, signalFired: false, blockedReason: 'ai_advisor_skip', score: fullSignal.score?.final ?? 0 });
+      }
+      return;
+    }
+    if (auditTrail) {
+      auditTrail.record({ symbol, timeframe, signalFired: true, action: fullSignal.action, score: fullSignal.score?.final ?? 0, grade: fullSignal.score?.grade });
     }
 
     // Track this position in the portfolio-risk model so future correlation
@@ -998,7 +1226,7 @@ let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, institutionalGates,
     monteCarlo, bayesianEng, statValidator, walkForward, ensembleEng,
     signalMonitor, institutionalRiskManager, executionManagers, myfxbookFeed, openInsiderFeed,
     finnhubFeed, cftcCotFeed, cotParser, executionEngine, opportunityRanker, relativeStrength,
-    dataIntegrityMonitor;
+    dataIntegrityMonitor, intermarketAnalyzer;
 
 // FIX: ExecutionManager's MarketMicrostructureAnalyzer keeps a single shared
 // orderBookHistory/tradeHistory/spreadHistory with no per-symbol keying — one
@@ -1084,6 +1312,14 @@ function buildSingletons() {
     log.info('SignalScorer created');
   } else {
     log.error('SignalScorer module missing — signals cannot be scored');
+  }
+
+  // Getter (not a captured snapshot) so a future /outlook command always
+  // reads whatever regimeEngine/candleStores/sessionFilter/cotParser
+  // currently hold, regardless of the order the rest of this init
+  // sequence assigns them in.
+  if (dispatcher) {
+    dispatcher.getMarketOutlookDeps = () => ({ regimeEngine, candleStores, sessionFilter, cotParser, symbols: SYMBOLS });
   }
 
   // FIX: manual-mode.js's ExecutionEngine (~1,700 lines — SignalJournal,
@@ -1180,6 +1416,11 @@ function buildSingletons() {
   if (DataIntegrityMonitor) {
     dataIntegrityMonitor = new DataIntegrityMonitor({ staleFactor: 3 });
     log.info('DataIntegrityMonitor created');
+  }
+
+  if (IntermarketAnalyzer) {
+    intermarketAnalyzer = new IntermarketAnalyzer({ lookback: 10 });
+    log.info('IntermarketAnalyzer created (DXY/equity-index cross-confirmation, advisory only)');
   }
 
   if (InstitutionalGates) {
@@ -1455,6 +1696,7 @@ function buildSingletons() {
       adaptiveLearning, bayesianEng, walkForward, institutionalGates,
       drawdownGuard, sessionFilter, riskEngine, institutionalRiskManager,
       opportunityRanker, relativeStrength, dataIntegrityMonitor, executionEngine,
+      auditTrail, symbolManager, cotParser,
       // For GET /api/outlook (signal-pipeline/market-outlook.js)
       regimeEngine, candleStores, symbols: SYMBOLS,
     });
@@ -1549,17 +1791,25 @@ function buildFeeds() {
 
   // TwelveData feed for forex/commodities
   if (TwelveDataFeed && fxSymbols.length && TWELVE_KEY) {
+    // FIX: DXY/equity-index candles must NOT go through onCandle() — it
+    // early-returns for any symbol not in the tradeable SYMBOLS list, so a
+    // macro symbol added there would be silently discarded, not analyzed.
+    // Subscribe them separately and route explicitly to intermarketAnalyzer.
+    const macroSymbols = intermarketAnalyzer ? [DXY_SYMBOL, EQUITY_INDEX_SYMBOL] : [];
+    const tdSymbols = [...new Set([...fxSymbols, ...macroSymbols])];
+
     const tdFeed = new TwelveDataFeed({
       apiKey:     TWELVE_KEY,
-      symbols:    fxSymbols,
+      symbols:    tdSymbols,
       timeframes: TIMEFRAMES_STR,
     });
-    tdFeed.on('candle',        onCandle);
-    tdFeed.on('candle_update', onCandle);
+    tdFeed.on('candle',        (d) => macroSymbols.includes(d.symbol) ? intermarketAnalyzer.updatePrice(d.symbol, d.candle.close, d.candle.timestamp || Date.now()) : onCandle(d));
+    tdFeed.on('candle_update', (d) => macroSymbols.includes(d.symbol) ? intermarketAnalyzer.updatePrice(d.symbol, d.candle.close, d.candle.timestamp || Date.now()) : onCandle(d));
+    tdFeed.on('price',         (d) => macroSymbols.includes(d.symbol) && intermarketAnalyzer.updatePrice(d.symbol, d.price, d.timestamp || Date.now()));
     tdFeed.on('error', (err) => log.error(`TwelveData error: ${err.message}`));
-    tdFeed.on('connected', () => log.info(`TwelveDataFeed connected for: ${fxSymbols.join(', ')}`));
+    tdFeed.on('connected', () => log.info(`TwelveDataFeed connected for: ${tdSymbols.join(', ')}`));
     feeds.push({ name: 'TwelveDataFeed', instance: tdFeed, symbols: fxSymbols });
-    log.info(`TwelveDataFeed configured for: ${fxSymbols.join(', ')}`);
+    log.info(`TwelveDataFeed configured for: ${fxSymbols.join(', ')}${macroSymbols.length ? ` (+ macro: ${macroSymbols.join(', ')})` : ''}`);
     if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('TwelveDataFeed', tdFeed, fxSymbols);
   } else if (fxSymbols.length && !TWELVE_KEY) {
     log.warn(`Forex symbols ${fxSymbols.join(',')} configured but TWELVE_DATA_API_KEY is missing`);

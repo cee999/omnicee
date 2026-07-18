@@ -317,7 +317,17 @@ async function runTests() {
   try {
     const { EnsembleEngine } = require(path.join(ROOT, 'signal-pipeline/ensemble-engine'));
     const ee = new EnsembleEngine();
-    pass('EnsembleEngine loaded');
+    const result = ee.evaluate(
+      {
+        monteCarlo: { simulations: 1000, approved: true, winProbability: 0.62, expectedR: 1.4, riskOfRuin: 0.02 },
+        agentVotes: { LONG: 4, SHORT: 1, WAIT: 1 },
+        regime: { regime: 'BULL_TREND', structure: 'DIRECTIONAL' },
+      },
+      { action: 'LONG', score: { final: 82 } },
+    );
+    if (typeof result.approved !== 'boolean') throw new Error('expected evaluate() to return a boolean approved field');
+    if (typeof result.ensembleScore !== 'number') throw new Error('expected numeric ensembleScore');
+    pass(`EnsembleEngine: evaluate() approved=${result.approved} ensembleScore=${result.ensembleScore} layers=${result.layerCount}`);
   } catch (e) { fail('EnsembleEngine', e); }
 
   try {
@@ -437,7 +447,225 @@ async function runTests() {
     pass(`Scenario Simulator: DIRECTIONAL=100% WR, CHOP=0% WR, NORMAL=100% WR, COMPRESSION=0% WR`);
   } catch (e) { fail('Scenario Simulator (byMarketStructure/byVolatilityRegime)', e); }
 
+  try {
+    const { TrapDetector } = require(path.join(ROOT, 'signal-pipeline/trap-detector'));
+    const candles = syntheticCandles(150, 2000, 'RANGE');
+    const trap = new TrapDetector();
+    const result = trap.analyze({ candles });
+    if (!Array.isArray(result.traps)) throw new Error('expected traps array');
+    if (typeof result.trapRisk !== 'number') throw new Error('expected numeric trapRisk');
+    pass(`TrapDetector: traps=${result.traps.length} trapRisk=${result.trapRisk}`);
+  } catch (e) { fail('TrapDetector', e); }
+
+  try {
+    const { CompressionDetector } = require(path.join(ROOT, 'signal-pipeline/compression-detector'));
+    const candles = syntheticCandles(150, 2000, 'RANGE');
+    const comp = new CompressionDetector();
+    const result = comp.analyze({ candles });
+    if (typeof result.compressionScore !== 'number') throw new Error('expected numeric compressionScore');
+    pass(`CompressionDetector: score=${result.compressionScore} compressed=${result.isCompressed}`);
+  } catch (e) { fail('CompressionDetector', e); }
+
+  try {
+    const { TimeCycleEngine } = require(path.join(ROOT, 'signal-pipeline/time-cycle-engine'));
+    const candles = syntheticCandles(1500, 2000, 'RANGE');
+    const tce = new TimeCycleEngine();
+    const result = tce.analyze({ candles, forwardBars: 1 });
+    if (!Array.isArray(result.hourOfDay) || result.hourOfDay.length === 0) throw new Error('expected populated hourOfDay buckets');
+    pass(`TimeCycleEngine: hourBuckets=${result.hourOfDay.length} dowBuckets=${result.dayOfWeek.length}`);
+  } catch (e) { fail('TimeCycleEngine', e); }
+
+
+  try {
+    const { StrategySelector } = require(path.join(ROOT, 'signal-pipeline/strategy-selector'));
+    const sel = new StrategySelector();
+    const aligned = sel.select({ regime: { regime: 'BULL_TREND', trend: 'BULL_TREND', structure: 'DIRECTIONAL', volatility: 'NORMAL', tradeability: 80 }, signalAction: 'LONG' });
+    const fighting = sel.select({ regime: { regime: 'BULL_TREND', trend: 'BULL_TREND', structure: 'DIRECTIONAL', volatility: 'NORMAL', tradeability: 80 }, signalAction: 'SHORT' });
+    if (!(aligned.confidenceMultiplier > fighting.confidenceMultiplier)) {
+      throw new Error(`expected trend-aligned multiplier > counter-trend, got ${aligned.confidenceMultiplier} vs ${fighting.confidenceMultiplier}`);
+    }
+    const chop = sel.select({ regime: { regime: 'CHOP_EXPANSION', trend: 'BALANCED', structure: 'CHOP', volatility: 'EXPANSION', tradeability: 30 }, signalAction: 'LONG' });
+    if (chop.confidenceMultiplier >= 1 || !chop.minScoreFloor) throw new Error('expected CHOP to discount confidence and set a min-score floor');
+    pass(`StrategySelector: aligned=${aligned.confidenceMultiplier} counterTrend=${fighting.confidenceMultiplier} chop=${chop.confidenceMultiplier}/floor=${chop.minScoreFloor}`);
+  } catch (e) { fail('StrategySelector', e); }
+
+  try {
+    const { CandleIntelligence } = require(path.join(ROOT, 'signal-pipeline/candle-intelligence'));
+    const ci = new CandleIntelligence();
+    // Deterministic, monotonically-declining series — syntheticCandles' drift
+    // is dominated by its own random noise over a short window and can't
+    // reliably produce a classifiable down-trend for this assertion.
+    const candles = [];
+    let price = 2000;
+    for (let i = 0; i < 40; i++) {
+      const o = price;
+      const c = price - price * 0.004;
+      candles.push({ open: o, high: o + price * 0.0005, low: c - price * 0.0005, close: c, volume: 1000, timestamp: Date.now() - (40 - i) * 3600000 });
+      price = c;
+    }
+    const last = candles[candles.length - 1];
+    // Force a hammer-shaped rejection candle after the down-trend
+    candles[candles.length - 1] = { ...last, open: last.close, close: last.close + last.close * 0.003, high: last.close + last.close * 0.0035, low: last.close - last.close * 0.018, volume: (last.volume || 1000) * 3 };
+    const result = ci.analyze({ candles });
+    if (result.type !== 'HAMMER_REJECTION') throw new Error(`expected HAMMER_REJECTION, got ${result.type}`);
+    if (!result.rejection.isExhaustionCandidate) throw new Error('expected exhaustion candidate flag on hammer after downtrend');
+    pass(`CandleIntelligence: type=${result.type} quality=${result.qualityScore} exhaustion=${result.rejection.isExhaustionCandidate}`);
+  } catch (e) { fail('CandleIntelligence', e); }
+
+  try {
+    const { AIAdvisor } = require(path.join(ROOT, 'signal-pipeline/ai-advisor'));
+    // No API key in smoke-test env — must fail open immediately with no network call.
+    const advisor = new AIAdvisor({ apiKey: '' });
+    if (advisor.enabled) throw new Error('expected advisor to be disabled with no API key');
+    const result = await advisor.evaluate({
+      signal: { symbol: 'BTCUSDT', timeframe: 'H1', action: 'LONG', currentPrice: 65000, score: { final: 82, grade: 'A' } },
+      regime: { regime: 'BULL_TREND', trend: 'BULL_TREND', structure: 'DIRECTIONAL', volatility: 'NORMAL', tradeability: 85 },
+    });
+    if (result.recommendation !== 'TAKE' || result.source !== 'fallback') {
+      throw new Error(`expected fail-open TAKE/fallback, got ${JSON.stringify(result)}`);
+    }
+    pass(`AIAdvisor: disabled-without-key fails open correctly (recommendation=${result.recommendation})`);
+  } catch (e) { fail('AIAdvisor', e); }
+
+  try {
+    const { IntermarketAnalyzer } = require(path.join(ROOT, 'risk-engine/intermarket-analyzer'));
+    const ia = new IntermarketAnalyzer({ lookback: 10 });
+
+    // Simulate DXY falling (USD weak) and equities rising (risk-on)
+    let dxy = 105.0, spx = 5000;
+    for (let i = 0; i < 10; i++) { dxy -= 0.15; spx += 8; ia.updatePrice('DXY', dxy); ia.updatePrice('SPX500', spx); }
+
+    const eurusdLong = ia.checkConfirmation('EURUSD', 'LONG');
+    if (eurusdLong.confirmed !== true) throw new Error(`expected EURUSD LONG to be confirmed by falling DXY, got ${JSON.stringify(eurusdLong)}`);
+
+    // Note: USDJPY here is a genuinely MIXED signal, not a clean divergence —
+    // DXY falling hurts a USD-base long, but JPY (as the quote currency) is
+    // also a haven that weakens with risk-on equities, which helps a USD/JPY
+    // long. Both effects are real; asserting a forced single answer here
+    // would be wrong. USDCAD isolates a clean case instead: CAD is a risk
+    // currency, so quote-currency risk-on strength ALSO hurts a USD/CAD long
+    // (short a risk currency into risk-on) — both legs diverge cleanly.
+    const usdcadLong = ia.checkConfirmation('USDCAD', 'LONG');
+    if (usdcadLong.confirmed !== false) throw new Error(`expected USDCAD LONG to diverge from falling DXY + risk-on equities, got ${JSON.stringify(usdcadLong)}`);
+
+    // Regression check for a real bug caught during development: JPY as the
+    // QUOTE currency (not base) must still be evaluated against equities.
+    const gbpjpyLong = ia.checkConfirmation('GBPJPY', 'LONG');
+    if (gbpjpyLong.available !== true || gbpjpyLong.confirmed !== true) {
+      throw new Error(`expected GBPJPY LONG to be confirmed via quote-currency (JPY) equity relevance, got ${JSON.stringify(gbpjpyLong)}`);
+    }
+
+    const btcCheck = ia.checkConfirmation('BTCUSDT', 'LONG');
+    if (btcCheck.available !== false) throw new Error('expected no macro relevance for BTCUSDT');
+
+    pass(`IntermarketAnalyzer: EURUSD confirmed=${eurusdLong.confirmed}, USDCAD confirmed=${usdcadLong.confirmed}, GBPJPY(quote-currency) confirmed=${gbpjpyLong.confirmed}`);
+  } catch (e) { fail('IntermarketAnalyzer', e); }
+
+  try {
+    const { SignalExplainer } = require(path.join(ROOT, 'signal-pipeline/signal-explainer'));
+    const explainer = new SignalExplainer();
+    const strong = explainer.explain({
+      signal: {
+        symbol: 'BTCUSDT', action: 'LONG', score: { final: 88, grade: 'A' },
+        directionAnalysis: { confirmedBy: ['smc', 'mtf', 'momentum', 'volumeOI'], agentVotes: [1, 2, 3, 4, 5, 6] },
+        agentBreakdown: [{ agent: 'SMC', weight: 0.322, direction: 'LONG', topReasons: ['Bullish order block mitigated'] }],
+      },
+      candleContext: { type: 'BULL_MARUBOZU', qualityScore: 91, note: 'Strong bullish candle.' },
+      compressionContext: { isCompressed: false, compressionScore: 20 },
+    });
+    if (strong.confidenceLabel !== 'WELL_SUPPORTED') throw new Error(`expected WELL_SUPPORTED, got ${strong.confidenceLabel}`);
+    if (!strong.supports.length || strong.cautions.length) throw new Error('expected supports only, no cautions, for a clean strong signal');
+
+    const minimal = explainer.explain({ signal: { symbol: 'XAUUSD', action: 'LONG', score: { final: 76, grade: 'B' } } });
+    if (!minimal.summary || minimal.confidenceLabel !== 'STANDARD') throw new Error('expected graceful degrade to STANDARD with only signal context');
+
+    pass(`SignalExplainer: strong=${strong.confidenceLabel} minimal-context=${minimal.confidenceLabel} (free, no API key required)`);
+  } catch (e) { fail('SignalExplainer', e); }
+
+  try {
+    const { MarketHeatMap } = require(path.join(ROOT, 'automation/market-heatmap'));
+    const { OpportunityRanker } = require(path.join(ROOT, 'signal-pipeline/opportunity-ranker'));
+    const ranker = new OpportunityRanker();
+    ranker.update('BTCUSDT', { action: 'LONG', score: 88, grade: 'A', fired: true });
+    ranker.update('ETHUSDT', { action: 'WAIT', score: 45, grade: 'C', fired: false, blockedReason: 'below min score' });
+    const heatmap = new MarketHeatMap();
+    const grid = heatmap.build({ opportunityRanker: ranker });
+    if (!Array.isArray(grid.tiles) || grid.tiles.length !== 2) throw new Error(`expected 2 tiles, got ${grid.tiles?.length}`);
+    if (grid.tiles[0].symbol !== 'BTCUSDT') throw new Error('expected BTCUSDT (higher score) ranked first');
+    pass(`MarketHeatMap: ${grid.tiles.length} tiles, top=${grid.tiles[0].symbol} (${grid.tiles[0].bucket})`);
+  } catch (e) { fail('MarketHeatMap', e); }
+
+  try {
+    const { MarketHoursGate, SymbolManager } = require(path.join(ROOT, 'orchestrator/scheduling-gate'));
+    const sunday2200 = new Date('2026-07-19T22:00:00Z').getTime();
+    const tuesday1400 = new Date('2026-07-21T14:00:00Z').getTime();
+    if (MarketHoursGate.shouldAnalyze('M5', sunday2200) !== false) throw new Error('expected Sunday dead-zone M5 to be blocked');
+    if (MarketHoursGate.shouldAnalyze('H1', tuesday1400) !== true) throw new Error('expected Tuesday H1 to be allowed');
+    const quality = MarketHoursGate.getQuality(tuesday1400);
+    if (quality.label !== 'London/NY Overlap') throw new Error(`expected London/NY Overlap at 14:00 UTC, got ${quality.label}`);
+
+    const sm = new SymbolManager({ symbols: ['BTCUSDT', 'ETHUSDT'] });
+    if (!sm.isAllowed('BTCUSDT')) throw new Error('expected whitelisted symbol to be allowed');
+    if (sm.isAllowed('SOLUSDT')) throw new Error('expected non-whitelisted symbol to be blocked');
+    sm.blacklist('ETHUSDT');
+    if (sm.isAllowed('ETHUSDT')) throw new Error('expected blacklisted symbol to be blocked');
+    pass('MarketHoursGate + SymbolManager: dead-zone/session-quality and whitelist/blacklist gating correct');
+  } catch (e) { fail('MarketHoursGate/SymbolManager', e); }
+
+  try {
+    const { AuditTrail } = require(path.join(ROOT, 'orchestrator/audit-trail'));
+    const at = new AuditTrail();
+    at.record({ symbol: 'BTCUSDT', signalFired: true, score: 88 });
+    at.record({ symbol: 'BTCUSDT', signalFired: false, blockedReason: 'below min score', score: 45 });
+    at.record({ symbol: 'ETHUSDT', signalFired: false, blockedReason: 'chop regime', score: 30 });
+    if (at.size() !== 3) throw new Error(`expected 3 entries, got ${at.size()}`);
+    if (at.getBySymbol('BTCUSDT').length !== 2) throw new Error('expected 2 BTCUSDT entries');
+    if (at.getSignalFired().length !== 1) throw new Error('expected 1 fired entry');
+    pass(`AuditTrail: size=${at.size()} bySymbol=${at.getBySymbol('BTCUSDT').length} fired=${at.getSignalFired().length}`);
+  } catch (e) { fail('AuditTrail', e); }
+
+  try {
+    const { MarketOutlookBuilder } = require(path.join(ROOT, 'signal-pipeline/market-outlook'));
+    const now = Date.now();
+    const fakeCalendar = {
+      getUpcoming(hours) {
+        const events = [
+          { name: 'US CPI', currency: 'USD', tier: 'TIER_1', time: now + 5 * 3600000 },
+          { name: 'ECB Rate Decision', currency: 'EUR', tier: 'TIER_1', time: now + 3 * 24 * 3600000 },
+          { name: 'US NFP', currency: 'USD', tier: 'TIER_1', time: now + 10 * 24 * 3600000 }, // next week
+        ];
+        return events
+          .filter(e => e.time > now && e.time < now + hours * 3600000)
+          .map(e => ({ ...e, hoursAway: (e.time - now) / 3600000 }));
+      },
+    };
+    const fakeSessionFilter = { calendar: fakeCalendar, check: () => ({ allowed: true, multiplier: 1.0 }) };
+    const fakeRegimeEngine = { classify: () => ({ regime: 'BULL_TREND', tradeability: 82, reasons: ['test'] }) };
+    const fakeCotParser = {
+      analyze: (symbol) => symbol === 'EURUSD' ? {
+        date: '2026-07-17', commercial: { net: -50000 }, largeSpec: { net: 62000 },
+        weekOverWeekChange: { commercial: -2000, largeSpec: 3000, smallSpec: -1000 },
+        largeSpecPercentile: 94, isExtreme: true, signal: 'EXTREME_LONG_SPEC_REVERSAL_RISK',
+        note: 'test note',
+      } : null,
+    };
+    const outlook = MarketOutlookBuilder.build({
+      symbols: ['EURUSD'],
+      candleStores: { EURUSD: { H1: new Array(60).fill({ close: 1 }) } },
+      regimeEngine: fakeRegimeEngine,
+      sessionFilter: fakeSessionFilter,
+      cotParser: fakeCotParser,
+    });
+    if (outlook.week.tier1Events.length !== 2) throw new Error(`expected 2 this-week Tier-1 events, got ${outlook.week.tier1Events.length}`);
+    if (outlook.nextWeek.tier1Events.length !== 1) throw new Error(`expected 1 next-week Tier-1 event, got ${outlook.nextWeek.tier1Events.length}`);
+    if (!outlook.symbols[0].institutionalPositioning?.isExtreme) throw new Error('expected EURUSD institutional positioning to be attached and flagged extreme');
+    if (!outlook.narrative.includes('Next week')) throw new Error('expected narrative to mention next week');
+    if (!outlook.narrative.includes('hedge funds')) throw new Error('expected narrative to mention institutional/hedge-fund positioning');
+    pass(`MarketOutlookBuilder: week=${outlook.week.tier1Events.length} nextWeek=${outlook.nextWeek.tier1Events.length} COT-extreme=${outlook.symbols[0].institutionalPositioning.isExtreme}`);
+  } catch (e) { fail('MarketOutlookBuilder', e); }
+
   // ── 12. Syntax check all modules ──────────────────────────────────────
+
 
   console.log('\n12. index.js syntax check');
   try {
