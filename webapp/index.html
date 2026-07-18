@@ -103,6 +103,67 @@ button:focus-visible, .chip:focus-visible, [tabindex]:focus-visible { outline: 2
 
 .app { height: 100dvh; display: grid; grid-template-rows: 56px 1fr 54px; }
 
+.hidden { display: none !important; }
+
+/* ── Login overlay (app-token auth, alternate to Telegram) ── */
+.login-overlay {
+  position: fixed; inset: 0; z-index: 500;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg);
+  padding: 20px;
+}
+.login-card {
+  width: 100%; max-width: 340px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius, 10px);
+  padding: 28px 24px;
+}
+.login-title {
+  font-family: var(--font-mono);
+  font-size: 13px; font-weight: 700; letter-spacing: .06em;
+  color: var(--text); text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.login-sub {
+  font-size: 12px; color: var(--muted);
+  margin-bottom: 18px; line-height: 1.5;
+}
+.login-input {
+  width: 100%;
+  height: 40px;
+  padding: 0 12px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 6px);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  margin-bottom: 10px;
+  transition: border-color var(--fast);
+}
+.login-input:focus { border-color: var(--emerald-line); }
+.login-btn {
+  width: 100%;
+  height: 40px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--emerald);
+  color: #05070a;
+  font-family: var(--font-mono);
+  font-weight: 700; font-size: 12px; letter-spacing: .04em;
+  text-transform: uppercase;
+  transition: background var(--fast);
+}
+.login-btn:hover { background: var(--emerald-dim); }
+.login-btn:disabled { opacity: .5; cursor: default; }
+.login-error {
+  color: var(--coral);
+  font-size: 11px;
+  margin-top: 10px;
+  min-height: 14px;
+  font-family: var(--font-mono);
+}
+
 /* ── Top bar ── */
 .topbar {
   display: flex; align-items: center; gap: 14px;
@@ -379,6 +440,16 @@ button:focus-visible, .chip:focus-visible, [tabindex]:focus-visible { outline: 2
 </style>
 </head>
 <body>
+<div id="login-overlay" class="login-overlay hidden">
+  <div class="login-card">
+    <div class="login-title">OMNICEE Access</div>
+    <div class="login-sub">Enter your access token to continue outside Telegram.</div>
+    <input id="login-token-input" class="login-input" type="password" placeholder="Access token" autocomplete="off" />
+    <button id="login-submit-btn" class="login-btn" onclick="submitAppToken()">Unlock</button>
+    <div id="login-error" class="login-error"></div>
+  </div>
+</div>
+
 <div class="app">
 
   <!-- ── Top Bar ── -->
@@ -735,7 +806,73 @@ const state = {
 };
 
 const initData = tg?.initData || '';
-const socket = io({ path: '/socket.io', auth: { initData }, transports: ['websocket', 'polling'] });
+// Persisted so a browser tab outside Telegram doesn't have to re-enter the
+// token every reload. Telegram sessions never touch this — initData always
+// wins when present (see currentAuth()).
+let appToken = localStorage.getItem('omnicee_app_token') || '';
+
+function currentAuth() {
+  // Telegram initData takes priority when we're actually running inside
+  // Telegram; app-token is the alternate path for plain-browser access.
+  return initData ? { initData } : { appToken };
+}
+
+// Single source of truth for auth headers on every REST call — replaces
+// five separate copies of `{ 'x-telegram-init-data': initData }` that had
+// no way to fall back to an app token at all.
+function authHeaders(extra = {}) {
+  const headers = { ...extra };
+  if (initData) headers['x-telegram-init-data'] = initData;
+  else if (appToken) headers['x-app-token'] = appToken;
+  return headers;
+}
+
+function showLogin(message) {
+  const overlay = document.getElementById('login-overlay');
+  if (overlay) overlay.classList.remove('hidden');
+  const err = document.getElementById('login-error');
+  if (err) err.textContent = message || '';
+}
+function hideLogin() {
+  const overlay = document.getElementById('login-overlay');
+  if (overlay) overlay.classList.add('hidden');
+}
+
+async function submitAppToken() {
+  const input = document.getElementById('login-token-input');
+  const btn = document.getElementById('login-submit-btn');
+  const token = (input?.value || '').trim();
+  if (!token) { showLogin('Enter a token.'); return; }
+  if (btn) btn.disabled = true;
+  try {
+    // Validate directly against a lightweight authenticated endpoint rather
+    // than trusting a socket reconnect round-trip to surface the error.
+    const res = await fetch('/api/stats', { headers: { 'x-app-token': token } });
+    if (!res.ok) { showLogin('Invalid token.'); if (btn) btn.disabled = false; return; }
+    appToken = token;
+    localStorage.setItem('omnicee_app_token', token);
+    hideLogin();
+    socket.auth = currentAuth();
+    socket.disconnect();
+    socket.connect();
+    hydrateFromApi();
+  } catch (_) {
+    showLogin('Could not reach server.');
+  }
+  if (btn) btn.disabled = false;
+}
+window.submitAppToken = submitAppToken;
+
+document.getElementById('login-token-input')?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') submitAppToken();
+});
+
+// Outside Telegram with no saved token, fetches would 401 immediately —
+// show the login overlay up front instead of waiting for the first
+// failed request to explain why nothing is loading.
+if (!initData && !appToken) showLogin();
+
+const socket = io({ path: '/socket.io', auth: currentAuth, transports: ['websocket', 'polling'] });
 
 socket.on('connect', () => {
   state.connected = true;
@@ -748,6 +885,9 @@ socket.on('connect', () => {
 socket.on('connect_error', err => {
   setStatus('error', 'OFFLINE');
   console.warn('[OMNICEE]', err.message);
+  // Outside Telegram with no working app token, a connect error is almost
+  // certainly missing/invalid credentials rather than a network blip.
+  if (!initData && !appToken) showLogin(err.message === 'Missing app token' ? '' : 'Session expired — enter your token again.');
 });
 socket.on('disconnect', () => { state.connected = false; setStatus('', 'RECONNECTING'); });
 
@@ -792,7 +932,7 @@ socket.on('intel', data => {
 });
 
 async function hydrateFromApi() {
-  const headers = initData ? { 'x-telegram-init-data': initData } : {};
+  const headers = authHeaders();
   try {
     const health = await fetch('/health').then(r => r.json());
     setText('m-db', health.mongo?.enabled ? (health.mongo.ok ? 'LIVE' : 'ERROR') : 'OFFLINE');
@@ -806,14 +946,14 @@ async function hydrateFromApi() {
   renderAll();
 }
 async function hydrateLearning() {
-  const headers = initData ? { 'x-telegram-init-data': initData } : {};
+  const headers = authHeaders();
   try {
     const res = await fetch('/api/learning?limit=30', { headers }).then(r => r.json());
     state.learning = res.profiles || [];
   } catch (_) { state.learning = []; }
 }
 async function hydrateOutlook() {
-  const headers = initData ? { 'x-telegram-init-data': initData } : {};
+  const headers = authHeaders();
   try {
     const res = await fetch('/api/outlook', { headers }).then(r => r.json());
     if (res.ok) state.outlook = res.outlook;
@@ -1404,8 +1544,7 @@ async function recordOutcome(signalId, pnlR) {
   // the engines it feeds (Q-table, Bayesian posteriors, drawdown daily PnL),
   // so every outcome was being silently double-counted. REST is now the
   // single path; the backend also rejects true duplicates with 409.
-  const headers = { 'Content-Type': 'application/json' };
-  if (initData) headers['x-telegram-init-data'] = initData;
+  const headers = authHeaders({ 'Content-Type': 'application/json' });
   haptic('signal');
   try {
     const res = await fetch('/api/outcomes', { method: 'POST', headers, body: JSON.stringify(payload) });

@@ -12,7 +12,7 @@ const rateLimit = require('express-rate-limit');
 const { Server } = require('socket.io');
 const { bus, getDispatcher, getEngines } = require('./realtime');
 const db = require('../db');
-const { telegramAuthMiddleware, validateTelegramInitData } = require('./telegram-auth');
+const { telegramAuthMiddleware, validateTelegramInitData, validateAppToken } = require('./telegram-auth');
 const { FinnhubFeed } = require('../feeds/finnhub-feed');
 const { AdaptiveLearningEngine } = require('../signal-pipeline/adaptive-learning-engine');
 const { MarketOutlookBuilder } = require('../signal-pipeline/market-outlook');
@@ -320,11 +320,26 @@ function startServer(config = {}) {
   });
 
   io.use(async (socket, next) => {
+    // Same app-token-first, fall-through-to-Telegram pattern as
+    // telegramAuthMiddleware in api/telegram-auth.js — kept in sync so a
+    // browser session logged in with the app token doesn't lose live
+    // updates just because it's not inside Telegram.
+    const appToken = socket.handshake.auth?.appToken || socket.handshake.query?.appToken;
+    if (appToken) {
+      const appValidation = validateAppToken(appToken);
+      if (appValidation.ok) {
+        socket.telegramUser = appValidation.user;
+        socket.authMethod = 'app-token';
+        return next();
+      }
+    }
+
     const initData = socket.handshake.auth?.initData || socket.handshake.query?.initData;
-    if (!initData && process.env.NODE_ENV !== 'production') return next();
+    if (!initData && !appToken && process.env.NODE_ENV !== 'production') return next();
     const validation = validateTelegramInitData(initData, process.env.TELEGRAM_BOT_TOKEN);
     if (!validation.ok) return next(new Error(validation.reason));
     socket.telegramUser = validation.user;
+    socket.authMethod = 'telegram';
     try { await db.upsertTelegramUser(validation.user); } catch (_) {}
     return next();
   });

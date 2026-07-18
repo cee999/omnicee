@@ -22,6 +22,19 @@ envVarGroups:
       - key: TELEGRAM_ALLOWED_USER_IDS
         sync: false
 
+      # ── Alternate Mini App auth (optional) ─────────────────
+      # Shared-secret token, checked before Telegram initData. Leave blank
+      # to disable — Telegram auth is unaffected either way.
+      - key: APP_ACCESS_TOKEN
+        sync: false
+
+      # ── MT5 EA bridge auth ──────────────────────────────────
+      # FIX: this was never in the blueprint at all — deployed without it,
+      # /api/ea/signals (the live signal feed the MT5 EA polls) is open to
+      # anyone who finds the URL. Required, not optional.
+      - key: EA_SECRET
+        sync: false
+
       # ── Data feeds ────────────────────────────────────────
       - key: TWELVE_DATA_API_KEY
         sync: false

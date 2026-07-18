@@ -85,7 +85,54 @@ function allowedTelegramUser(user) {
   return user && user.id && allowed.includes(String(user.id));
 }
 
+// App-token auth: a simple shared-secret alternative to Telegram initData,
+// for accessing the Mini App outside Telegram (plain browser, testing,
+// sharing with someone who doesn't have the bot). Deliberately separate
+// from Telegram auth rather than a replacement for it — telegramAuthMiddleware
+// tries this first and only falls through to Telegram validation if it's
+// absent or doesn't match, so existing Telegram sessions are unaffected.
+function validateAppToken(token) {
+  const appToken = process.env.APP_ACCESS_TOKEN || '';
+  if (!appToken) return { ok: false, reason: 'App token auth not configured' };
+  if (!token) return { ok: false, reason: 'Missing app token' };
+
+  try {
+    const tokenBuf = Buffer.from(String(token));
+    const appTokenBuf = Buffer.from(appToken);
+    // Constant-time compare requires equal-length buffers; unequal length
+    // is itself a safe, immediate reject (mirrors the Telegram hash check
+    // just above).
+    const valid = tokenBuf.length === appTokenBuf.length
+      && crypto.timingSafeEqual(tokenBuf, appTokenBuf);
+    if (!valid) return { ok: false, reason: 'Invalid app token' };
+    return { ok: true, user: { id: 'app-token', username: 'app-token-user' } };
+  } catch (err) {
+    console.warn('[App Token Auth] Validation error:', err.message);
+    return { ok: false, reason: 'App token validation error' };
+  }
+}
+
 async function telegramAuthMiddleware(req, res, next) {
+  // App-token path first: if the caller sent a valid x-app-token, accept it
+  // and skip Telegram validation entirely. If APP_ACCESS_TOKEN isn't
+  // configured, or the header's absent, or it doesn't match, this is a
+  // no-op fall-through — Telegram auth behaves exactly as before.
+  const appToken = req.header('x-app-token');
+  if (appToken) {
+    const appValidation = validateAppToken(appToken);
+    if (appValidation.ok) {
+      req.telegramUser = appValidation.user;
+      req.authMethod = 'app-token';
+      return next();
+    }
+    // Wrong/expired app token: don't silently fall through to Telegram
+    // auth (that would mask a typo'd token as a confusing Telegram error).
+    // Only reject outright if no Telegram initData was also provided.
+    if (!req.header('x-telegram-init-data') && !req.body?.initData && !req.query?.initData) {
+      return res.status(401).json({ ok: false, error: appValidation.reason });
+    }
+  }
+
   const initData = req.header('x-telegram-init-data') || req.body?.initData || req.query?.initData;
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -99,6 +146,7 @@ async function telegramAuthMiddleware(req, res, next) {
   if (!allowedTelegramUser(validation.user)) return res.status(403).json({ ok: false, error: 'Telegram user not allowed' });
 
   req.telegramUser = validation.user;
+  req.authMethod = 'telegram';
   try { 
     if (validation.user) {
       await db.upsertTelegramUser(validation.user);
@@ -114,4 +162,5 @@ module.exports = {
   validateTelegramInitData,
   telegramAuthMiddleware,
   allowedTelegramUser,
+  validateAppToken,
 };
