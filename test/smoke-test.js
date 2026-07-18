@@ -624,6 +624,46 @@ async function runTests() {
     pass(`AuditTrail: size=${at.size()} bySymbol=${at.getBySymbol('BTCUSDT').length} fired=${at.getSignalFired().length}`);
   } catch (e) { fail('AuditTrail', e); }
 
+  try {
+    const { MarketOutlookBuilder } = require(path.join(ROOT, 'signal-pipeline/market-outlook'));
+    const now = Date.now();
+    const fakeCalendar = {
+      getUpcoming(hours) {
+        const events = [
+          { name: 'US CPI', currency: 'USD', tier: 'TIER_1', time: now + 5 * 3600000 },
+          { name: 'ECB Rate Decision', currency: 'EUR', tier: 'TIER_1', time: now + 3 * 24 * 3600000 },
+          { name: 'US NFP', currency: 'USD', tier: 'TIER_1', time: now + 10 * 24 * 3600000 }, // next week
+        ];
+        return events
+          .filter(e => e.time > now && e.time < now + hours * 3600000)
+          .map(e => ({ ...e, hoursAway: (e.time - now) / 3600000 }));
+      },
+    };
+    const fakeSessionFilter = { calendar: fakeCalendar, check: () => ({ allowed: true, multiplier: 1.0 }) };
+    const fakeRegimeEngine = { classify: () => ({ regime: 'BULL_TREND', tradeability: 82, reasons: ['test'] }) };
+    const fakeCotParser = {
+      analyze: (symbol) => symbol === 'EURUSD' ? {
+        date: '2026-07-17', commercial: { net: -50000 }, largeSpec: { net: 62000 },
+        weekOverWeekChange: { commercial: -2000, largeSpec: 3000, smallSpec: -1000 },
+        largeSpecPercentile: 94, isExtreme: true, signal: 'EXTREME_LONG_SPEC_REVERSAL_RISK',
+        note: 'test note',
+      } : null,
+    };
+    const outlook = MarketOutlookBuilder.build({
+      symbols: ['EURUSD'],
+      candleStores: { EURUSD: { H1: new Array(60).fill({ close: 1 }) } },
+      regimeEngine: fakeRegimeEngine,
+      sessionFilter: fakeSessionFilter,
+      cotParser: fakeCotParser,
+    });
+    if (outlook.week.tier1Events.length !== 2) throw new Error(`expected 2 this-week Tier-1 events, got ${outlook.week.tier1Events.length}`);
+    if (outlook.nextWeek.tier1Events.length !== 1) throw new Error(`expected 1 next-week Tier-1 event, got ${outlook.nextWeek.tier1Events.length}`);
+    if (!outlook.symbols[0].institutionalPositioning?.isExtreme) throw new Error('expected EURUSD institutional positioning to be attached and flagged extreme');
+    if (!outlook.narrative.includes('Next week')) throw new Error('expected narrative to mention next week');
+    if (!outlook.narrative.includes('hedge funds')) throw new Error('expected narrative to mention institutional/hedge-fund positioning');
+    pass(`MarketOutlookBuilder: week=${outlook.week.tier1Events.length} nextWeek=${outlook.nextWeek.tier1Events.length} COT-extreme=${outlook.symbols[0].institutionalPositioning.isExtreme}`);
+  } catch (e) { fail('MarketOutlookBuilder', e); }
+
   // ── 12. Syntax check all modules ──────────────────────────────────────
 
 

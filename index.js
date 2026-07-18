@@ -1314,6 +1314,14 @@ function buildSingletons() {
     log.error('SignalScorer module missing — signals cannot be scored');
   }
 
+  // Getter (not a captured snapshot) so a future /outlook command always
+  // reads whatever regimeEngine/candleStores/sessionFilter/cotParser
+  // currently hold, regardless of the order the rest of this init
+  // sequence assigns them in.
+  if (dispatcher) {
+    dispatcher.getMarketOutlookDeps = () => ({ regimeEngine, candleStores, sessionFilter, cotParser, symbols: SYMBOLS });
+  }
+
   // FIX: manual-mode.js's ExecutionEngine (~1,700 lines — SignalJournal,
   // RiskEnforcer, PriceMonitor, partial TP/trailing/breakeven tracking) was
   // imported nowhere in the entire codebase. Mode is MANUAL (not SEMI_AUTO):
@@ -1688,7 +1696,7 @@ function buildSingletons() {
       adaptiveLearning, bayesianEng, walkForward, institutionalGates,
       drawdownGuard, sessionFilter, riskEngine, institutionalRiskManager,
       opportunityRanker, relativeStrength, dataIntegrityMonitor, executionEngine,
-      auditTrail, symbolManager,
+      auditTrail, symbolManager, cotParser,
       // For GET /api/outlook (signal-pipeline/market-outlook.js)
       regimeEngine, candleStores, symbols: SYMBOLS,
     });

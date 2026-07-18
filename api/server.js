@@ -88,6 +88,7 @@ function createApp() {
         candleStores: live.candleStores,
         regimeEngine: live.regimeEngine,
         sessionFilter: live.sessionFilter,
+        cotParser: live.cotParser,
         timeframe: 'H1',
       });
     } catch (err) {
