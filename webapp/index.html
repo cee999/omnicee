@@ -402,6 +402,7 @@ button:focus-visible, .chip:focus-visible, [tabindex]:focus-visible { outline: 2
       <button class="sidebar-btn" data-view="signals" title="Signals"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></button>
       <button class="sidebar-btn" data-view="intel" title="Intel"><svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
       <button class="sidebar-btn" data-view="monitor" title="Monitor"><svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></button>
+      <button class="sidebar-btn" data-view="heatmap" title="Heat Map"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></button>
       <button class="sidebar-btn" data-view="validation" title="Validation"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></button>
       <button class="sidebar-btn" data-view="tape" title="Event Tape"><svg viewBox="0 0 24 24"><line x1="17" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="17" y1="18" x2="3" y2="18"/></svg></button>
       <button class="sidebar-btn" data-view="risk" title="Risk"><svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></button>
@@ -655,12 +656,35 @@ button:focus-visible, .chip:focus-visible, [tabindex]:focus-visible { outline: 2
           <div class="card-body flush" id="outlook-week"><div class="empty-state">No high-impact releases this week.</div></div>
         </div>
         <div class="card">
+          <div class="card-head"><span>Next Week</span></div>
+          <div class="card-body flush" id="outlook-nextweek"><div class="empty-state">No releases confirmed for next week yet.</div></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span>Institutional Positioning (CFTC COT)</span></div>
+          <div class="card-body flush" id="outlook-cot"><div class="empty-state">Real weekly CFTC data — commercial (hedgers) vs. large speculator (hedge fund) net positioning. Updates Fridays; only shown here when a symbol is at a historical extreme.</div></div>
+        </div>
+        <div class="card">
           <div class="card-head"><span>Per-Symbol Regime</span></div>
           <div class="card-body" id="outlook-symbols"><div class="text-faint text-xs text-mono">No symbol data yet.</div></div>
         </div>
         <div class="card">
           <div class="card-head"><span>Headlines</span></div>
           <div class="card-body flush" id="outlook-news"><div class="empty-state">No recent headlines.</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Heat Map: blended opportunity score + relative strength, color-graded -->
+    <div class="view" id="view-heatmap">
+      <div class="section-gap" style="overflow:auto;">
+        <div class="card" style="flex:1;">
+          <div class="card-head"><span>Market Heat Map</span><span class="text-faint text-xs" id="heatmap-time">--</span></div>
+          <div class="card-body">
+            <p class="text-faint text-xs mb-8">Blends the Opportunity Board's live score with relative-strength ranking. Not a signal by itself — a quick scan of where the setups and momentum currently are.</p>
+            <div class="stack-grid" id="heatmap-grid">
+              <div class="text-faint text-xs text-mono">Loading heat map...</div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -715,6 +739,7 @@ button:focus-visible, .chip:focus-visible, [tabindex]:focus-visible { outline: 2
     <button class="nav-btn" data-view="signals"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>SIGNALS</button>
     <button class="nav-btn" data-view="intel"><svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>INTEL</button>
     <button class="nav-btn" data-view="monitor"><svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>MONITOR</button>
+    <button class="nav-btn" data-view="heatmap"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>HEAT</button>
     <button class="nav-btn" data-view="validation"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>VALID</button>
     <button class="nav-btn" data-view="tape"><svg viewBox="0 0 24 24"><line x1="17" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="17" y1="18" x2="3" y2="18"/></svg>TAPE</button>
     <button class="nav-btn" data-view="risk"><svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>RISK</button>
@@ -754,6 +779,7 @@ const state = {
   watchlist: [],
   feedHealth: null,
   marketAlerts: [],
+  heatmap: null,
   learning: [],
   stats: { total: 0, gradeA: 0 },
   risk: { dailyPnl: 0, drawdown: 0, consecLoss: 0, netSizingFactor: 1, state: 'CLOSED', maxDailyLoss: 3, maxDrawdown: 10 },
@@ -893,6 +919,16 @@ async function hydrateBoard() {
   renderWatchlistBoard();
   renderFeedHealth();
 }
+// FIX: /api/heatmap existed and responded correctly but was never fetched
+// anywhere in this file — same gap as /api/watchlist and /api/health above.
+async function hydrateHeatmap() {
+  const headers = initData ? { 'x-telegram-init-data': initData } : {};
+  try {
+    const res = await fetch('/api/heatmap', { headers }).then(r => r.json());
+    if (res.ok) state.heatmap = res;
+  } catch (_) {}
+  renderHeatMap();
+}
 
 function ingestSignal(sig, rerender = true) {
   if (!sig || sig.action === 'WAIT') return;
@@ -914,6 +950,7 @@ function switchView(viewId) {
   haptic('nav');
   if (viewId === 'outlook' && !state.outlook) hydrateOutlook();
   if (viewId === 'monitor' && !state.watchlist.length && !state.feedHealth) hydrateBoard();
+  if (viewId === 'heatmap' && !state.heatmap) hydrateHeatmap();
   renderAll();
 }
 document.querySelectorAll('[data-view]').forEach(btn => btn.addEventListener('click', () => switchView(btn.dataset.view)));
@@ -949,6 +986,7 @@ function renderAll() {
   renderWatchlistBoard();
   renderFeedHealth();
   renderMarketAlerts();
+  renderHeatMap();
 }
 
 function renderTicker() {
@@ -1362,6 +1400,30 @@ function renderMarketAlerts() {
   }).join('');
 }
 
+// FIX: /api/heatmap (automation/market-heatmap.js) blends OpportunityRanker's
+// live score with RelativeStrengthEngine's ranking into one graded tile per
+// symbol, but nothing in this file ever fetched or rendered it.
+const HEAT_COLORS = { HOT: '#ff5470', WARM: '#f5a623', NEUTRAL: '#8b93a7', COOL: '#3b82f6', COLD: '#4b5563' };
+function renderHeatMap() {
+  const grid = document.getElementById('heatmap-grid');
+  const timeEl = document.getElementById('heatmap-time');
+  if (!grid) return;
+  const data = state.heatmap;
+  if (!data) return; // keep the "Loading..." placeholder
+  if (timeEl) timeEl.textContent = data.generatedAt ? new Date(data.generatedAt).toLocaleTimeString() : '--';
+  const tiles = data.tiles || [];
+  if (!tiles.length) { grid.innerHTML = '<div class="text-faint text-xs text-mono">No tiles yet — waiting on Opportunity Ranker / Relative Strength data.</div>'; return; }
+  grid.innerHTML = tiles.map(t => {
+    const color = HEAT_COLORS[t.bucket] || HEAT_COLORS.NEUTRAL;
+    const opp = t.opportunity;
+    const sub = opp?.fired ? 'FIRED' : opp?.blockedReason ? 'blocked' : (t.bias || '--');
+    return `<div class="stack-pill" style="background:${color}1c;border-color:${color}55;color:${color};text-align:left;padding:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;"><b style="color:inherit;font-size:12px;">${esc(t.symbol)}</b><span style="font-size:10px;">${Math.round(t.heatScore)}</span></div>
+      <div style="font-size:9px;opacity:0.85;margin-top:2px;">${esc(t.bucket)} · ${esc(sub)}</div>
+    </div>`;
+  }).join('');
+}
+
 function renderOutlook() {
   const o = state.outlook;
   if (!o) return;
@@ -1377,13 +1439,31 @@ function renderOutlook() {
   if (todayEl) todayEl.innerHTML = renderEvents(o.today?.tier1Events || []);
   const weekEl = document.getElementById('outlook-week');
   if (weekEl) weekEl.innerHTML = renderEvents([...(o.week?.tier1Events || []), ...(o.week?.tier2Events || [])]);
+  const nextWeekEl = document.getElementById('outlook-nextweek');
+  if (nextWeekEl) nextWeekEl.innerHTML = renderEvents([...(o.nextWeek?.tier1Events || []), ...(o.nextWeek?.tier2Events || [])]);
+
+  const cotEl = document.getElementById('outlook-cot');
+  if (cotEl) {
+    const withCot = (o.symbols || []).filter(s => s.institutionalPositioning);
+    cotEl.innerHTML = withCot.length ? withCot.map(s => {
+      const p = s.institutionalPositioning;
+      const extremeTag = p.isExtreme ? '<span class="bad">EXTREME</span>' : '<span class="text-faint">normal range</span>';
+      return `<div class="intel-item">
+        <div class="intel-body">
+          <div class="intel-title">${esc(s.symbol)} — ${extremeTag}</div>
+          <div class="intel-desc">${friendlyCotSignal(p.signal)}${p.note ? ' — ' + esc(p.note) : ''}</div>
+          <div class="intel-time">Large-spec net: ${esc(p.largeSpecNet)} (${p.largeSpecPercentile != null ? Math.round(p.largeSpecPercentile) + 'th pct' : '--'}) · as of ${esc(p.date)}</div>
+        </div>
+      </div>`;
+    }).join('') : '<div class="empty-state">Real weekly CFTC data — commercial (hedgers) vs. large speculator (hedge fund) net positioning. Updates Fridays; only shown here when a symbol is at a historical extreme.</div>';
+  }
 
   const symEl = document.getElementById('outlook-symbols');
   if (symEl) {
     const rows = o.symbols || [];
     symEl.innerHTML = rows.length ? rows.map(s => {
       const cls = (s.tradeability || 0) >= 70 ? 'good' : (s.tradeability || 0) >= 50 ? 'warn-text' : 'bad';
-      return `<div class="kv-row"><span class="kv-key">${esc(s.symbol)}</span><span class="kv-val ${cls}">${esc(s.regime || '--')} / ${s.tradeability ?? '--'} — ${esc(s.sessionStatus || '--')}</span></div>`;
+      return `<div class="kv-row"><span class="kv-key">${esc(s.symbol)}</span><span class="kv-val ${cls}">${friendlyRegime(s.regime)} / ${s.tradeability ?? '--'} — ${esc(s.sessionStatus || '--')}</span></div>`;
     }).join('') : '<div class="text-faint text-xs text-mono">No symbol data yet.</div>';
   }
 
@@ -1581,6 +1661,23 @@ function setClass(id, className) { const el = document.getElementById(id); if (e
 function esc(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
 function escAttr(value) { return esc(value).replace(/`/g, '&#96;'); }
 function time(ts) { if (!ts) return '--:--'; const d = new Date(ts); return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
+// FIX: regime codes (signal-pipeline/regime-engine.js) are either a pure
+// trend label or a composite `${structure}_${volatility}` string like
+// 'RANGE_COMPRESSION' — accurate for the engine, unreadable for a person
+// glancing at the Outlook tab. Same for COT's contrarian signal enum.
+const REGIME_LABELS = {
+  BULL_TREND: 'Uptrend', BEAR_TREND: 'Downtrend', UNKNOWN: 'Unclear',
+  DIRECTIONAL_NORMAL: 'Trending', DIRECTIONAL_EXPANSION: 'Trending (volatile)', DIRECTIONAL_COMPRESSION: 'Trending (coiling)',
+  RANGE_NORMAL: 'Ranging', RANGE_EXPANSION: 'Ranging (volatile)', RANGE_COMPRESSION: 'Ranging (tight)',
+  CHOP_NORMAL: 'Choppy', CHOP_EXPANSION: 'Choppy (volatile)', CHOP_COMPRESSION: 'Choppy (tight)',
+};
+function friendlyRegime(code) { return REGIME_LABELS[code] || esc(code || '--'); }
+const COT_SIGNAL_LABELS = {
+  EXTREME_LONG_SPEC_REVERSAL_RISK: 'Hedge funds crowded LONG — reversal risk',
+  EXTREME_SHORT_SPEC_REVERSAL_RISK: 'Hedge funds crowded SHORT — reversal risk',
+  NEUTRAL: 'No extreme positioning',
+};
+function friendlyCotSignal(code) { return COT_SIGNAL_LABELS[code] || esc(code || 'NEUTRAL'); }
 function formatPrice(value) {
   const n = Number(value);
   if (!isFinite(n) || value == null) return '--';
