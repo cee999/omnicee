@@ -1696,7 +1696,19 @@ function renderFeedHealth() {
   const staleRows = (h.staleSeries || []).map(s =>
     `<div class="kv-row"><span class="kv-key">${esc(s.symbol)} ${esc(s.timeframe)}</span><span class="kv-val bad">stale ${Math.round(s.ageMs / 60000)}m</span></div>`
   ).join('');
-  el.innerHTML = feedRows + staleRows + (!feedRows && !staleRows ? '<div class="text-faint text-xs text-mono">No feeds registered yet.</div>' : '');
+  // FIX: /api/health has returned `cache` (MemoryManager.getFullStats() — Redis
+  // and Pinecone connection state + internal error counters) since the server-side
+  // fix that made RedisAdapter/PineconeAdapter's swallowed errors countable. That
+  // data was being fetched into state.feedHealth.cache but this function never
+  // read it, so a failing Redis/Pinecone connection was still invisible here —
+  // the original "every write silently .catch(() => {})'d" problem, just moved
+  // one layer up from backend to frontend.
+  const cache = h.cache || null;
+  const cacheRows = cache ? [
+    cache.redis && `<div class="kv-row"><span class="kv-key">Redis Cache</span><span class="kv-val ${!cache.redis.connected ? 'text-faint' : cache.redis.errors > 0 ? 'bad' : 'good'}">${!cache.redis.connected ? 'not connected' : cache.redis.errors > 0 ? cache.redis.errors + ' errors' : 'OK'}</span></div>`,
+    cache.pinecone && cache.pinecone.enabled && `<div class="kv-row"><span class="kv-key">Vector Store</span><span class="kv-val ${cache.pinecone.errors > 0 ? 'bad' : 'good'}">${cache.pinecone.errors > 0 ? cache.pinecone.errors + ' errors' : 'OK'}</span></div>`,
+  ].filter(Boolean).join('') : '';
+  el.innerHTML = feedRows + staleRows + cacheRows + (!feedRows && !staleRows && !cacheRows ? '<div class="text-faint text-xs text-mono">No feeds registered yet.</div>' : '');
 }
 
 // FIX: AbnormalMarketDetector and BybitFeed's liquidation-cascade alert both
@@ -1971,8 +1983,25 @@ async function recordOutcome(signalId, pnlR) {
   haptic('signal');
   try {
     const res = await fetch('/api/outcomes', { method: 'POST', headers, body: JSON.stringify(payload) });
+    // FIX: only the 409 (duplicate) case gave any feedback here — a 400
+    // (bad request), 404 (signal not found), 503 (learning engine/DB down),
+    // or any other non-OK status fell straight through and returned as if
+    // nothing happened. The tap already fired the 'signal' success haptic
+    // above, so a failed save looked identical to a successful one — the
+    // learning loop could silently stop recording outcomes with no symptom
+    // a trader would ever notice.
     if (res.status === 409) { haptic('error'); return; }
-  } catch (_) {}
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      console.warn('[recordOutcome] not saved:', res.status, body.error || res.statusText);
+      haptic('error');
+      return;
+    }
+  } catch (err) {
+    // Network failure / fetch threw — previously silent here too.
+    console.warn('[recordOutcome] network error:', err.message);
+    haptic('error');
+  }
 }
 window.recordOutcome = recordOutcome;
 

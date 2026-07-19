@@ -61,7 +61,9 @@ function createApp() {
   app.post('/api/auth/telegram', async (req, res) => {
     const validation = validateTelegramInitData(req.body?.initData, process.env.TELEGRAM_BOT_TOKEN);
     if (!validation.ok) return res.status(401).json({ ok: false, error: validation.reason });
-    try { await db.upsertTelegramUser(validation.user); } catch (_) {}
+    // FIX: was `catch (_) {}` — a DB hiccup here was invisible; you'd see the
+    // user "authenticate" successfully while the upsert silently failed.
+    try { await db.upsertTelegramUser(validation.user); } catch (err) { console.warn('[API] upsertTelegramUser failed (POST /api/auth/telegram):', err.message); }
     res.json({ ok: true, user: validation.user });
   });
 
@@ -398,7 +400,10 @@ function startServer(config = {}) {
     if (!validation.ok) return next(new Error(validation.reason));
     socket.telegramUser = validation.user;
     socket.authMethod = 'telegram';
-    try { await db.upsertTelegramUser(validation.user); } catch (_) {}
+    // FIX: same silent-swallow pattern as the REST /api/auth/telegram route
+    // above — a DB failure here was invisible. Doesn't block the connection
+    // (auth already succeeded, this is just bookkeeping) but now at least logs.
+    try { await db.upsertTelegramUser(validation.user); } catch (err) { console.warn('[API] upsertTelegramUser failed (socket auth):', err.message); }
     return next();
   });
 
