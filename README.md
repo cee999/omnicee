@@ -8,7 +8,7 @@ OMNICEE is a trading decision-support system. It can enforce risk gates, store o
 # 1. Copy env template
 cp .env.example .env
 
-# 2. Fill in your values in .env (at minimum: BOT_TOKEN, SYMBOLS)
+# 2. Fill in your values in .env (at minimum: TELEGRAM_BOT_TOKEN, SYMBOLS)
 nano .env
 
 # 3. Install dependencies
@@ -18,7 +18,13 @@ npm install
 npm test
 
 # 5. Start the system
-npm start
+# FIX: `npm start` alone only runs index.js (the trading/signal engine) —
+# it opens no HTTP port at all, so there is no web app, no Mini App, and no
+# REST API to hit. index.js and api/server.js share live data through an
+# in-memory EventEmitter, which only works if both run in the same process
+# — use start:all (or pm2:start / the Render blueprint, which do the same
+# thing) for anything that needs the web app or Telegram Mini App.
+npm run start:all
 ```
 
 ## Directory Structure
@@ -103,7 +109,8 @@ BinanceFeed/TwelveData
 1. Put secrets in `.env`, not source. URL-encode special characters in MongoDB passwords, for example `@` becomes `%40`.
 2. Run locally with `npm run start:all`, then open `http://localhost:3001/`.
 3. For Telegram production, deploy behind HTTPS and set the Mini App URL in BotFather to your public `https://your-domain.com/`.
-4. On a VPS, use:
+4. The same URL is also a real installable PWA (`webapp/manifest.json` + `webapp/sw.js`) — open it in a browser (not inside Telegram) and use the browser's "Install" / "Add to Home Screen" prompt for a standalone app icon outside Telegram. Only the static shell is cached offline; signals/prices/risk data always require a live connection by design.
+5. On a VPS, use:
 
 ```bash
 npm install -g pm2
