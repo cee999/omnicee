@@ -612,9 +612,9 @@ button:focus-visible, .chip:focus-visible, [tabindex]:focus-visible { outline: 2
           </div>
         </div>
         <div class="card" style="flex:1;">
-          <div class="card-head"><span>Crypto News</span><span class="text-faint text-xs" id="news-count">0 stories</span></div>
+          <div class="card-head"><span>Crypto & Forex News</span><span class="text-faint text-xs" id="news-count">0 stories</span></div>
           <div class="card-body flush" id="news-feed">
-            <div class="empty-state">Recent crypto headlines feeding the sentiment score behind your signals. Refreshes every 5 minutes.</div>
+            <div class="empty-state">Recent headlines feeding the sentiment score behind your signals. Refreshes every 5 minutes.</div>
           </div>
         </div>
       </div>
@@ -1095,15 +1095,21 @@ async function hydrateHeatmap() {
 // FIX: /api/news, /api/journal, and /api/audit-trail all existed and
 // responded correctly but were never fetched anywhere in this file — same
 // class of gap as /api/watchlist, /api/health, and /api/heatmap above.
-// Requests the crypto category specifically (server defaulted to 'general'
-// market news otherwise) and re-fetches every 5 minutes — matching
-// FinnhubFeed's own server-side cache window, so this stays current without
-// hammering the API on every render.
+// Fetches BOTH crypto and forex categories (this system's actual symbol
+// universe — BTCUSDT + XAUUSD/EURUSD by default) in parallel, tags each
+// story with its category, and merges by recency. Re-fetches every 5
+// minutes — matching FinnhubFeed's own server-side cache window, so this
+// stays current without hammering the API on every render.
 async function hydrateNews() {
   const headers = authHeaders();
   try {
-    const res = await fetch('/api/news?category=crypto', { headers }).then(r => r.json());
-    state.news = res.ok ? (res.news || []) : [];
+    const [cryptoRes, forexRes] = await Promise.all([
+      fetch('/api/news?category=crypto', { headers }).then(r => r.json()).catch(() => ({ ok: false })),
+      fetch('/api/news?category=forex', { headers }).then(r => r.json()).catch(() => ({ ok: false })),
+    ]);
+    const crypto = cryptoRes.ok ? (cryptoRes.news || []).map(n => ({ ...n, _category: 'crypto' })) : [];
+    const forex  = forexRes.ok  ? (forexRes.news  || []).map(n => ({ ...n, _category: 'forex'  })) : [];
+    state.news = [...crypto, ...forex].sort((a, b) => (b.datetime || 0) - (a.datetime || 0));
   } catch (_) { state.news = []; }
   renderNews();
 }
@@ -1514,13 +1520,16 @@ function renderNews() {
   if (!el) return;
   if (countEl) countEl.textContent = `${state.news.length} stor${state.news.length === 1 ? 'y' : 'ies'}`;
   if (!state.news.length) return; // keep the static empty state markup
-  el.innerHTML = state.news.slice(0, 30).map(n => `<div class="intel-item">
+  el.innerHTML = state.news.slice(0, 30).map(n => {
+    const catColor = n._category === 'crypto' ? 'var(--emerald)' : 'var(--gold)';
+    return `<div class="intel-item">
     <div class="intel-body">
       <div class="intel-title">${esc(n.headline || 'Untitled')}</div>
       <div class="intel-desc">${esc(n.summary ? n.summary.slice(0, 140) : (n.source || ''))}</div>
-      <div class="intel-time">${esc(n.source || '')} · ${time(n.datetime ? n.datetime * 1000 : Date.now())}</div>
+      <div class="intel-time"><span style="color:${catColor};text-transform:uppercase;">${esc(n._category || '')}</span> · ${esc(n.source || '')} · ${time(n.datetime ? n.datetime * 1000 : Date.now())}</div>
     </div>
-  </div>`).join('');
+  </div>`;
+  }).join('');
 }
 
 // FIX: Setup Analytics (which of the six agent-driven strategies is
