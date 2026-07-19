@@ -1,9 +1,10 @@
 # ═══════════════════════════════════════════════════════════
 #  OMNICEE — Render Blueprint
-#  Deploys two services from this one repo:
-#    1. omnicee-api    (web)    — REST + Socket.IO + Telegram Mini App frontend
-#    2. omnicee-engine (worker) — the trading/signal engine (index.js)
-#  They share one env group so you only enter secrets once.
+#  Deploys ONE combined service from this repo:
+#    REST + Socket.IO + Telegram Mini App frontend + the
+#    trading/signal engine (index.js), all in a single process.
+#  See the IMPORTANT note above `services:` below for why this
+#  can't be split into two separate Render services.
 #
 #  Deploy: push this file to your repo root, then in the Render
 #  Dashboard choose New > Blueprint and select this repo. Render
@@ -108,7 +109,11 @@ services:
   - type: web
     name: omnicee
     runtime: node
-    plan: starter
+    # Free tier: $0, no card required at deploy time, spins down after ~15
+    # minutes of no traffic (mitigated with a keepalive ping — see README).
+    # Upgrade to `starter` (~$7/mo, no spin-down at all) once you're ready
+    # to trade on this for real and want zero cold-start latency on signals.
+    plan: free
     region: oregon
     buildCommand: npm ci --omit=dev
     startCommand: node -e "require('./api/server').startServer(); require('./index.js').main();"
