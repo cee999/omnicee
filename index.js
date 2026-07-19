@@ -1232,6 +1232,17 @@ let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, institutionalGates,
 // orderBookHistory/tradeHistory/spreadHistory with no per-symbol keying — one
 // shared instance across multiple crypto symbols would mix BTCUSDT's spread
 // with ETHUSDT's order flow. One ExecutionManager per symbol, created lazily.
+// FIX: several feeds (Bybit, TwelveData, Myfxbook, OpenInsider) emit errors
+// in two different shapes — a raw Error (has .message) from the underlying
+// connection, and a { source, error } wrapper from their own parse/poll
+// handlers (the real message is nested at .error.message). Naive
+// `err.message` access silently produces "undefined" or "[object Object]"
+// for the wrapper shape, right when the message is what you need most.
+// Shared here so all four feeds extract it the same, correct way.
+function feedErrorMessage(err) {
+  return err?.error?.message || err?.message || (typeof err === 'string' ? err : JSON.stringify(err));
+}
+
 function getExecutionManager(symbol) {
   if (!ExecutionManager) return null;
   if (!executionManagers) executionManagers = new Map();
@@ -1593,6 +1604,15 @@ function buildSingletons() {
       password: process.env.MYFXBOOK_PASSWORD,
       pollIntervalMs: 5 * 60000,
     });
+    // FIX: this feed emits 'error' (feeds/myfxbook-feed.js — connection and
+    // poll failures) but had NO listener registered anywhere. Node's
+    // EventEmitter throws synchronously when an 'error' event has zero
+    // listeners — confirmed directly, not assumed. This process does have a
+    // global process.on('uncaughtException') safety net (setupShutdown()
+    // below) that would prevent a hard crash, but relying on that loses all
+    // diagnostic context (which feed, what actually failed) and Node's own
+    // docs explicitly warn against treating that as safe to keep running on.
+    myfxbookFeed.on('error', (err) => log.error(`MyfxbookFeed error: ${feedErrorMessage(err)}`));
     myfxbookFeed.on('economic_surprise', (data) => {
       log.info(`[Myfxbook] Economic surprise: ${data.event.name} - ${data.impact}`);
       dispatcher?.sendMessage?.(`📊 *Economic Surprise*\n${data.event.name}\nImpact: ${data.impact}\nCurrencies: ${data.affectedCurrencies.join(', ')}`)?.catch(() => {});
@@ -1620,6 +1640,10 @@ function buildSingletons() {
       apiKey: process.env.PARSE_API_KEY || null,
       pollIntervalMs: 10 * 60000,
     });
+    // FIX: same missing-listener issue as myfxbookFeed above — this feed
+    // emits 'error' (feeds/openinsider-feed.js — connection and poll
+    // failures) with nothing listening for it anywhere.
+    openInsiderFeed.on('error', (err) => log.error(`OpenInsiderFeed error: ${feedErrorMessage(err)}`));
     openInsiderFeed.on('cluster_buy', (data) => {
       log.info(`[OpenInsider] Cluster buy detected: ${data.ticker} - ${data.insiderCount} insiders`);
       dispatcher?.sendMessage?.(`💼 *Cluster Buy*\n${data.ticker}\n${data.insiderCount} insiders in ${data.windowDays} days\nConfidence: ${data.confidence}%`)?.catch(() => {});
@@ -1721,7 +1745,7 @@ function buildFeeds() {
     });
     binanceFeed.on('candle',        onCandle);
     binanceFeed.on('candle_update', onCandle);
-    binanceFeed.on('error', (err) => log.error(`BinanceFeed error: ${err.message}`));
+    binanceFeed.on('error', (err) => log.error(`BinanceFeed error: ${feedErrorMessage(err)}`));
     binanceFeed.on('connected', () => log.info(`BinanceFeed connected for: ${cryptoSymbols.join(', ')}`));
     feeds.push({ name: 'BinanceFeed', instance: binanceFeed, symbols: cryptoSymbols });
     log.info(`BinanceFeed configured for: ${cryptoSymbols.join(', ')}`);
@@ -1782,7 +1806,7 @@ function buildFeeds() {
       if (!em) return;
       em.addTrade({ price: trade.price, quantity: trade.size, timestamp: trade.timestamp });
     });
-    bybitFeed.on('error', (err) => log.error(`BybitFeed error: ${err.message || err}`));
+    bybitFeed.on('error', (err) => log.error(`BybitFeed error: ${feedErrorMessage(err)}`));
     bybitFeed.on('connected', () => log.info(`BybitFeed connected for: ${cryptoSymbols.join(', ')}`));
     feeds.push({ name: 'BybitFeed', instance: bybitFeed, symbols: cryptoSymbols });
     log.info(`BybitFeed configured for: ${cryptoSymbols.join(', ')}`);
@@ -1806,7 +1830,7 @@ function buildFeeds() {
     tdFeed.on('candle',        (d) => macroSymbols.includes(d.symbol) ? intermarketAnalyzer.updatePrice(d.symbol, d.candle.close, d.candle.timestamp || Date.now()) : onCandle(d));
     tdFeed.on('candle_update', (d) => macroSymbols.includes(d.symbol) ? intermarketAnalyzer.updatePrice(d.symbol, d.candle.close, d.candle.timestamp || Date.now()) : onCandle(d));
     tdFeed.on('price',         (d) => macroSymbols.includes(d.symbol) && intermarketAnalyzer.updatePrice(d.symbol, d.price, d.timestamp || Date.now()));
-    tdFeed.on('error', (err) => log.error(`TwelveData error: ${err.message}`));
+    tdFeed.on('error', (err) => log.error(`TwelveData error: ${feedErrorMessage(err)}`));
     tdFeed.on('connected', () => log.info(`TwelveDataFeed connected for: ${tdSymbols.join(', ')}`));
     feeds.push({ name: 'TwelveDataFeed', instance: tdFeed, symbols: fxSymbols });
     log.info(`TwelveDataFeed configured for: ${fxSymbols.join(', ')}${macroSymbols.length ? ` (+ macro: ${macroSymbols.join(', ')})` : ''}`);
