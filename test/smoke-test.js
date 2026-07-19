@@ -664,6 +664,36 @@ async function runTests() {
     pass(`MarketOutlookBuilder: week=${outlook.week.tier1Events.length} nextWeek=${outlook.nextWeek.tier1Events.length} COT-extreme=${outlook.symbols[0].institutionalPositioning.isExtreme}`);
   } catch (e) { fail('MarketOutlookBuilder', e); }
 
+  try {
+    const { SemiAutoExecutor } = require(path.join(ROOT, 'signal-pipeline/manual-mode'));
+    let cancelledOrderId = null;
+    const fakeClient = {
+      newOrder: async (params) => {
+        if (params.type === 'LIMIT') return { orderId: 'ENTRY-1' };
+        if (params.type === 'STOP_MARKET' && !cancelledOrderId) return { orderId: 'SL-ORIGINAL-123' };
+        if (params.type === 'STOP_MARKET' && cancelledOrderId) return { orderId: 'SL-BREAKEVEN-456' };
+        return { orderId: 'OTHER' };
+      },
+      cancelOrder: async ({ orderId }) => { cancelledOrderId = orderId; return { success: true }; },
+    };
+    const executor = new SemiAutoExecutor({ exchangeClient: fakeClient });
+    const entryResult = await executor.placeEntry(
+      { symbol: 'BTCUSDT', action: 'LONG' },
+      { entryPrice: 100, size: 1, sl: 95, tp1: 110 },
+    );
+    if (entryResult.slOrderId !== 'SL-ORIGINAL-123') {
+      throw new Error(`slOrderId not captured from placeEntry(): ${JSON.stringify(entryResult)}`);
+    }
+    const beResult = await executor.setBreakeven('BTCUSDT', 'LONG', 1, 100, entryResult.slOrderId);
+    if (cancelledOrderId !== 'SL-ORIGINAL-123') {
+      throw new Error(`original SL order was never cancelled — got cancelledOrderId=${cancelledOrderId}`);
+    }
+    if (beResult.newSLOrderId !== 'SL-BREAKEVEN-456') {
+      throw new Error(`new breakeven SL order id not captured: ${JSON.stringify(beResult)}`);
+    }
+    pass(`Breakeven root-cause fix: SL order id threaded end-to-end, original SL correctly cancelled on breakeven`);
+  } catch (e) { fail('Breakeven root-cause fix (SL order ID capture + cancel)', e); }
+
   // ── 12. Syntax check all modules ──────────────────────────────────────
 
 

@@ -204,6 +204,7 @@ class Position {
 
     // Semi-auto specific
     this.exchangeOrderId  = entryData.orderId   || null;
+    this.slOrderId        = entryData.slOrderId || null;
     this.partialCloses    = [];
   }
 
@@ -1016,8 +1017,20 @@ class SemiAutoExecutor {
       });
 
       // Place SL order (stop-loss)
+      // FIX: this result was previously discarded entirely (fire-and-forget,
+      // .catch() only) — meaning the SL order's exchange-assigned ID was
+      // never captured anywhere. setBreakeven() below takes a
+      // currentSLOrderId param specifically to cancel this exact order
+      // before placing a new breakeven stop, but with no ID ever threaded
+      // through Position, that param has always been undefined in every
+      // real call — its `if (currentSLOrderId)` guard was always false, so
+      // the ORIGINAL SL order was NEVER cancelled on breakeven. Net effect:
+      // every position that reached breakeven ended up with two live stop
+      // orders on the exchange simultaneously, permanently, by design —
+      // not as a failure-path edge case. Now captured and returned.
+      let slOrderId = null;
       if (sl) {
-        await this._client.newOrder({
+        const slResult = await this._client.newOrder({
           symbol:      signal.symbol,
           side:        isLong ? 'SELL' : 'BUY',
           type:        'STOP_MARKET',
@@ -1025,7 +1038,8 @@ class SemiAutoExecutor {
           quantity:    String(size),
           timeInForce: 'GTC',
           reduceOnly:  true,
-        }).catch(e => console.warn(`[SemiAuto] SL order failed: ${e.message}`));
+        }).catch(e => { console.warn(`[SemiAuto] SL order failed: ${e.message}`); return null; });
+        slOrderId = slResult?.orderId || slResult?.order_id || null;
       }
 
       // Place TP1 order
@@ -1041,7 +1055,7 @@ class SemiAutoExecutor {
         }).catch(e => console.warn(`[SemiAuto] TP1 order failed: ${e.message}`));
       }
 
-      return { success: true, orderId, result };
+      return { success: true, orderId, slOrderId, result };
 
     } catch (err) {
       return { success: false, reason: err.message, error: err };
@@ -1083,7 +1097,7 @@ class SemiAutoExecutor {
       }
 
       // Place new SL at breakeven
-      await this._client.newOrder({
+      const newSLResult = await this._client.newOrder({
         symbol,
         side:       direction === 'LONG' ? 'SELL' : 'BUY',
         type:       'STOP_MARKET',
@@ -1092,7 +1106,7 @@ class SemiAutoExecutor {
         reduceOnly: true,
       });
 
-      return { success: true, newSL: entryPrice };
+      return { success: true, newSL: entryPrice, newSLOrderId: newSLResult?.orderId || newSLResult?.order_id || null };
     } catch (err) {
       return { success: false, reason: err.message };
     }
@@ -1285,7 +1299,7 @@ class ExecutionEngine extends EventEmitter {
     }
 
     // Create position
-    const position = new Position(signal, { ...entryData, orderId: orderResult?.orderId }, this.mode);
+    const position = new Position(signal, { ...entryData, orderId: orderResult?.orderId, slOrderId: orderResult?.slOrderId }, this.mode);
     this._positions.set(position.id, position);
     this._stats.tradesTaken++;
     this._stats.positionsOpened++;
@@ -1403,27 +1417,37 @@ class ExecutionEngine extends EventEmitter {
     }
 
     const prevSL = position.currentSL;
-    position.currentSL = position.entryPrice;
-    position.beSet     = true;
 
-    // Semi-auto: update exchange SL
-    // FIX: position.beSet was already set true and position.currentSL
-    // already moved to entryPrice ABOVE, before this call — if the actual
-    // exchange update fails, internal state claims breakeven is set while
-    // the exchange stop may still be at its original (wider) level. Adding
-    // visibility here at minimum surfaces the mismatch immediately instead
-    // of only being discoverable by comparing the dashboard to the actual
-    // exchange account. (A full fix — only flipping beSet after a
-    // confirmed exchange update, with rollback on failure — is a larger
-    // change to Position's state-transition ordering worth doing as its
-    // own dedicated pass, not bundled into this logging fix.)
+    // FIX: this previously flipped position.beSet=true and moved
+    // position.currentSL to entryPrice BEFORE calling the exchange, and
+    // never checked whether the exchange call actually succeeded. A
+    // failure was silently swallowed and the method still returned
+    // success:true — internal state and the user-facing confirmation both
+    // claimed breakeven was set even when the real exchange stop never
+    // moved. Now: the exchange update (if SEMI_AUTO) is confirmed
+    // successful BEFORE any state changes, notification, or event.
     if (this.mode === EXECUTION_MODE.SEMI_AUTO) {
-      await this._executor.setBreakeven(
+      const result = await this._executor.setBreakeven(
         position.symbol, position.direction,
         position.size * position.sizeRemaining,
         position.entryPrice, position.slOrderId
-      ).catch(e => console.warn(`[ExecutionEngine] onBreakeven: exchange update failed for ${position.symbol} — internal state now says beSet=true but the exchange stop may not have moved: ${e.message}`));
+      ).catch(e => ({ success: false, reason: e.message }));
+
+      if (!result.success) {
+        console.warn(`[ExecutionEngine] onSetBreakeven: exchange update failed for ${position.symbol} — internal state left unchanged, no confirmation sent: ${result.reason}`);
+        await this._dispatcher?.sendCustom(
+          `❌ <b>Breakeven Failed</b> — ${position.symbol}\n<code>${result.reason || 'unknown error'}</code>\n\n<i>SL was NOT moved. Check the exchange manually or retry.</i>`
+        ).catch(() => {});
+        return { success: false, reason: `Exchange update failed: ${result.reason}` };
+      }
+      // Keep the position's tracked SL order ID current for any future
+      // update (e.g. trailing stop) — previously never refreshed after a
+      // breakeven move, so it would go stale after this point.
+      if (result.newSLOrderId) position.slOrderId = result.newSLOrderId;
     }
+
+    position.currentSL = position.entryPrice;
+    position.beSet     = true;
 
     await this._dispatcher?.sendBreakeven(position.id, position.symbol, position.entryPrice, position.direction);
     this.emit('breakeven_set', { positionId, symbol: position.symbol, newSL: position.entryPrice });
@@ -1496,10 +1520,39 @@ class ExecutionEngine extends EventEmitter {
 
       case 'BREAKEVEN_SET':
         if (this._autoBreakeven) {
-          await this._dispatcher?.sendBreakeven(
-            position.id, position.symbol, action.newSL, position.direction
-          );
-          this.emit('breakeven_set', { positionId: position.id, ...action });
+          // FIX: this case previously only sent a Telegram notification and
+          // emitted an event — it NEVER called the exchange at all. Position
+          // .onPrice() (which produced this action) already flipped
+          // this.beSet=true and this.currentSL=entryPrice internally before
+          // returning the action, purely in-memory. With autoBreakeven
+          // defaulting to true, every automatic breakeven trigger in
+          // SEMI_AUTO mode told the trader "breakeven set" while the real
+          // exchange stop-loss stayed at its original (wider) level —
+          // silently, on every occurrence, not as a rare failure case.
+          let exchangeOk = true;
+          let exchangeReason = null;
+          if (this.mode === EXECUTION_MODE.SEMI_AUTO) {
+            const result = await this._executor.setBreakeven(
+              position.symbol, position.direction,
+              position.size * position.sizeRemaining,
+              position.entryPrice, position.slOrderId
+            ).catch(e => ({ success: false, reason: e.message }));
+            exchangeOk = !!result.success;
+            exchangeReason = result.reason;
+            if (exchangeOk && result.newSLOrderId) position.slOrderId = result.newSLOrderId;
+          }
+
+          if (exchangeOk) {
+            await this._dispatcher?.sendBreakeven(
+              position.id, position.symbol, action.newSL, position.direction
+            );
+            this.emit('breakeven_set', { positionId: position.id, ...action });
+          } else {
+            console.warn(`[ExecutionEngine] Auto-breakeven exchange update failed for ${position.symbol} — internal tracking shows breakeven set but the real stop was NOT moved: ${exchangeReason}`);
+            await this._dispatcher?.sendCustom(
+              `⚠️ <b>Auto-Breakeven Failed</b> — ${position.symbol}\n<code>${exchangeReason || 'unknown error'}</code>\n\n<i>Price crossed the trigger but the exchange stop was NOT moved. Check the exchange manually.</i>`
+            ).catch(() => {});
+          }
         }
         break;
 
