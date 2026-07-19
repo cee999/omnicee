@@ -817,6 +817,7 @@ button:focus-visible, .chip:focus-visible, [tabindex]:focus-visible { outline: 2
           <div class="card-head"><span>Connection</span></div>
           <div class="card-body">
             <div class="kv-row"><span class="kv-key">MongoDB Persistence</span><span class="kv-val" id="m-db">CHECK</span></div>
+            <div class="kv-row"><span class="kv-key">Redis Cache</span><span class="kv-val" id="m-redis">CHECK</span></div>
             <div class="kv-row"><span class="kv-key">Transport</span><span class="kv-val text-xs" id="about-transport">--</span></div>
             <div class="kv-row"><span class="kv-key">Session Started</span><span class="kv-val text-xs" id="about-since">--</span></div>
           </div>
@@ -1070,6 +1071,11 @@ async function hydrateFromApi() {
     const health = await fetch('/health').then(r => r.json());
     setText('m-db', health.mongo?.enabled ? (health.mongo.ok ? 'LIVE' : 'ERROR') : 'OFFLINE');
     setClass('m-db', 'kv-val ' + (health.mongo?.ok ? 'good' : health.mongo?.enabled ? 'bad' : 'text-faint'));
+    if (health.cache?.redis) {
+      const r = health.cache.redis;
+      setText('m-redis', r.connected ? `LIVE (${r.errors} err)` : 'OFFLINE');
+      setClass('m-redis', 'kv-val ' + (r.connected && r.errors === 0 ? 'good' : r.connected ? 'warn-text' : 'text-faint'));
+    }
   } catch (_) {}
   try {
     const res = await fetch('/api/signals?limit=50', { headers }).then(r => r.json());
