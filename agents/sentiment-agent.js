@@ -1050,7 +1050,7 @@ class SentimentAgent extends EventEmitter {
     };
   }
 
-  // Update external data (called by news-feed.js)
+  // Update external data (called by cot-report-parser.js)
   updateExternalData(data) {
     this._externalData = { ...this._externalData, ...data };
   }

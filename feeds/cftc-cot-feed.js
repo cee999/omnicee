@@ -9,7 +9,7 @@ const https = require('https');
  * CFTC's free public Socrata API — no API key required. Published every
  * Friday ~3:30pm ET, covering the prior Tuesday's positioning.
  *
- * This was the missing real data source for feeds/news-feed.js's
+ * This was the missing real data source for feeds/cot-report-parser.js's
  * COTReportParser/COTAnalyzer, which are fully built (percentile extremity,
  * week-over-week change, contrarian signal generation) but had zero call
  * sites feeding them real data anywhere in the codebase.

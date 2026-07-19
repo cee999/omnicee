@@ -611,6 +611,12 @@ button:focus-visible, .chip:focus-visible, [tabindex]:focus-visible { outline: 2
             <div class="text-faint text-xs text-mono">Live prices appear once the feed connects.</div>
           </div>
         </div>
+        <div class="card" style="flex:1;">
+          <div class="card-head"><span>Market News</span><span class="text-faint text-xs" id="news-count">0 stories</span></div>
+          <div class="card-body flush" id="news-feed">
+            <div class="empty-state">Recent headlines feeding the sentiment score behind your signals.</div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -676,6 +682,14 @@ button:focus-visible, .chip:focus-visible, [tabindex]:focus-visible { outline: 2
           </div>
         </div>
       </div>
+      <div class="section-gap" style="overflow:auto;">
+        <div class="card" style="flex:1;">
+          <div class="card-head"><span>Audit Trail</span><span class="text-faint text-xs" id="audit-count">0 entries</span></div>
+          <div class="card-body flush" id="audit-feed">
+            <div class="empty-state">Every completed analysis cycle — fired or blocked — recorded with its reason, for a full compliance-style record of what the system decided and why.</div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Risk -->
@@ -707,6 +721,12 @@ button:focus-visible, .chip:focus-visible, [tabindex]:focus-visible { outline: 2
         <div class="card">
           <div class="card-head"><span>Learning Profiles</span></div>
           <div class="card-body" id="learning-panel"><div class="text-faint text-xs text-mono">No learning profiles yet.</div></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span>Setup Performance</span><span class="text-faint text-xs" id="journal-total">0 trades</span></div>
+          <div class="card-body" id="journal-panel">
+            <div class="text-faint text-xs text-mono">Which strategy (SMC / MTF / momentum / etc) is actually making money — recorded per closed trade.</div>
+          </div>
         </div>
       </div>
     </div>
@@ -851,6 +871,9 @@ const state = {
   feedHealth: null,
   marketAlerts: [],
   heatmap: null,
+  news: [],
+  journal: null,
+  auditTrail: [],
   learning: [],
   stats: { total: 0, gradeA: 0 },
   risk: { dailyPnl: 0, drawdown: 0, consecLoss: 0, netSizingFactor: 1, state: 'CLOSED', maxDailyLoss: 3, maxDrawdown: 10 },
@@ -1069,6 +1092,33 @@ async function hydrateHeatmap() {
   } catch (_) {}
   renderHeatMap();
 }
+// FIX: /api/news, /api/journal, and /api/audit-trail all existed and
+// responded correctly but were never fetched anywhere in this file — same
+// class of gap as /api/watchlist, /api/health, and /api/heatmap above.
+async function hydrateNews() {
+  const headers = authHeaders();
+  try {
+    const res = await fetch('/api/news', { headers }).then(r => r.json());
+    state.news = res.ok ? (res.news || []) : [];
+  } catch (_) { state.news = []; }
+  renderNews();
+}
+async function hydrateJournal() {
+  const headers = authHeaders();
+  try {
+    const res = await fetch('/api/journal', { headers }).then(r => r.json());
+    if (res.ok) state.journal = res.stats;
+  } catch (_) {}
+  renderJournal();
+}
+async function hydrateAuditTrail() {
+  const headers = authHeaders();
+  try {
+    const res = await fetch('/api/audit-trail?limit=40', { headers }).then(r => r.json());
+    state.auditTrail = res.ok ? (res.entries || []) : [];
+  } catch (_) { state.auditTrail = []; }
+  renderAuditTrail();
+}
 
 function ingestSignal(sig, rerender = true) {
   if (!sig || sig.action === 'WAIT') return;
@@ -1091,6 +1141,9 @@ function switchView(viewId) {
   if (viewId === 'outlook' && !state.outlook) hydrateOutlook();
   if (viewId === 'monitor' && !state.watchlist.length && !state.feedHealth) hydrateBoard();
   if (viewId === 'heatmap' && !state.heatmap) hydrateHeatmap();
+  if (viewId === 'intel' && !state.news.length) hydrateNews();
+  if (viewId === 'risk' && !state.journal) hydrateJournal();
+  if (viewId === 'tape' && !state.auditTrail.length) hydrateAuditTrail();
   renderAll();
 }
 document.querySelectorAll('[data-view]').forEach(btn => btn.addEventListener('click', () => switchView(btn.dataset.view)));
@@ -1445,6 +1498,64 @@ function renderIntel() {
         <div class="intel-title">${esc(meta.label)}</div>
         <div class="intel-desc">${esc(desc)}</div>
         <div class="intel-time">${time(it.receivedAt || it.timestamp)}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderNews() {
+  const el = document.getElementById('news-feed');
+  const countEl = document.getElementById('news-count');
+  if (!el) return;
+  if (countEl) countEl.textContent = `${state.news.length} stor${state.news.length === 1 ? 'y' : 'ies'}`;
+  if (!state.news.length) return; // keep the static empty state markup
+  el.innerHTML = state.news.slice(0, 30).map(n => `<div class="intel-item">
+    <div class="intel-body">
+      <div class="intel-title">${esc(n.headline || 'Untitled')}</div>
+      <div class="intel-desc">${esc(n.summary ? n.summary.slice(0, 140) : (n.source || ''))}</div>
+      <div class="intel-time">${esc(n.source || '')} · ${time(n.datetime ? n.datetime * 1000 : Date.now())}</div>
+    </div>
+  </div>`).join('');
+}
+
+// FIX: Setup Analytics (which of the six agent-driven strategies is
+// actually making money) was computed correctly by SignalJournal.getStats()
+// but had no UI anywhere — see /api/journal.
+function renderJournal() {
+  const el = document.getElementById('journal-panel');
+  const totalEl = document.getElementById('journal-total');
+  if (!el) return;
+  const j = state.journal;
+  const bySetup = j?.bySetup || {};
+  const setups = Object.entries(bySetup).sort((a, b) => (b[1].totalPnl || 0) - (a[1].totalPnl || 0));
+  if (totalEl) totalEl.textContent = `${j?.total || 0} trade${j?.total === 1 ? '' : 's'}`;
+  if (!setups.length) {
+    el.innerHTML = '<div class="text-faint text-xs text-mono">No closed trades recorded yet.</div>';
+    return;
+  }
+  el.innerHTML = setups.map(([setup, s]) => {
+    const good = (s.totalPnl || 0) >= 0;
+    return `<div class="kv-row">
+      <span class="kv-key">${esc(setup)} <span class="text-faint">(${s.total})</span></span>
+      <span class="kv-val ${good ? 'good' : 'bad'}">${s.winRate}% WR · ${good ? '+' : ''}${s.totalPnl}R</span>
+    </div>`;
+  }).join('');
+}
+
+function renderAuditTrail() {
+  const el = document.getElementById('audit-feed');
+  const countEl = document.getElementById('audit-count');
+  if (!el) return;
+  if (countEl) countEl.textContent = `${state.auditTrail.length} entries`;
+  if (!state.auditTrail.length) return; // keep the static empty state markup
+  el.innerHTML = state.auditTrail.slice(0, 40).map(e => {
+    const fired = !!e.signalFired;
+    return `<div class="intel-item">
+      <div class="intel-icon" style="background:${fired ? 'var(--emerald-soft)' : 'var(--coral-soft)'};color:${fired ? 'var(--emerald)' : 'var(--coral)'}">${fired ? '✓' : '✕'}</div>
+      <div class="intel-body">
+        <div class="intel-title">${esc(e.symbol || '--')} ${esc(e.timeframe || '')}</div>
+        <div class="intel-desc">${fired ? 'Signal fired' : esc((e.blockedReason || 'no signal').replace(/_/g, ' '))} — score ${e.score ?? '--'}</div>
+        <div class="intel-time">${time(e.recordedAt)}</div>
       </div>
     </div>`;
   }).join('');

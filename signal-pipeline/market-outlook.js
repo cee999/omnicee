@@ -11,7 +11,7 @@
  *  - Economic calendar: risk-engine/session-filter.js's EconomicCalendarTierSystem,
  *    now fed real events by FinnhubFeed (see index.js). Split into today,
  *    this week (0-7 days out), and next week (7-14 days out).
- *  - Institutional positioning: feeds/news-feed.js's COTReportParser, fed
+ *  - Institutional positioning: feeds/cot-report-parser.js's COTReportParser, fed
  *    real weekly CFTC Commitment of Traders data by feeds/cftc-cot-feed.js.
  *    This is the honest, real answer to "what are hedge funds/corporations
  *    actually doing" — CFTC's own regulatory data on commercial (hedgers/
@@ -36,7 +36,7 @@ class MarketOutlookBuilder {
    * @param {object} opts.sessionFilter - has .check(symbol, timestamp) [assetClass is inferred internally] and .calendar
    * @param {string} opts.timeframe - which timeframe's candles to classify regime on
    * @param {Map|object} [opts.fundingSnapshots] - symbol -> { fundingRate, oiChangePct } (optional)
-   * @param {object} [opts.cotParser] - feeds/news-feed.js's COTReportParser instance, has .analyze(symbol)
+   * @param {object} [opts.cotParser] - feeds/cot-report-parser.js's COTReportParser instance, has .analyze(symbol)
    */
   static build({ symbols = [], candleStores = {}, regimeEngine, sessionFilter, timeframe = 'H1', fundingSnapshots = null, cotParser = null }) {
     const now = Date.now();

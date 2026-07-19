@@ -123,7 +123,7 @@ const { MyfxbookFeed }       = loadModule('./feeds/myfxbook-feed',              
 const { OpenInsiderFeed }    = loadModule('./feeds/openinsider-feed',            'OpenInsiderFeed')   || {};
 const { FinnhubFeed }        = loadModule('./feeds/finnhub-feed',                'FinnhubFeed')       || {};
 const { CFTCCotFeed }        = loadModule('./feeds/cftc-cot-feed',               'CFTCCotFeed')       || {};
-const { COTReportParser }    = loadModule('./feeds/news-feed',                   'COTReportParser')   || {};
+const { COTReportParser }    = loadModule('./feeds/cot-report-parser',           'COTReportParser')   || {};
 const { OpportunityRanker }  = loadModule('./signal-pipeline/opportunity-ranker', 'OpportunityRanker') || {};
 const { RelativeStrengthEngine } = loadModule('./risk-engine/relative-strength', 'RelativeStrengthEngine') || {};
 const { DataIntegrityMonitor } = loadModule('./feeds/data-integrity-monitor', 'DataIntegrityMonitor') || {};
@@ -1098,7 +1098,7 @@ async function buildSentimentExternalData(symbol) {
       }
       // FIX: COTAnalyzer.analyze() (agents/sentiment-agent.js) destructures
       // `commercials` (plural) from its input, but COTReportParser.analyze()
-      // (feeds/news-feed.js) returns the field as `commercial` (singular).
+      // (feeds/cot-report-parser.js) returns the field as `commercial` (singular).
       // Passing the raw analysis straight through would silently zero out
       // the commercial-hedger side of the signal while largeSpec/smallSpec
       // (whose key names happen to match) kept working. Bridge explicitly.
