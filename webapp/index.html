@@ -612,9 +612,9 @@ button:focus-visible, .chip:focus-visible, [tabindex]:focus-visible { outline: 2
           </div>
         </div>
         <div class="card" style="flex:1;">
-          <div class="card-head"><span>Market News</span><span class="text-faint text-xs" id="news-count">0 stories</span></div>
+          <div class="card-head"><span>Crypto News</span><span class="text-faint text-xs" id="news-count">0 stories</span></div>
           <div class="card-body flush" id="news-feed">
-            <div class="empty-state">Recent headlines feeding the sentiment score behind your signals.</div>
+            <div class="empty-state">Recent crypto headlines feeding the sentiment score behind your signals. Refreshes every 5 minutes.</div>
           </div>
         </div>
       </div>
@@ -1095,14 +1095,19 @@ async function hydrateHeatmap() {
 // FIX: /api/news, /api/journal, and /api/audit-trail all existed and
 // responded correctly but were never fetched anywhere in this file — same
 // class of gap as /api/watchlist, /api/health, and /api/heatmap above.
+// Requests the crypto category specifically (server defaulted to 'general'
+// market news otherwise) and re-fetches every 5 minutes — matching
+// FinnhubFeed's own server-side cache window, so this stays current without
+// hammering the API on every render.
 async function hydrateNews() {
   const headers = authHeaders();
   try {
-    const res = await fetch('/api/news', { headers }).then(r => r.json());
+    const res = await fetch('/api/news?category=crypto', { headers }).then(r => r.json());
     state.news = res.ok ? (res.news || []) : [];
   } catch (_) { state.news = []; }
   renderNews();
 }
+setInterval(hydrateNews, 5 * 60 * 1000);
 async function hydrateJournal() {
   const headers = authHeaders();
   try {
