@@ -49,12 +49,19 @@ function createApp() {
   app.get('/health', async (_req, res) => {
     let mongo = { ok: false };
     try { mongo = await db.health(); } catch (err) { mongo = { ok: false, error: err.message }; }
+    // Same fix as /api/health above (MemoryManager.getFullStats() had zero
+    // callers anywhere) — this endpoint is what the frontend's About panel
+    // actually fetches, which that fix didn't reach since it only extended
+    // /api/health. Same `cache` field name for consistency.
+    let cache = null;
+    try { cache = getEngines().memory?.getFullStats?.() || null; } catch (_) { /* engines not ready yet at boot */ }
     res.json({
       ok: true,
       service: 'omnicee-api',
       uptime: process.uptime(),
       mongo,
       finnhub: finnhub.enabled(),
+      cache,
     });
   });
 
