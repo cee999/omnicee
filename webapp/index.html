@@ -6,6 +6,10 @@
 <meta name="theme-color" content="#05070a">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="OMNICEE">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icons/favicon-32.png" type="image/png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <title>OMNICEE — Command</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="/socket.io/socket.io.js"></script>
@@ -958,6 +962,18 @@ document.getElementById('login-token-input')?.addEventListener('keydown', e => {
 if (!initData && !appToken) showLogin();
 
 const socket = io({ path: '/socket.io', auth: currentAuth, transports: ['websocket', 'polling'] });
+
+// PWA: register the service worker (app-shell caching only — see sw.js's
+// own header for why API/socket data is deliberately never cached). Runs
+// once at load, independent of Socket.IO connection state.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {
+      // Non-fatal — the app works identically without an installed SW,
+      // it just won't be installable/offline-capable.
+    });
+  });
+}
 
 socket.on('connect', () => {
   state.connected = true;
