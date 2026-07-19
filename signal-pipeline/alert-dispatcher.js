@@ -1743,7 +1743,12 @@ class AlertDispatcher extends EventEmitter {
             await this._client.answerCallback(callbackQueryId, 'Manual tracking is not enabled.', true);
             break;
           }
-          await this.executionEngine.onWatch(signalId).catch(() => {});
+          // FIX: previously silent — the bot confirms "👁 Watching" to the
+          // user immediately below regardless of whether this actually
+          // succeeded, so a failure here was both invisible AND actively
+          // misleading (user believes tracking started when it didn't).
+          await this.executionEngine.onWatch(signalId)
+            .catch(e => console.warn(`[AlertDispatcher] onWatch failed for signal ${signalId}: ${e.message}`));
           await this._client.answerCallback(callbackQueryId, '👁 Watching — no position opened.', false);
           break;
         }

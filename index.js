@@ -1720,12 +1720,14 @@ function buildSingletons() {
       adaptiveLearning, bayesianEng, walkForward, institutionalGates,
       drawdownGuard, sessionFilter, riskEngine, institutionalRiskManager,
       opportunityRanker, relativeStrength, dataIntegrityMonitor, executionEngine,
-      auditTrail, symbolManager, cotParser,
+      auditTrail, symbolManager, cotParser, memory,
       // For GET /api/outlook (signal-pipeline/market-outlook.js)
       regimeEngine, candleStores, symbols: SYMBOLS,
     });
     log.info('Live engine singletons published for outcome-feedback wiring');
-  } catch (_) {}
+  } catch (err) {
+    log.error(`Failed to publish engine registry — API endpoints (watchlist, journal, health, audit-trail, etc) will serve stale or empty data: ${err.message}`);
+  }
 }
 
 // ── 8. Build feeds ─────────────────────────────────────────────────────────

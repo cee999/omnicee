@@ -197,7 +197,13 @@ function createApp() {
       return res.status(503).json({ ok: false, error: 'Health monitor unavailable — trading engine not yet initialized' });
     }
     const report = live.dataIntegrityMonitor.check(live.candleStores);
-    res.json({ ok: true, ...report });
+    // FIX: MemoryManager's RedisAdapter/PineconeAdapter already tracked an
+    // internal error counter on every failed cache write, but nothing
+    // anywhere ever read it — a failing Redis/Pinecone connection was
+    // completely invisible (every write silently .catch(() => {})'d).
+    // getFullStats() was itself dead code with zero callers until now.
+    const cache = live.memory?.getFullStats?.() || null;
+    res.json({ ok: true, ...report, cache });
   });
 
   app.get('/api/telemetry', telegramAuthMiddleware, async (req, res) => {
@@ -329,7 +335,11 @@ function createApp() {
     // FIX: was only updating the dispatcher's (cosmetic, display-only) balance
     // copy — the actual RiskEngine used for live position-size math never saw
     // real-time balance updates. See the note on RiskEngine.setBalance().
-    try { getEngines().riskEngine?.setBalance(balance); } catch (_) {}
+    try {
+      getEngines().riskEngine?.setBalance(balance);
+    } catch (err) {
+      console.warn(`[API] Failed to update RiskEngine balance to ${balance} — position sizing may be using a stale balance: ${err.message}`);
+    }
     bus.emit('balance_update', { balance, equity, margin, freeMargin, updatedAt: Date.now() });
     res.json({ ok: true, balance });
   });

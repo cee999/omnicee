@@ -1069,7 +1069,18 @@ class SemiAutoExecutor {
     if (!this._enabled) return { success: true, simulated: true, newSL: entryPrice };
     try {
       // Cancel existing SL
-      if (currentSLOrderId) await this._client.cancelOrder({ symbol, orderId: currentSLOrderId }).catch(() => {});
+      // FIX: this previously swallowed any cancel failure with .catch(() =>
+      // {}) and proceeded to place a NEW breakeven SL order regardless. If
+      // the exchange cancel fails (network blip, order already filled,
+      // rate limit), the position can end up with TWO live stop orders
+      // simultaneously — whichever the exchange fills first executes,
+      // silently defeating the point of moving to breakeven. Now logged so
+      // this is visible instead of only discoverable by finding a stray
+      // order on the exchange account later.
+      if (currentSLOrderId) {
+        await this._client.cancelOrder({ symbol, orderId: currentSLOrderId })
+          .catch(e => console.warn(`[ExecutionEngine] setBreakeven: failed to cancel old SL ${currentSLOrderId} for ${symbol} — a duplicate stop order may now be live: ${e.message}`));
+      }
 
       // Place new SL at breakeven
       await this._client.newOrder({
@@ -1343,8 +1354,13 @@ class ExecutionEngine extends EventEmitter {
     const closePct   = params.pct   || 1.0;
 
     // Cancel exchange order in semi-auto
+    // FIX: previously silent — if this cancel fails, the code below still
+    // marks the position closed internally while the exchange-side order
+    // may still be live, meaning the account can carry exposure the system
+    // no longer thinks it has. Logged so a failed cancel is visible.
     if (this.mode === EXECUTION_MODE.SEMI_AUTO && position.exchangeOrderId) {
-      await this._executor.cancelOrder(position.symbol, position.exchangeOrderId).catch(() => {});
+      await this._executor.cancelOrder(position.symbol, position.exchangeOrderId)
+        .catch(e => console.warn(`[ExecutionEngine] onClose: failed to cancel exchange order ${position.exchangeOrderId} for ${position.symbol} — it may still be live: ${e.message}`));
     }
 
     const closeResult = position.closeManual(closePrice, closePct);
@@ -1391,12 +1407,22 @@ class ExecutionEngine extends EventEmitter {
     position.beSet     = true;
 
     // Semi-auto: update exchange SL
+    // FIX: position.beSet was already set true and position.currentSL
+    // already moved to entryPrice ABOVE, before this call — if the actual
+    // exchange update fails, internal state claims breakeven is set while
+    // the exchange stop may still be at its original (wider) level. Adding
+    // visibility here at minimum surfaces the mismatch immediately instead
+    // of only being discoverable by comparing the dashboard to the actual
+    // exchange account. (A full fix — only flipping beSet after a
+    // confirmed exchange update, with rollback on failure — is a larger
+    // change to Position's state-transition ordering worth doing as its
+    // own dedicated pass, not bundled into this logging fix.)
     if (this.mode === EXECUTION_MODE.SEMI_AUTO) {
       await this._executor.setBreakeven(
         position.symbol, position.direction,
         position.size * position.sizeRemaining,
         position.entryPrice, position.slOrderId
-      ).catch(() => {});
+      ).catch(e => console.warn(`[ExecutionEngine] onBreakeven: exchange update failed for ${position.symbol} — internal state now says beSet=true but the exchange stop may not have moved: ${e.message}`));
     }
 
     await this._dispatcher?.sendBreakeven(position.id, position.symbol, position.entryPrice, position.direction);
@@ -1647,8 +1673,16 @@ class ExecutionEngine extends EventEmitter {
       if (position.symbol === symbol && !position.isClosed() && atr) {
         // ATR is only available on candle close, so direct call here
         const actions = position.onPrice(price, atr);
+        // FIX: fire-and-forget is intentional here (onPrice() is called
+        // synchronously from the price-tick handler and can't itself be
+        // async without restructuring every caller), but the failure was
+        // previously invisible. This drives TP/SL-hit Telegram alerts and
+        // the tp_alert/sl_alert event emission other engines listen for —
+        // a silent failure here means a real trade-lifecycle event was
+        // dropped with zero trace anywhere.
         for (const action of actions) {
-          this._handlePositionAction(position, action).catch(() => {});
+          this._handlePositionAction(position, action)
+            .catch(e => console.warn(`[ExecutionEngine] onPrice: failed to handle ${action.type} for ${position.symbol} — this trade event may not have been recorded or alerted: ${e.message}`));
         }
       }
     }
