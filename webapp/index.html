@@ -710,6 +710,8 @@ button:focus-visible, .chip:focus-visible, [tabindex]:focus-visible { outline: 2
         <div class="card">
           <div class="card-head"><span>Risk Dashboard</span></div>
           <div class="card-body">
+            <div class="kv-row"><span class="kv-key">Balance</span><span class="kv-val" id="r-balance">--</span></div>
+            <div class="kv-row"><span class="kv-key">Equity</span><span class="kv-val" id="r-equity">--</span></div>
             <div class="kv-row"><span class="kv-key">Daily PnL</span><span class="kv-val" id="r-pnl">0.0%</span></div>
             <div class="kv-row"><span class="kv-key">Max Daily Loss</span><span class="kv-val" id="r-maxdaily">3.0%</span></div>
             <div class="kv-row"><span class="kv-key">Drawdown</span><span class="kv-val" id="r-dd">0.0%</span></div>
@@ -877,6 +879,9 @@ const state = {
   learning: [],
   stats: { total: 0, gradeA: 0 },
   risk: { dailyPnl: 0, drawdown: 0, consecLoss: 0, netSizingFactor: 1, state: 'CLOSED', maxDailyLoss: 3, maxDrawdown: 10 },
+  accountBalance: null,
+  accountEquity: null,
+  accountMargin: null,
   selectedId: null,
   filter: 'ALL',
   filterSig: 'ALL',
@@ -994,6 +999,12 @@ socket.on('risk', data => {
   if (state.pnlHistory.length > 120) state.pnlHistory.shift();
   renderAll();
 });
+socket.on('balance', data => {
+  state.accountBalance = data?.balance ?? state.accountBalance;
+  state.accountEquity = data?.equity ?? state.accountEquity;
+  state.accountMargin = data?.margin ?? state.accountMargin;
+  renderAll();
+});
 socket.on('stats', data => { Object.assign(state.stats, data); renderAll(); });
 socket.on('regime', data => {
   if (data?.symbol) state.regimes[`${data.symbol}:${data.timeframe || ''}`] = data;
@@ -1047,6 +1058,10 @@ async function hydrateFromApi() {
   try {
     const res = await fetch('/api/signals?limit=50', { headers }).then(r => r.json());
     for (const sig of res.signals || []) ingestSignal(sig, false);
+  } catch (_) {}
+  try {
+    const res = await fetch('/api/stats', { headers }).then(r => r.json());
+    if (res.ok && res.accountBalance != null) state.accountBalance = res.accountBalance;
   } catch (_) {}
   await hydrateLearning();
   renderAll();
@@ -1131,6 +1146,33 @@ async function hydrateAuditTrail() {
   renderAuditTrail();
 }
 
+// FIX: /api/telemetry existed and returned real, already-persisted gate
+// events (rejections/warnings saved via the same forward()+persist path as
+// everything else) but nothing ever fetched it — renderTape()'s "gate tape"
+// only ever populated from live telemetry_update socket pushes, so it sat
+// on "No gate events yet." until one happened to arrive after the user had
+// this view open. Same class of gap as /api/watchlist, /api/heatmap, and
+// /api/audit-trail above.
+async function hydrateTelemetry() {
+  const headers = authHeaders();
+  try {
+    const res = await fetch('/api/telemetry?limit=60', { headers }).then(r => r.json());
+    if (res.ok && Array.isArray(res.telemetry) && res.telemetry.length) {
+      // Merge rather than overwrite — a live event may have already arrived
+      // before this resolves; keep it, then backfill with history, de-duped
+      // by timestamp+type+symbol, newest first, capped the same as live.
+      const seen = new Set(state.telemetry.map(t => `${t.timestamp || t.receivedAt}_${t.type}_${t.symbol}`));
+      for (const t of res.telemetry) {
+        const key = `${t.timestamp}_${t.type}_${t.symbol}`;
+        if (!seen.has(key)) { state.telemetry.push(t); seen.add(key); }
+      }
+      state.telemetry.sort((a, b) => (b.timestamp || b.receivedAt || 0) - (a.timestamp || a.receivedAt || 0));
+      state.telemetry = state.telemetry.slice(0, 60);
+    }
+  } catch (_) { /* live socket events still work even if this fails */ }
+  renderTape();
+}
+
 function ingestSignal(sig, rerender = true) {
   if (!sig || sig.action === 'WAIT') return;
   if (state.signals.some(s => s.id === sig.id)) return;
@@ -1155,6 +1197,7 @@ function switchView(viewId) {
   if (viewId === 'intel' && !state.news.length) hydrateNews();
   if (viewId === 'risk' && !state.journal) hydrateJournal();
   if (viewId === 'tape' && !state.auditTrail.length) hydrateAuditTrail();
+  if (viewId === 'tape' && !state.telemetry.length) hydrateTelemetry();
   renderAll();
 }
 document.querySelectorAll('[data-view]').forEach(btn => btn.addEventListener('click', () => switchView(btn.dataset.view)));
@@ -1406,6 +1449,9 @@ function renderTape() {
 }
 
 function renderRisk() {
+  const fmtMoney = (v) => v == null ? 'Awaiting EA report' : `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  setText('r-balance', fmtMoney(state.accountBalance));
+  setText('r-equity', fmtMoney(state.accountEquity));
   const pnl = Number(state.risk.dailyPnl || 0);
   setText('r-pnl', `${pnl.toFixed(2)}%`);
   setClass('r-pnl', 'kv-val ' + (pnl < 0 ? 'bad' : 'good'));

@@ -210,7 +210,15 @@ function createApp() {
 
   app.get('/api/stats', telegramAuthMiddleware, async (_req, res) => {
     const stats = await db.getStats().catch(err => ({ db: 'error', error: err.message }));
-    res.json({ ok: true, stats });
+    // FIX: dispatcher.accountBalance is set from real MT5 EA reports
+    // (/api/ea/balance) but was never exposed anywhere for initial-load —
+    // only the balance_update live-socket relay (just added above) covers
+    // it, which means a fresh page load showed nothing until the next EA
+    // report arrived. Frontend has no display for it yet either — see the
+    // matching webapp/index.html fix.
+    const dispatcher = getDispatcher();
+    const accountBalance = dispatcher?.accountBalance ?? null;
+    res.json({ ok: true, stats, accountBalance });
   });
 
   app.get('/api/news', telegramAuthMiddleware, async (req, res) => {
@@ -445,6 +453,11 @@ function startServer(config = {}) {
   // past a server-side log.warn(). A liquidation cascade is exactly the
   // kind of event a trader wants to see live, not discover after the fact.
   forward('liquidation_cascade', 'liquidation_cascade', payload => db.saveTelemetry({ type: 'liquidation_cascade', ...payload }));
+  // FIX: balance_update was emitted (real data — /api/ea/balance receives the
+  // MT5 EA's actual account balance/equity/margin) but had no forward()
+  // entry, so it silently never reached any connected browser. The frontend
+  // has no display for it either yet (see webapp/index.html's matching fix).
+  forward('balance_update', 'balance');
 
   const port = Number(config.port || API_PORT);
   httpServer.listen(port, () => {
