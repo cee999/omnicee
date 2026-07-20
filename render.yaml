@@ -70,7 +70,7 @@ envVarGroups:
       - key: SYMBOLS
         value: BTCUSDT,XAUUSD,EURUSD
       - key: TIMEFRAMES
-        value: "15m,H1,H4,D1"
+        value: "M15,H1,H4,D1"
       - key: RISK_PCT_PER_TRADE
         value: "1.0"
       - key: MAX_DAILY_LOSS_PCT
@@ -116,7 +116,7 @@ services:
     plan: free
     region: oregon
     buildCommand: npm ci --omit=dev
-    startCommand: node -e "require('./api/server').startServer(); require('./index.js').main();"
+    startCommand: node start-all.js
     healthCheckPath: /health
     autoDeployTrigger: commit
     envVars:
