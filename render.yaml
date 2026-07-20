@@ -70,6 +70,11 @@ envVarGroups:
       - key: SYMBOLS
         value: BTCUSDT,XAUUSD,EURUSD
       - key: TIMEFRAMES
+        # FIX: was "15m,H1,H4,D1" — lowercase "15m" doesn't match the
+        # codebase's uppercase-only timeframe codes (agents/mtf-agent.js
+        # TF_HIERARCHY etc.), so the 15-minute timeframe would silently do
+        # nothing in production. Same bug already fixed in .env.example;
+        # this file wasn't updated to match. Fixed to M15.
         value: "M15,H1,H4,D1"
       - key: RISK_PCT_PER_TRADE
         value: "1.0"
