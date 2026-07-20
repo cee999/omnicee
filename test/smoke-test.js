@@ -408,6 +408,30 @@ async function runTests() {
   } catch (e) { fail('AbnormalMarketDetector', e); }
 
   try {
+    // Production bug found via live Render logs: BinanceFeed's 'candle'
+    // event payload was missing the singular 'candle' field entirely (only
+    // 'candles', plural, was included). index.js's onCandle() destructures
+    // { candle } and reads candle.timestamp — throwing on every single
+    // kline tick, misleadingly logged as "Message parse error" since the
+    // throw happened inside _onMessage's try block via a synchronous
+    // emit(). Net effect: Binance-sourced symbols never got a single
+    // successful candle update despite the feed connecting correctly.
+    const { BinanceFeed } = require(path.join(ROOT, 'feeds/binance-ws'));
+    const feed = new BinanceFeed({ symbols: ['BTCUSDT'], timeframes: ['H1'] });
+    let received = null;
+    feed.on('candle', (payload) => { received = payload; });
+    feed._onMessage(JSON.stringify({
+      stream: 'btcusdt@kline_1h',
+      data: { s: 'BTCUSDT', k: { t: Date.now(), o: '100', h: '105', l: '99', c: '103', v: '1000', i: '1h', x: false } },
+    }));
+    if (!received) throw new Error('candle event was never emitted');
+    if (!received.candle) throw new Error('payload.candle (singular) is missing — the exact bug this test guards against');
+    if (typeof received.candle.timestamp !== 'number') throw new Error('candle.timestamp is not accessible — onCandle() would throw');
+    if (!Array.isArray(received.candles)) throw new Error('payload.candles (plural) is missing');
+    pass(`BinanceFeed candle payload: both 'candle' (singular) and 'candles' (plural) present, onCandle()-style consumer works`);
+  } catch (e) { fail('BinanceFeed candle payload shape', e); }
+
+  try {
     const { SignalJournal } = require(path.join(ROOT, 'signal-pipeline/manual-mode'));
     const journal = new SignalJournal();
     const mkSignal = (id, agent, contribution) => ({

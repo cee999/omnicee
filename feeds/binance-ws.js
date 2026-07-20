@@ -182,7 +182,19 @@ class BinanceFeed extends EventEmitter {
       candles.push(candle);
     }
 
-    this.emit('candle', { symbol, timeframe: tf, candles, isClosed: candle.isClosed });
+    // FIX: this payload was missing the singular 'candle' field entirely —
+    // only 'candles' (the full array) was included. index.js's onCandle()
+    // destructures { symbol, timeframe, candle, isClosed } and immediately
+    // throws on candle.timestamp when candle is undefined, on every single
+    // kline tick. That error was caught by _onMessage's outer try/catch and
+    // misleadingly logged as "Message parse error" (the JSON parsed fine —
+    // the failure was in a downstream listener, called synchronously via
+    // this emit()). Net effect: Binance-sourced symbols never got a single
+    // successful candle update in candleStores, despite the feed connecting
+    // and receiving real data correctly. Both bybit-ws.js and twelve-data.js
+    // already include both 'candle' and 'candles' in their payloads — this
+    // brings Binance in line with that same, correct convention.
+    this.emit('candle', { symbol, timeframe: tf, candle, candles, isClosed: candle.isClosed });
   }
 
   _onError(err) {
