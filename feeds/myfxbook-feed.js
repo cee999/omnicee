@@ -39,12 +39,26 @@ function clamp(v, lo, hi) { return Math.min(Math.max(v, lo), hi); }
 
 function httpGetJSON(url, headers = {}) {
   return new Promise((resolve, reject) => {
-    https.get(url, { headers }, (res) => {
+    // FIX: no headers were sent at all — Node's https module sets no
+    // default User-Agent, and sites with Cloudflare-style bot protection
+    // commonly respond to such requests with an HTML challenge/block page
+    // instead of their real API response, which is exactly what production
+    // logs showed ("Failed to parse: <!DOCTYPE html>..."). A normal,
+    // honestly-identified User-Agent is standard HTTP client practice, not
+    // evasion — if this specific site has deeper bot-detection (a JS
+    // challenge, TLS fingerprinting) beyond a missing header, that's a
+    // genuine external limitation this can't code around.
+    const finalHeaders = {
+      'User-Agent': 'Mozilla/5.0 (compatible; OmniceeBot/1.0; +https://github.com/cee999/omnicee)',
+      'Accept': 'application/json',
+      ...headers,
+    };
+    https.get(url, { headers: finalHeaders }, (res) => {
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => {
         try { resolve(JSON.parse(data)); }
-        catch (e) { reject(new Error(`Failed to parse: ${data.slice(0,200)}`)); }
+        catch (e) { reject(new Error(`Failed to parse (status ${res.statusCode}): ${data.slice(0,200)}`)); }
       });
     }).on('error', reject);
   });
