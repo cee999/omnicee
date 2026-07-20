@@ -119,7 +119,16 @@ services:
     # Upgrade to `starter` (~$7/mo, no spin-down at all) once you're ready
     # to trade on this for real and want zero cold-start latency on signals.
     plan: free
-    region: oregon
+    # FIX: was 'oregon' (US West) — Binance's public WebSocket market-data
+    # endpoints return HTTP 451 (Unavailable For Legal Reasons) to
+    # connections from US-region IPs, causing an endless reconnect loop in
+    # production (confirmed in live Render logs: "WebSocket error:
+    # Unexpected server response: 451"). Render's non-US regions are
+    # frankfurt and singapore; singapore avoids this for every exchange
+    # feed this project uses, not just Binance. Region can't be changed
+    # after a service already exists — this only takes effect on a fresh
+    # deploy or a manually recreated service.
+    region: singapore
     buildCommand: npm ci --omit=dev
     startCommand: node start-all.js
     healthCheckPath: /health
