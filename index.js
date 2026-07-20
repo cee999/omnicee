@@ -132,6 +132,7 @@ const { MyfxbookFeed }       = loadModule('./feeds/myfxbook-feed',              
 const { OpenInsiderFeed }    = loadModule('./feeds/openinsider-feed',            'OpenInsiderFeed')   || {};
 const { AlphaVantageFeed }   = loadModule('./feeds/alpha-vantage-feed',          'AlphaVantageFeed')  || {};
 const { FinnhubFeed }        = loadModule('./feeds/finnhub-feed',                'FinnhubFeed')       || {};
+const { FMPFeed }            = loadModule('./feeds/fmp-feed',                    'FMPFeed')           || {};
 const { CFTCCotFeed }        = loadModule('./feeds/cftc-cot-feed',               'CFTCCotFeed')       || {};
 const { COTReportParser }    = loadModule('./feeds/cot-report-parser',           'COTReportParser')   || {};
 const { OpportunityRanker }  = loadModule('./signal-pipeline/opportunity-ranker', 'OpportunityRanker') || {};
@@ -1236,7 +1237,7 @@ let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, institutionalGates,
     monteCarlo, bayesianEng, statValidator, walkForward, ensembleEng,
     signalMonitor, institutionalRiskManager, executionManagers, myfxbookFeed, openInsiderFeed,
     finnhubFeed, cftcCotFeed, cotParser, executionEngine, opportunityRanker, relativeStrength,
-    dataIntegrityMonitor, intermarketAnalyzer, alphaVantageFeed;
+    dataIntegrityMonitor, intermarketAnalyzer, alphaVantageFeed, fmpFeed;
 
 // FIX: ExecutionManager's MarketMicrostructureAnalyzer keeps a single shared
 // orderBookHistory/tradeHistory/spreadHistory with no per-symbol keying — one
@@ -1690,44 +1691,71 @@ function buildSingletons() {
   // was fully built and (as of an earlier fix this session) correctly
   // consulted before every trade, but nothing ever fed it real events, so it
   // silently reported "CLEAR" 100% of the time. Poll it periodically here.
-  if (FinnhubFeed) {
-    finnhubFeed = new FinnhubFeed({ apiKey: process.env.FINNHUB_API_KEY || '' });
-    if (finnhubFeed.enabled()) {
-      const pollEconomicCalendar = async () => {
-        try {
-          const events = await finnhubFeed.economicCalendar();
-          if (sessionFilter?.addNewsEvents && events.length) {
-            // FIX: only use Finnhub's impact rating to PROMOTE an event that
-            // none of EconomicCalendarTierSystem._inferTier's own name-regexes
-            // would catch — never to override/downgrade a name that's already
-            // correctly recognized. Mirrors _inferTier's tier1/tier2/tier3
-            // patterns so a same-tier or higher inference always wins.
-            const TIER1_RE = /nfp|non.?farm|fomc|cpi|rate decision|interest rate/i;
-            const TIER2_RE = /gdp|pmi|retail sales|unemployment/i;
-            const TIER3_RE = /building permit|confidence|trade balance/i;
-            sessionFilter.addNewsEvents(events.map(e => ({
-              name: e.name,
-              currency: e.currency,
-              time: e.time,
-              tier: TIER1_RE.test(e.name) || TIER2_RE.test(e.name) || TIER3_RE.test(e.name)
-                ? undefined // let _inferTier's own regex classify it
-                : e.impact === 'high'   ? 'TIER_2'
-                : e.impact === 'medium' ? 'TIER_3'
-                : undefined, // stays TIER_4 via _inferTier's default
-            })));
-          }
-          log.info(`EconomicCalendar: ${events.length} events loaded for the next 7 days`);
-        } catch (err) {
-          log.warn(`EconomicCalendar poll failed: ${err.message}`);
+  // FIX: this poll used to run only when Finnhub was configured, meaning
+  // sessionFilter's EconomicCalendarTierSystem gate had zero real event
+  // awareness whenever FINNHUB_API_KEY was unset (or Finnhub had an outage
+  // or hit its quota) — a single point of failure feeding a safety-critical
+  // blackout gate. FMPFeed (feeds/fmp-feed.js) is a second, independent
+  // source normalized to the identical shape; either feed alone is enough
+  // to keep the gate fed, and having both gives real redundancy instead of
+  // a silent single point of failure.
+  if (FinnhubFeed) finnhubFeed = new FinnhubFeed({ apiKey: process.env.FINNHUB_API_KEY || '' });
+  if (FMPFeed)     fmpFeed     = new FMPFeed({ apiKey: process.env.FMP_API_KEY || '' });
+
+  if (finnhubFeed?.enabled() || fmpFeed?.enabled()) {
+    const pollEconomicCalendar = async () => {
+      const raw = [];
+      if (finnhubFeed?.enabled()) {
+        try { raw.push(...await finnhubFeed.economicCalendar()); }
+        catch (err) { log.warn(`Finnhub economic calendar poll failed: ${err.message}`); }
+      }
+      if (fmpFeed?.enabled()) {
+        try { raw.push(...await fmpFeed.economicCalendar()); }
+        catch (err) { log.warn(`FMP economic calendar poll failed: ${err.message}`); }
+      }
+      // Dedupe: same currency + same normalized name within a 30-minute
+      // window counts as one release reported by two providers, not two.
+      const events = [];
+      for (const e of raw) {
+        const key = e.name.toLowerCase().replace(/[^a-z]/g, '');
+        const dup = events.find(x =>
+          x.currency === e.currency && Math.abs(x.time - e.time) < 30 * 60000 &&
+          x.name.toLowerCase().replace(/[^a-z]/g, '') === key
+        );
+        if (!dup) events.push(e);
+      }
+      try {
+        if (sessionFilter?.addNewsEvents && events.length) {
+          // FIX: only use a provider's impact rating to PROMOTE an event that
+          // none of EconomicCalendarTierSystem._inferTier's own name-regexes
+          // would catch — never to override/downgrade a name that's already
+          // correctly recognized. Mirrors _inferTier's tier1/tier2/tier3
+          // patterns so a same-tier or higher inference always wins.
+          const TIER1_RE = /nfp|non.?farm|fomc|cpi|rate decision|interest rate/i;
+          const TIER2_RE = /gdp|pmi|retail sales|unemployment/i;
+          const TIER3_RE = /building permit|confidence|trade balance/i;
+          sessionFilter.addNewsEvents(events.map(e => ({
+            name: e.name,
+            currency: e.currency,
+            time: e.time,
+            tier: TIER1_RE.test(e.name) || TIER2_RE.test(e.name) || TIER3_RE.test(e.name)
+              ? undefined // let _inferTier's own regex classify it
+              : e.impact === 'high'   ? 'TIER_2'
+              : e.impact === 'medium' ? 'TIER_3'
+              : undefined, // stays TIER_4 via _inferTier's default
+          })));
         }
-      };
-      pollEconomicCalendar();
-      setInterval(pollEconomicCalendar, 4 * 3600000); // every 4 hours
-      log.info('FinnhubFeed created — economic calendar polling active');
-    } else {
-      log.warn('FinnhubFeed disabled - missing FINNHUB_API_KEY');
-    }
+        const src = [finnhubFeed?.enabled() ? 'Finnhub' : null, fmpFeed?.enabled() ? 'FMP' : null].filter(Boolean).join('+');
+        log.info(`EconomicCalendar: ${events.length} events loaded for the next 7 days (${src})`);
+      } catch (err) {
+        log.warn(`EconomicCalendar addNewsEvents failed: ${err.message}`);
+      }
+    };
+    pollEconomicCalendar();
+    setInterval(pollEconomicCalendar, 4 * 3600000); // every 4 hours
   }
+  log.info(finnhubFeed?.enabled() ? 'FinnhubFeed created — economic calendar polling active' : 'FinnhubFeed disabled - missing FINNHUB_API_KEY');
+  log.info(fmpFeed?.enabled() ? 'FMPFeed created — economic calendar polling active (redundant source)' : 'FMPFeed disabled - missing FMP_API_KEY');
 
   // FIX: real COT (Commitment of Traders) data — CFTCCotFeed and
   // COTReportParser were fully built but nothing anywhere fetched real CFTC
