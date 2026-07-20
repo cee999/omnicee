@@ -121,6 +121,7 @@ const { SignalMonitor }      = loadModule('./signal-pipeline/signal-monitor',   
 const { InstitutionalRiskManager } = loadModule('./risk-engine/institutional-risk-manager', 'InstitutionalRiskManager') || {};
 const { MyfxbookFeed }       = loadModule('./feeds/myfxbook-feed',               'MyfxbookFeed')      || {};
 const { OpenInsiderFeed }    = loadModule('./feeds/openinsider-feed',            'OpenInsiderFeed')   || {};
+const { AlphaVantageFeed }   = loadModule('./feeds/alpha-vantage-feed',          'AlphaVantageFeed')  || {};
 const { FinnhubFeed }        = loadModule('./feeds/finnhub-feed',                'FinnhubFeed')       || {};
 const { CFTCCotFeed }        = loadModule('./feeds/cftc-cot-feed',               'CFTCCotFeed')       || {};
 const { COTReportParser }    = loadModule('./feeds/cot-report-parser',           'COTReportParser')   || {};
@@ -1226,7 +1227,7 @@ let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, institutionalGates,
     monteCarlo, bayesianEng, statValidator, walkForward, ensembleEng,
     signalMonitor, institutionalRiskManager, executionManagers, myfxbookFeed, openInsiderFeed,
     finnhubFeed, cftcCotFeed, cotParser, executionEngine, opportunityRanker, relativeStrength,
-    dataIntegrityMonitor, intermarketAnalyzer;
+    dataIntegrityMonitor, intermarketAnalyzer, alphaVantageFeed;
 
 // FIX: ExecutionManager's MarketMicrostructureAnalyzer keeps a single shared
 // orderBookHistory/tradeHistory/spreadHistory with no per-symbol keying — one
@@ -1654,6 +1655,24 @@ function buildSingletons() {
       wsBus?.emit('intel', { kind: 'executive_activity', ...data, timestamp: Date.now() });
     });
     log.info('OpenInsiderFeed created');
+  }
+
+  // Alpha Vantage Feed - macro news sentiment
+  if (AlphaVantageFeed) {
+    alphaVantageFeed = new AlphaVantageFeed({});
+    if (alphaVantageFeed.enabled()) {
+      // Same convention as myfxbookFeed/openInsiderFeed above — an
+      // unhandled 'error' event on an EventEmitter crashes the process.
+      alphaVantageFeed.on('error', (err) => log.error(`AlphaVantageFeed error: ${feedErrorMessage(err)}`));
+      alphaVantageFeed.on('sentiment_shift', (data) => {
+        log.info(`[AlphaVantage] Macro sentiment shifted to ${data.label} (${data.score}, ${data.articleCount} articles)`);
+        dispatcher?.sendMessage?.(`🗞️ *Macro Sentiment: ${data.label}*\nScore: ${data.score}\n${data.topHeadline || ''}`)?.catch(() => {});
+        wsBus?.emit('intel', { kind: 'news_sentiment', ...data, timestamp: Date.now() });
+      });
+      log.info('AlphaVantageFeed created — macro news sentiment polling active');
+    } else {
+      log.warn('AlphaVantageFeed disabled - missing ALPHA_VANTAGE_API_KEY');
+    }
   }
 
   // FIX: FinnhubFeed existed but was never instantiated anywhere, and its

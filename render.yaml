@@ -43,6 +43,8 @@ envVarGroups:
         sync: false
       - key: FINNHUB_API_KEY
         sync: false
+      - key: ALPHA_VANTAGE_API_KEY
+        sync: false
       - key: BINANCE_API_KEY
         sync: false
       - key: BINANCE_API_SECRET

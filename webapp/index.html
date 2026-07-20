@@ -1555,6 +1555,7 @@ const INTEL_META = {
   upcoming_events: { icon: '🗓', color: '#a78bfa', label: 'Upcoming Events' },
   cluster_buy: { icon: '💼', color: '#1fe3a8', label: 'Insider Cluster Buy' },
   executive_activity: { icon: '👔', color: '#e8b64a', label: 'Executive Activity' },
+  news_sentiment: { icon: '🗞️', color: '#5ea8ff', label: 'Macro Sentiment Shift' },
 };
 function renderIntel() {
   const el = document.getElementById('intel-feed');
@@ -1570,6 +1571,7 @@ function renderIntel() {
     else if (it.kind === 'extreme_retail_positioning') desc = `${it.symbol}: ${it.data?.contrarianReason || 'extreme positioning detected'}`;
     else if (it.kind === 'executive_activity') desc = `${it.ticker}: ${it.signal || 'executive trade activity'}`;
     else if (it.kind === 'upcoming_events') desc = `${it.count} high-impact events on the calendar`;
+    else if (it.kind === 'news_sentiment') desc = `${it.label} (${it.score}) — ${it.articleCount} articles${it.topHeadline ? ': ' + it.topHeadline : ''}`;
     else desc = JSON.stringify(it).slice(0, 100);
     return `<div class="intel-item">
       <div class="intel-icon" style="background:${meta.color}1c;color:${meta.color}">${meta.icon}</div>
