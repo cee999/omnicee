@@ -57,10 +57,19 @@ const REQUIRE_KZ      = requireEnv('REQUIRE_KILLZONE', 'false') === 'true';
 const TWELVE_KEY      = requireEnv('TWELVE_DATA_API_KEY', '');
 // FIX: intermarket analysis (DXY/equity cross-confirmation) — the last item
 // on the original audit's "does not exist" list. Configurable since not
-// every TwelveData plan/region resolves 'DXY' the same way; SPX500 matches
-// the existing convention used in correlation.js/session-filter.js.
-const DXY_SYMBOL          = process.env.DXY_SYMBOL          || 'DXY';
-const EQUITY_INDEX_SYMBOL = process.env.EQUITY_INDEX_SYMBOL || 'SPX500';
+// FIX: was 'DXY' / 'SPX500', with a comment claiming "every TwelveData
+// plan/region resolves 'DXY' the same way" — confirmed against TwelveData's
+// own indices page (twelvedata.com/indices), which states indices data is
+// "coming soon" and isn't a live product yet. Any literal index symbol
+// fails with "symbol or figi parameter is missing or invalid" regardless of
+// plan/region — this isn't a formatting or tier issue, the feature doesn't
+// exist there yet. UUP (Invesco DB US Dollar Index Bullish Fund) and SPY
+// (SPDR S&P 500 ETF Trust) are the standard, widely-used ETF proxies for
+// the Dollar Index and S&P 500 respectively — fully supported as ordinary
+// ETF data, and track their underlying index closely enough for
+// intermarket-analysis purposes.
+const DXY_SYMBOL          = process.env.DXY_SYMBOL          || 'UUP';
+const EQUITY_INDEX_SYMBOL = process.env.EQUITY_INDEX_SYMBOL || 'SPY';
 
 // ── 2. Load modules ────────────────────────────────────────────────────────
 
