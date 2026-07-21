@@ -396,7 +396,9 @@ class TDRESTPoller {
       const result = await httpGetJSON(url);
 
       if (result.status === 'error') {
-        throw new Error(`Twelve Data error for ${symbol}: ${result.message}`);
+        const err = new Error(`Twelve Data error for ${symbol}: ${result.message}`);
+        err.tdCode = result.code; // 429 = rate limit exceeded — let callers detect this reliably
+        throw err;
       }
 
       const values = result.values || [];
@@ -637,6 +639,22 @@ class TwelveDataFeed extends EventEmitter {
 
   async _preloadHistory() {
     console.log('[TwelveDataFeed] Preloading historical candles (respecting quota — this may take a moment)...');
+    // FIX: rapid redeploys are common during active development (this app's
+    // own render.yaml auto-deploys on every commit), and QuotaManager's
+    // per-minute call log is in-memory only — a fresh process starts with
+    // an empty log even though Twelve Data's own server-side per-minute
+    // counter for this API key does NOT reset on restart. A new process can
+    // therefore believe it has full budget while the account is actually
+    // already near/over the real limit from calls the previous process just
+    // made, and every symbol/timeframe after the first couple gets a
+    // rate-limit error and — previously — was abandoned permanently, never
+    // retried, leaving most forex/commodity symbols with zero history.
+    //
+    // Fix keeps the initial pass exactly as fast as before (still fails
+    // fast, same as ever — nothing here blocks connect() or anything
+    // sequenced after it in main()'s boot loop) but schedules ONE
+    // background retry ~65s later for anything that failed specifically on
+    // a 429, once the real per-minute window has actually rolled over.
     for (const symbol of this.symbols) {
       for (const tf of this.timeframes) {
         const interval = TIMEFRAMES[tf] || tf;
@@ -647,10 +665,32 @@ class TwelveDataFeed extends EventEmitter {
         } catch (err) {
           console.error(`[TwelveDataFeed] History load failed ${symbol} ${tf}: ${err.message}`);
           this._stats.errorsCount++;
+          if (err.tdCode === 429 || /run out of API credits/i.test(err.message)) {
+            this._retryAfterQuotaReset(symbol, tf, interval);
+          }
         }
       }
     }
     console.log(`[TwelveDataFeed] Preload complete. Total candles: ${this.candleStore.size()}`);
+  }
+
+  // Fire-and-forget: not awaited by _preloadHistory(), so it never delays
+  // connect() or anything sequenced after it. One retry only — if the
+  // real per-minute window is still exhausted 65s later (e.g. something
+  // else is also actively consuming this same account's quota), give up
+  // for that symbol/timeframe rather than retrying indefinitely; it will
+  // still pick up live data going forward.
+  _retryAfterQuotaReset(symbol, tf, interval) {
+    setTimeout(async () => {
+      try {
+        const candles = await this.poller.fetchTimeSeries(symbol, interval, MAX_CANDLE_HISTORY);
+        this.candleStore.bulkLoad(symbol, tf, candles);
+        console.log(`[TwelveDataFeed] Retry succeeded: loaded ${candles.length} candles for ${symbol} ${tf}`);
+      } catch (err) {
+        console.error(`[TwelveDataFeed] Retry also failed for ${symbol} ${tf}: ${err.message}`);
+        this._stats.errorsCount++;
+      }
+    }, 65000);
   }
 
   _connectWebSocket() {
