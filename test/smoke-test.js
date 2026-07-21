@@ -432,6 +432,25 @@ async function runTests() {
   } catch (e) { fail('BinanceFeed candle payload shape', e); }
 
   try {
+    // Reported by user: correct APP_ACCESS_TOKEN rejected as "incorrect".
+    // Root cause: env vars pasted into a dashboard (Render, etc.) commonly
+    // pick up a trailing newline/space. The frontend already trims the
+    // token it sends, but validateAppToken() never trimmed
+    // process.env.APP_ACCESS_TOKEN — so a dashboard value like
+    // "mytoken123\n" could never match a correctly-typed "mytoken123",
+    // permanently, with zero visible difference to the user.
+    delete require.cache[require.resolve(path.join(ROOT, 'api/telegram-auth'))];
+    const originalToken = process.env.APP_ACCESS_TOKEN;
+    process.env.APP_ACCESS_TOKEN = 'mytoken123\n';
+    const { validateAppToken } = require(path.join(ROOT, 'api/telegram-auth'));
+    const result = validateAppToken('mytoken123');
+    process.env.APP_ACCESS_TOKEN = originalToken;
+    delete require.cache[require.resolve(path.join(ROOT, 'api/telegram-auth'))];
+    if (!result.ok) throw new Error(`expected trimmed comparison to succeed, got: ${JSON.stringify(result)}`);
+    pass(`App-token trim fix: trailing-newline env value still matches a cleanly-typed token`);
+  } catch (e) { fail('App-token trailing-whitespace fix', e); }
+
+  try {
     // Found via live Render logs: two full MongoDB connection failures
     // logged within milliseconds of each other. Root cause: getDB() had no
     // backoff — every DB-touching call site independently re-attempted a

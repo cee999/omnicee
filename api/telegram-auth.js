@@ -92,12 +92,20 @@ function allowedTelegramUser(user) {
 // tries this first and only falls through to Telegram validation if it's
 // absent or doesn't match, so existing Telegram sessions are unaffected.
 function validateAppToken(token) {
-  const appToken = process.env.APP_ACCESS_TOKEN || '';
+  // FIX: env vars pasted into a dashboard (Render, etc.) commonly pick up
+  // a trailing newline or space from the copy source. The frontend already
+  // trims the token it sends (webapp/index.html's submitAppToken), but
+  // this side never trimmed process.env.APP_ACCESS_TOKEN — so a value like
+  // "mytoken123\n" saved in Render's dashboard would NEVER match a
+  // correctly-typed "mytoken123", permanently, with no visible difference
+  // to the person looking at either field. A whitespace-only difference
+  // was silently indistinguishable from a genuinely wrong token.
+  const appToken = (process.env.APP_ACCESS_TOKEN || '').trim();
   if (!appToken) return { ok: false, reason: 'App token auth not configured' };
   if (!token) return { ok: false, reason: 'Missing app token' };
 
   try {
-    const tokenBuf = Buffer.from(String(token));
+    const tokenBuf = Buffer.from(String(token).trim());
     const appTokenBuf = Buffer.from(appToken);
     // Constant-time compare requires equal-length buffers; unequal length
     // is itself a safe, immediate reject (mirrors the Telegram hash check
