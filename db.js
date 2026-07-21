@@ -11,6 +11,8 @@ const ENABLE_DB = Boolean(MONGODB_URI);
 let client = null;
 let dbConnection = null;
 let indexPromise = null;
+let lastConnectAttemptFailedAt = 0;
+const CONNECT_RETRY_COOLDOWN_MS = 15000;
 
 function compactSignal(signal = {}) {
   return {
@@ -84,6 +86,20 @@ async function getDB() {
   if (!ENABLE_DB) return null;
   if (dbConnection) return dbConnection;
 
+  // FIX: previously, every DB-touching call site independently attempted a
+  // fresh client.connect() the instant a prior attempt had failed (since
+  // dbConnection is reset to null in the catch block below) — with zero
+  // backoff. Under a persistent Atlas connectivity issue, this meant EVERY
+  // operation across the whole app (subscriber lookups, signal saves,
+  // telemetry, everything) each independently paid the full
+  // connectTimeoutMS (8s) before failing. This is exactly the pattern seen
+  // in production logs: two full connection failures logged within
+  // milliseconds of each other. Now: skip re-attempting for a short
+  // cooldown after a failure, fail fast instead.
+  if (lastConnectAttemptFailedAt && (Date.now() - lastConnectAttemptFailedAt) < CONNECT_RETRY_COOLDOWN_MS) {
+    return null;
+  }
+
   try {
     client = new MongoClient(MONGODB_URI, {
       maxPoolSize: Number(process.env.MONGODB_MAX_POOL || 3),
@@ -94,11 +110,17 @@ async function getDB() {
       socketTimeoutMS: 25000,
       retryWrites: true,
       retryReads: true,
-      compressors: ['zstd', 'snappy'],
+      // FIX: was ['zstd', 'snappy'] — neither compressor's optional native
+      // package (@mongodb-js/zstd, snappy) is actually installed in
+      // package.json, so the driver was requesting compression it could
+      // never perform. Not the cause of a TLS handshake failure (wire
+      // compression negotiates after the handshake completes), but dead
+      // config regardless. Removed rather than silently no-op.
     });
 
     await client.connect();
     dbConnection = client.db(DB_NAME);
+    lastConnectAttemptFailedAt = 0;
     indexPromise = ensureIndexes(dbConnection).catch(err => {
       console.warn('[MongoDB] index setup warning:', err.message);
     });
@@ -108,6 +130,7 @@ async function getDB() {
     console.error('[MongoDB] Connection failed:', err.message);
     client = null;
     dbConnection = null;
+    lastConnectAttemptFailedAt = Date.now();
     throw err;
   }
 }

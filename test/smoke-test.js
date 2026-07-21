@@ -432,6 +432,34 @@ async function runTests() {
   } catch (e) { fail('BinanceFeed candle payload shape', e); }
 
   try {
+    // Found via live Render logs: two full MongoDB connection failures
+    // logged within milliseconds of each other. Root cause: getDB() had no
+    // backoff — every DB-touching call site independently re-attempted a
+    // fresh 8-second connectTimeoutMS the instant a prior attempt failed.
+    const originalUri = process.env.MONGODB_URI;
+    process.env.MONGODB_URI = 'mongodb://invalid-host-that-does-not-exist-omnicee-test:27017/test';
+    delete require.cache[require.resolve(path.join(ROOT, 'db'))];
+    const freshDb = require(path.join(ROOT, 'db'));
+
+    const t1 = Date.now();
+    await freshDb.getDB().catch(() => {});
+    const first = Date.now() - t1;
+
+    const t2 = Date.now();
+    const second = await freshDb.getDB();
+    const secondElapsed = Date.now() - t2;
+
+    process.env.MONGODB_URI = originalUri;
+    delete require.cache[require.resolve(path.join(ROOT, 'db'))];
+
+    if (secondElapsed > 1000) {
+      throw new Error(`cooldown did not prevent a second slow attempt: first=${first}ms, second=${secondElapsed}ms`);
+    }
+    if (second !== null) throw new Error('expected null return during cooldown window');
+    pass(`MongoDB connection cooldown: first attempt ${first}ms (real timeout), second attempt ${secondElapsed}ms (fails fast, no re-attempt)`);
+  } catch (e) { fail('MongoDB connection cooldown', e); }
+
+  try {
     const { SignalJournal } = require(path.join(ROOT, 'signal-pipeline/manual-mode'));
     const journal = new SignalJournal();
     const mkSignal = (id, agent, contribution) => ({
