@@ -5,7 +5,13 @@ require('dotenv').config();
 const { MongoClient } = require('mongodb');
 
 const DB_NAME = process.env.MONGODB_DB || 'omnicee_db';
-const MONGODB_URI = process.env.MONGODB_URI || '';
+// FIX: same bug class already found and fixed for APP_ACCESS_TOKEN — values
+// pasted into a dashboard (Render, etc.) commonly pick up an invisible
+// trailing newline or space. For a Mongo connection string, if that lands
+// right after the password, it corrupts the credential silently and
+// produces exactly "bad auth: authentication failed" with no visible
+// difference in the dashboard field.
+const MONGODB_URI = (process.env.MONGODB_URI || '').trim();
 const ENABLE_DB = Boolean(MONGODB_URI);
 
 let client = null;
