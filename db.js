@@ -435,7 +435,7 @@ async function health() {
   try {
     if (!ENABLE_DB) return { ok: true, enabled: false };
     const db = await getDB();
-    if (!db) return { ok: false, enabled: false, error: 'Database not initialized' };
+    if (!db) return { ok: false, enabled: true, error: 'Database not initialized' };
     await db.command({ ping: 1 });
     return { ok: true, enabled: true, db: DB_NAME };
   } catch (err) {
