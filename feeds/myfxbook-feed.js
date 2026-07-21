@@ -346,6 +346,28 @@ class MyfxbookFeed extends EventEmitter {
   }
 
   async _fetchEconomicCalendar() {
+    // FIX: get-economic-calendar.json is not a real MyFXBook API endpoint —
+    // confirmed against MyFXBook's own community forum, where multiple
+    // users have asked how to get calendar data via API and been told
+    // "I dont think there is an API available... you can use the XML"
+    // instead, and a 2023 feature-request thread literally asks MyFXBook
+    // to ADD this capability (meaning it still didn't exist as of that
+    // request). Calling this URL always predictably 404s with an HTML
+    // error page, not JSON. That failure used to re-throw out of this
+    // method, which aborted connect()'s whole startup sequence — meaning
+    // _fetchCommunitySentiment() and _fetchTopTraders() below never even
+    // got a chance to run, every single time, even though those are (once
+    // fixed — see _fetchCommunitySentiment) genuinely real, working
+    // endpoints. Economic calendar data for this system already comes
+    // from Finnhub (see index.js's pollEconomicCalendar) — this was
+    // always redundant with a real, working source, on top of hitting a
+    // URL that was never going to work. Now a documented no-op;
+    // getEconomicCalendar()/getUpcomingHighImpactEvents() correctly keep
+    // returning empty rather than claiming stale/fake data.
+    return;
+  }
+
+  async _fetchEconomicCalendarDisabled_seeCommentAbove() {
     if (!this.sessionManager.getSession()) return;
 
     try {
