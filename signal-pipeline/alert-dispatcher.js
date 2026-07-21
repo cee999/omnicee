@@ -872,6 +872,7 @@ class LongPollManager {
     this._offset  = 0;
     this._running = false;
     this._timer   = null;
+    this._conflictWarned = false;
   }
 
   start() {
@@ -889,18 +890,38 @@ class LongPollManager {
   async _poll() {
     if (!this._running) return;
 
+    let nextDelay = 500;
     try {
       const updates = await this._client.getUpdates(this._offset, 30);
       for (const update of (updates || [])) {
         this._offset = update.update_id + 1;
         await this._handler(update);
       }
+      this._conflictWarned = false;
     } catch (err) {
-      console.error('[LongPoll] Error:', err.message);
+      // FIX: a 409 here means Telegram is rejecting this getUpdates call
+      // because ANOTHER process is already long-polling with the exact
+      // same bot token — Telegram only allows one consumer at a time. That
+      // can't be fixed by retrying at all, let alone every 500ms forever;
+      // it needs the OTHER running instance stopped (a duplicate Render
+      // service, an old deploy that didn't fully terminate, a local dev
+      // instance — check for more than one place this token is live).
+      // Backing off hard and only logging once per backoff window turns an
+      // infinite ~2x/second spam into one clear, actionable line a minute.
+      const isConflict = err.message?.includes('409') || err.message?.includes('Conflict');
+      if (isConflict) {
+        nextDelay = 30000;
+        if (!this._conflictWarned) {
+          console.error('[LongPoll] 409 Conflict: another process is already polling this bot token. This will not resolve by retrying — find and stop the other running instance (duplicate Render service, an old deploy still alive, or a local dev instance using the same TELEGRAM_BOT_TOKEN). Backing off to 30s between attempts until it clears.');
+          this._conflictWarned = true;
+        }
+      } else {
+        console.error('[LongPoll] Error:', err.message);
+      }
     }
 
     if (this._running) {
-      this._timer = setTimeout(() => this._poll(), 500);
+      this._timer = setTimeout(() => this._poll(), nextDelay);
     }
   }
 }
