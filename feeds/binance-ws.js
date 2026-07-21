@@ -17,12 +17,15 @@
 
 const WebSocket = require('ws');
 const EventEmitter = require('events');
+const https = require('https');
 
 const BASE_URL = 'wss://stream.binance.com:9443';
+const REST_BASE_URL = 'https://api.binance.com';
 const HEARTBEAT_INTERVAL = 30000;
 const INITIAL_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 60000;  // FIX: Add max limit to prevent infinite delays
 const MAX_BACKOFF_MULTIPLIER = 2;
+const MAX_CANDLE_HISTORY = 500; // matches the existing cap in _storeCandle below
 
 // FIX: OMNICEE uses MetaTrader-style timeframe labels internally (M1, M5, M15,
 // M30, H1, H4, D1, W1) — e.g. agents are configured with timeframe: 'H1'.
@@ -44,6 +47,52 @@ function toBinanceInterval(tf) {
   if (MT_TO_BINANCE_INTERVAL[upper]) return MT_TO_BINANCE_INTERVAL[upper];
   // Already Binance-style (e.g. '1h', '15m', '1d') — Binance intervals are lowercase.
   return tf.toLowerCase();
+}
+
+// ─────────────────────────────────────────────
+//  REST HELPERS
+// ─────────────────────────────────────────────
+// FIX: BinanceFeed previously made zero REST calls of any kind — pure
+// WebSocket only, no history backfill. Every symbol/timeframe started
+// completely cold on every boot or restart, building history only from
+// live ticks going forward (on an H1 candle needing ~50 bars of lookback,
+// that's 2+ days of uptime before agents have a usable window). Binance's
+// public klines endpoint needs no API key at all for historical candle
+// data — the .env.example BINANCE_API_KEY/SECRET vars were documented as
+// enabling this and never actually did anything; that comment has been
+// corrected separately. This brings BinanceFeed in line with BybitFeed
+// (feeds/bybit-ws.js), which already preloads via its own public REST call.
+class BinanceREST {
+  static fetchKlines(symbol, interval, limit = MAX_CANDLE_HISTORY) {
+    return new Promise((resolve, reject) => {
+      const url = `${REST_BASE_URL}/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+      https.get(url, (res) => {
+        let data = '';
+        res.on('data', (c) => { data += c; });
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(data);
+            if (!Array.isArray(parsed)) {
+              // Binance returns a plain object like {"code":-1121,"msg":"Invalid symbol."}
+              // on a bad symbol/param instead of an error status — same silent-shape
+              // risk as Alpha Vantage's Note/Information and FMP's Error Message.
+              return reject(new Error(parsed?.msg || 'Binance klines returned a non-array response'));
+            }
+            const candles = parsed.map(k => ({
+              timestamp: Number(k[0]) || 0,
+              open:  parseFloat(k[1]) || 0,
+              high:  parseFloat(k[2]) || 0,
+              low:   parseFloat(k[3]) || 0,
+              close: parseFloat(k[4]) || 0,
+              volume: parseFloat(k[5]) || 0,
+              isClosed: true, // any candle from a completed historical fetch is, by definition, closed
+            }));
+            resolve(candles);
+          } catch (e) { reject(e); }
+        });
+      }).on('error', reject);
+    });
+  }
 }
 
 class BinanceFeed extends EventEmitter {
@@ -81,6 +130,8 @@ class BinanceFeed extends EventEmitter {
         throw new Error('No streams generated from symbols');
       }
 
+      await this._preloadHistory();
+
       const url = `${BASE_URL}/stream?streams=${streams.join('/')}`;
       console.log(`[BinanceFeed] Connecting to ${streams.length} streams...`);
 
@@ -94,6 +145,36 @@ class BinanceFeed extends EventEmitter {
       console.error('[BinanceFeed] Connection error:', err.message);
       this._scheduleReconnect();
     }
+  }
+
+  async _preloadHistory() {
+    console.log('[BinanceFeed] Preloading historical candles...');
+    const tasks = [];
+    for (const symbol of this.symbols) {
+      for (const tf of this.timeframes) {
+        const interval = toBinanceInterval(tf);
+        if (!interval) continue;
+        tasks.push(
+          BinanceREST.fetchKlines(symbol.toUpperCase(), interval, MAX_CANDLE_HISTORY)
+            .then(candles => {
+              // Keyed on the uppercase symbol to match _storeCandle exactly —
+              // Binance's live payload (msg.data.s) is always uppercase, but
+              // this.symbols isn't normalized in the constructor, so using the
+              // as-configured casing here could silently key preloaded
+              // history under a different string than live ticks ever hit.
+              this.candleStore.set(`${symbol.toUpperCase()}_${tf}`, candles);
+              console.log(`[BinanceFeed] Loaded ${candles.length} candles for ${symbol} ${tf}`);
+            })
+            // One symbol/timeframe failing (bad symbol, transient network
+            // error, rate limit) must not block the others — same isolation
+            // Promise.all + a per-task .catch() gives BybitFeed's preload.
+            .catch(err => console.error(`[BinanceFeed] History load failed ${symbol} ${tf}: ${err.message}`))
+        );
+      }
+    }
+    await Promise.all(tasks);
+    const total = [...this.candleStore.values()].reduce((sum, arr) => sum + arr.length, 0);
+    console.log(`[BinanceFeed] Preload complete. Total candles: ${total}`);
   }
 
   _buildStreams() {
