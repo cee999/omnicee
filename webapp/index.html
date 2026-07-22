@@ -892,6 +892,7 @@ const state = {
   filterSig: 'ALL',
   currentView: 'dashboard',
   connected: false,
+  reconnectAttempts: 0,
   sessionStart: Date.now(),
 };
 
@@ -978,6 +979,7 @@ if ('serviceWorker' in navigator) {
 
 socket.on('connect', () => {
   state.connected = true;
+  state.reconnectAttempts = 0;
   setStatus('live', 'LIVE');
   socket.emit('get_history', { limit: 50 });
   hydrateFromApi();
@@ -985,13 +987,25 @@ socket.on('connect', () => {
   setText('about-since', new Date(state.sessionStart).toLocaleTimeString());
 });
 socket.on('connect_error', err => {
-  setStatus('error', 'OFFLINE');
+  // FIX: previously this only ever showed a bare "OFFLINE"/"RECONNECTING"
+  // with zero indication of WHY — an auth rejection (wrong/expired token)
+  // and a genuine network/server-down failure look visually identical,
+  // so there was no way to tell "the server is unreachable" apart from
+  // "the server is up but rejecting your credentials" without opening dev
+  // tools. Now the actual reason is shown in the status text itself.
+  const isAuthError = /token|auth|missing|expired/i.test(err.message || '');
+  setStatus('error', isAuthError ? 'AUTH ERROR' : 'OFFLINE');
   console.warn('[OMNICEE]', err.message);
-  // Outside Telegram with no working app token, a connect error is almost
-  // certainly missing/invalid credentials rather than a network blip.
   if (!initData && !appToken) showLogin(err.message === 'Missing app token' ? '' : 'Session expired — enter your token again.');
 });
-socket.on('disconnect', () => { state.connected = false; setStatus('', 'RECONNECTING'); });
+socket.on('reconnect_attempt', (attempt) => {
+  state.reconnectAttempts = attempt;
+  setStatus('', `RECONNECTING (${attempt})`);
+});
+socket.on('disconnect', () => {
+  state.connected = false;
+  setStatus('', state.reconnectAttempts > 0 ? `RECONNECTING (${state.reconnectAttempts})` : 'RECONNECTING');
+});
 
 socket.on('history', msg => {
   for (const sig of msg.signals || []) ingestSignal(sig, false);
