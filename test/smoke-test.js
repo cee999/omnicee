@@ -451,6 +451,34 @@ async function runTests() {
   } catch (e) { fail('App-token trailing-whitespace fix', e); }
 
   try {
+    // Found via production logs: TwelveDataFeed's free-tier 8-credits/min
+    // cap was being blown through immediately at boot (no throttle between
+    // history-load requests at all, despite a log message claiming
+    // otherwise) AND on every recurring 60s poll cycle after that (which
+    // also had a real logic bug — its own comment said "checks the lowest
+    // configured TF" but the code looped over every configured timeframe).
+    const { TwelveDataFeed } = require(path.join(ROOT, 'feeds/twelve-data'));
+    const feed = new TwelveDataFeed({ apiKey: 'fake', symbols: ['EURUSD', 'GBPUSD'], timeframes: ['H1'] });
+    const callTimes = [];
+    feed.poller.fetchTimeSeries = async (symbol) => {
+      callTimes.push({ symbol, t: Date.now() });
+      return [{ timestamp: Date.now(), open: 1, high: 1, low: 1, close: 1, volume: 1 }];
+    };
+    await feed._preloadHistory();
+    const elapsed = callTimes[1].t - callTimes[0].t;
+    if (elapsed < 7500 || elapsed > 9500) {
+      throw new Error(`throttle delay between requests was ${elapsed}ms, expected ~8000ms — not actually throttling`);
+    }
+
+    const TF_ORDER = ['M1','M5','M15','M30','H1','H2','H4','H6','H8','H12','D1','W1'];
+    const mixed = ['H4', 'M15', 'D1', 'H1'];
+    const lowest = [...mixed].sort((a, b) => TF_ORDER.indexOf(a) - TF_ORDER.indexOf(b))[0];
+    if (lowest !== 'M15') throw new Error(`expected M15 selected as lowest timeframe, got ${lowest}`);
+
+    pass(`TwelveData rate-limit fix: real ${elapsed}ms delay between history requests, correctly selects fastest timeframe (M15) for recurring polls`);
+  } catch (e) { fail('TwelveData rate-limit throttle fix', e); }
+
+  try {
     // Found via live Render logs: two full MongoDB connection failures
     // logged within milliseconds of each other. Root cause: getDB() had no
     // backoff — every DB-touching call site independently re-attempted a

@@ -76,6 +76,17 @@ const TIMEFRAMES = {
 };
 
 const MAX_CANDLE_HISTORY = 500;
+// FIX: TwelveData's free tier caps at 8 API credits/minute. Each history
+// request costs 1 credit, and _preloadHistory() below was firing one
+// request per symbol/timeframe combo back-to-back with no pacing at all —
+// the "respecting quota" log message was aspirational, not actually
+// implemented. With 5+ symbols x 4 timeframes, that's 20+ requests fired
+// within seconds, blowing through the 8/minute cap almost immediately
+// (confirmed in production logs: "9 API credits were used... current
+// limit being 8" on request #9, seconds after boot). 8000ms between
+// requests keeps this safely under 8/minute (7.5/min) with margin.
+const HISTORY_LOAD_DELAY_MS = 8000;
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Free tier default — override via config.requestsPerMinute for paid tiers
 const DEFAULT_REQUESTS_PER_MINUTE = 8;
@@ -636,9 +647,16 @@ class TwelveDataFeed extends EventEmitter {
   }
 
   async _preloadHistory() {
-    console.log('[TwelveDataFeed] Preloading historical candles (respecting quota — this may take a moment)...');
+    console.log(`[TwelveDataFeed] Preloading historical candles (respecting free-tier quota — ~${HISTORY_LOAD_DELAY_MS / 1000}s between requests, this will take a few minutes)...`);
+    let isFirst = true;
     for (const symbol of this.symbols) {
       for (const tf of this.timeframes) {
+        // FIX: this delay is the actual fix — previously nothing here
+        // paced requests at all, so the free tier's 8-credits/minute cap
+        // was blown through in the first ~10 seconds of boot.
+        if (!isFirst) await sleep(HISTORY_LOAD_DELAY_MS);
+        isFirst = false;
+
         const interval = TIMEFRAMES[tf] || tf;
         try {
           const candles = await this.poller.fetchTimeSeries(symbol, interval, MAX_CANDLE_HISTORY);
@@ -706,41 +724,69 @@ class TwelveDataFeed extends EventEmitter {
   }
 
   _startCandlePolling() {
-    // Poll for new candle closes every minute (checks the lowest configured TF)
+    // Poll for new candle closes every minute, checking only the lowest
+    // (fastest-updating) configured timeframe — higher timeframes close far
+    // less often (an H4 candle only closes every 4 hours) so re-checking
+    // them every 60s is both wasteful and, on a rate-limited free tier,
+    // actively harmful.
+    // FIX: the comment above already said "checks the lowest configured
+    // TF", but the code below looped over ALL of this.timeframes — a real
+    // mismatch between stated intent and implementation. Combined with zero
+    // throttling between requests, this meant every single 60-second cycle
+    // fired one request per symbol PER timeframe, back-to-back — with 5+
+    // symbols x 4 timeframes, ~20 requests every minute, permanently
+    // blowing through TwelveData's free-tier 8-credits/minute cap on every
+    // cycle for as long as the app runs (not just once at boot, unlike
+    // _preloadHistory() above). Now: only the fastest timeframe is checked,
+    // and remaining per-symbol requests are paced.
+    const TF_ORDER = ['M1','M5','M15','M30','H1','H2','H4','H6','H8','H12','D1','W1'];
+    const lowestTf = [...this.timeframes].sort((a, b) => TF_ORDER.indexOf(a) - TF_ORDER.indexOf(b))[0];
+    if (!lowestTf) return;
+
     const checkIntervalMs = 60000;
-    this._candlePollTimer = setInterval(async () => {
+    const runCycle = async () => {
+      let isFirst = true;
       for (const symbol of this.symbols) {
-        for (const tf of this.timeframes) {
-          try {
-            const interval = TIMEFRAMES[tf] || tf;
-            const recent = await this.poller.fetchTimeSeries(symbol, interval, 2);
-            if (recent.length === 0) continue;
+        if (!isFirst) await sleep(HISTORY_LOAD_DELAY_MS);
+        isFirst = false;
 
-            const latest = recent[recent.length - 1];
-            const existing = this.candleStore.get(symbol, tf);
-            const lastStored = existing[existing.length - 1];
+        try {
+          const interval = TIMEFRAMES[lowestTf] || lowestTf;
+          const recent = await this.poller.fetchTimeSeries(symbol, interval, 2);
+          if (recent.length === 0) continue;
 
-            const isNew = !lastStored || latest.timestamp > lastStored.timestamp;
-            const candles = this.candleStore.upsert(symbol, tf, latest);
+          const latest = recent[recent.length - 1];
+          const existing = this.candleStore.get(symbol, lowestTf);
+          const lastStored = existing[existing.length - 1];
 
-            this.emit('candle_update', { symbol, timeframe: tf, candle: latest, candles, isClosed: true });
+          const isNew = !lastStored || latest.timestamp > lastStored.timestamp;
+          const candles = this.candleStore.upsert(symbol, lowestTf, latest);
 
-            if (isNew) {
-              this._stats.candlesEmitted++;
-              this.emit('candle', {
-                symbol, timeframe: tf, candle: latest, candles: [...candles],
-                marketState: TDMarketStateEngine.isOpen(symbol, Date.now()),
-                earningsProximity: this.trackEarnings ? this.earnings.isNearEarnings(symbol) : null,
-                timestamp: Date.now(),
-              });
-            }
-          } catch (err) {
-            this._stats.errorsCount++;
-            // Don't spam errors for every symbol/tf combo — log once per cycle is enough context
+          this.emit('candle_update', { symbol, timeframe: lowestTf, candle: latest, candles, isClosed: true });
+
+          if (isNew) {
+            this._stats.candlesEmitted++;
+            this.emit('candle', {
+              symbol, timeframe: lowestTf, candle: latest, candles: [...candles],
+              marketState: TDMarketStateEngine.isOpen(symbol, Date.now()),
+              earningsProximity: this.trackEarnings ? this.earnings.isNearEarnings(symbol) : null,
+              timestamp: Date.now(),
+            });
           }
+        } catch (err) {
+          this._stats.errorsCount++;
+          // Don't spam errors for every symbol — log once per cycle is enough context
         }
       }
-    }, checkIntervalMs);
+      // Self-rescheduling rather than setInterval: guarantees the next
+      // cycle only starts checkIntervalMs after THIS one (including all its
+      // internal per-symbol delays) fully finishes, regardless of symbol
+      // count — setInterval would fire on a fixed clock and could overlap
+      // with a still-running previous cycle once there are enough symbols
+      // for the throttled loop to exceed 60s on its own.
+      this._candlePollTimer = setTimeout(runCycle, checkIntervalMs);
+    };
+    this._candlePollTimer = setTimeout(runCycle, checkIntervalMs);
   }
 
   _handlePrice(data) {
