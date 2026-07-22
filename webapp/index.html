@@ -1595,7 +1595,7 @@ function renderNews() {
     return `<div class="intel-item">
     <div class="intel-body">
       <div class="intel-title">${esc(n.headline || 'Untitled')}</div>
-      <div class="intel-desc">${esc(n.summary ? n.summary.slice(0, 140) : (n.source || ''))}</div>
+      <div class="intel-desc">${esc(n.summary ? stripHtml(n.summary).slice(0, 140) : (n.source || ''))}</div>
       <div class="intel-time"><span style="color:${catColor};text-transform:uppercase;">${esc(n._category || '')}</span> · ${esc(n.source || '')} · ${time(n.datetime ? n.datetime * 1000 : Date.now())}</div>
     </div>
   </div>`;
@@ -2023,6 +2023,15 @@ function setText(id, text) { const el = document.getElementById(id); if (el) el.
 function setClass(id, className) { const el = document.getElementById(id); if (el) el.className = className; }
 function esc(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
 function escAttr(value) { return esc(value).replace(/`/g, '&#96;'); }
+// FIX: some aggregated news sources (confirmed: investingLive, via
+// finnhub.marketNews()) return raw HTML markup in the summary field
+// instead of plain text — e.g. a literal '<ul><li><a href="...">' list.
+// esc() was correctly preventing that from executing as real HTML (doing
+// exactly its job), but the visible side effect was the escaped tag text
+// itself showing up as garbage in the card ("&lt;ul&gt;&lt;li&gt;...").
+// This strips markup from the source string first so what's left is the
+// actual readable text, then esc() still runs on that as normal.
+function stripHtml(value) { return String(value ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(); }
 function time(ts) { if (!ts) return '--:--'; const d = new Date(ts); return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
 // FIX: regime codes (signal-pipeline/regime-engine.js) are either a pure
 // trend label or a composite `${structure}_${volatility}` string like
