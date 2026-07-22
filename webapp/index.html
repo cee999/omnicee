@@ -963,7 +963,22 @@ document.getElementById('login-token-input')?.addEventListener('keydown', e => {
 // failed request to explain why nothing is loading.
 if (!initData && !appToken) showLogin();
 
-const socket = io({ path: '/socket.io', auth: currentAuth, transports: ['websocket', 'polling'] });
+// FIX: Socket.IO's default connection timeout (20s) is shorter than
+// Render's typical free-tier cold-start time (30-60s+ after inactivity
+// spin-down). Every reconnect attempt was giving up on the server waking
+// up before it had even finished doing so, then immediately firing a new,
+// equally-doomed attempt — a storm of short, redundant handshakes instead
+// of one attempt patiently waiting through a single cold start. Widened
+// the timeout to comfortably cover a cold start, and capped
+// reconnectionDelayMax so attempts after that don't space out too far.
+const socket = io({
+  path: '/socket.io',
+  auth: currentAuth,
+  transports: ['websocket', 'polling'],
+  timeout: 60000,
+  reconnectionDelay: 1000,
+  reconnectionDelayMax: 10000,
+});
 
 // PWA: register the service worker (app-shell caching only — see sw.js's
 // own header for why API/socket data is deliberately never cached). Runs
