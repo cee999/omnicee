@@ -705,6 +705,18 @@ class BybitFeed extends EventEmitter {
     for (const sym of this.symbols) this.orderBooks.set(sym, new BybitOrderBookEngine(sym));
   }
 
+  // FIX: same root cause as TwelveDataFeed (feeds/twelve-data.js) —
+  // isConnected() lived on the internal BybitWSConnection class, never
+  // exposed on BybitFeed itself, so DataIntegrityMonitor's
+  // `typeof instance.isConnected === 'function'` check was false and every
+  // health check silently reported connected: null ("UNKNOWN") regardless
+  // of real state. BybitFeed's own getStats() already reached into
+  // this._conn?.isConnected() internally (see below) — just never as a
+  // method callable on the outer instance.
+  isConnected() {
+    return this._conn?.isConnected() ?? false;
+  }
+
   async connect() {
     console.log(`[BybitFeed] Connecting (${this.category}) for: ${this.symbols.join(', ')}`);
     this._stats.startTime = Date.now();

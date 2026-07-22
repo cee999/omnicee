@@ -407,7 +407,9 @@ class TDRESTPoller {
       const result = await httpGetJSON(url);
 
       if (result.status === 'error') {
-        throw new Error(`Twelve Data error for ${symbol}: ${result.message}`);
+        const err = new Error(`Twelve Data error for ${symbol}: ${result.message}`);
+        err.tdCode = result.code; // 429 = rate limit exceeded — let callers detect this reliably
+        throw err;
       }
 
       const values = result.values || [];
@@ -622,6 +624,21 @@ class TwelveDataFeed extends EventEmitter {
     this._stats = { quotesReceived: 0, candlesEmitted: 0, errorsCount: 0, startTime: null, mode: 'UNINITIALIZED' };
   }
 
+  // FIX: DataIntegrityMonitor.check() (feeds/data-integrity-monitor.js) calls
+  // instance.isConnected() on whatever it was registered with — but the
+  // registered instance is TwelveDataFeed, and the only isConnected() in
+  // this file lived on the internal TDWebSocketEngine class instead, never
+  // exposed here. `typeof instance.isConnected === 'function'` was false,
+  // so every check silently fell through to connected: null, which the
+  // frontend renders as literally "UNKNOWN" — regardless of whether the
+  // feed was actually connected, disconnected, or never even started.
+  // Reflects whichever live mode is actually active: real WebSocket
+  // (paid tier) or the REST-poll fallback (free tier, this.pollIntervalMs).
+  isConnected() {
+    if (this._wsEngine) return this._wsEngine.isConnected();
+    return Boolean(this._pollTimer);
+  }
+
   async connect() {
     console.log(`[TwelveDataFeed] Connecting for: ${this.symbols.join(', ')}`);
     this._stats.startTime = Date.now();
@@ -648,6 +665,29 @@ class TwelveDataFeed extends EventEmitter {
 
   async _preloadHistory() {
     console.log(`[TwelveDataFeed] Preloading historical candles (respecting free-tier quota — ~${HISTORY_LOAD_DELAY_MS / 1000}s between requests, this will take a few minutes)...`);
+    // Two complementary fixes here, found independently from the same
+    // production rate-limit errors:
+    //
+    // 1. THROTTLE (below, via sleep(HISTORY_LOAD_DELAY_MS)): nothing here
+    //    used to pace requests at all — with 5+ symbols x 4 timeframes,
+    //    20+ requests fired within seconds of boot, blowing through the
+    //    free tier's 8-credits/minute cap almost immediately (confirmed in
+    //    production logs: request #9 already over the limit).
+    //
+    // 2. RETRY-AFTER-RESET (_retryAfterQuotaReset below): rapid redeploys
+    //    are common during active development (this app's own render.yaml
+    //    auto-deploys on every commit), and QuotaManager's per-minute call
+    //    log is in-memory only — a fresh process starts with an empty log
+    //    even though Twelve Data's own server-side per-minute counter for
+    //    this API key does NOT reset on restart. A new process can
+    //    therefore believe it has full budget while the account is
+    //    actually already near/over the real limit from calls the
+    //    previous process just made. The throttle above prevents most of
+    //    this, but can't know about quota consumed by a different,
+    //    already-exited process — so anything that still fails on a 429
+    //    gets one background retry ~65s later, once the real per-minute
+    //    window has actually rolled over, rather than being abandoned
+    //    permanently.
     let isFirst = true;
     for (const symbol of this.symbols) {
       for (const tf of this.timeframes) {
@@ -665,10 +705,32 @@ class TwelveDataFeed extends EventEmitter {
         } catch (err) {
           console.error(`[TwelveDataFeed] History load failed ${symbol} ${tf}: ${err.message}`);
           this._stats.errorsCount++;
+          if (err.tdCode === 429 || /run out of API credits/i.test(err.message)) {
+            this._retryAfterQuotaReset(symbol, tf, interval);
+          }
         }
       }
     }
     console.log(`[TwelveDataFeed] Preload complete. Total candles: ${this.candleStore.size()}`);
+  }
+
+  // Fire-and-forget: not awaited by _preloadHistory(), so it never delays
+  // connect() or anything sequenced after it. One retry only — if the
+  // real per-minute window is still exhausted 65s later (e.g. something
+  // else is also actively consuming this same account's quota), give up
+  // for that symbol/timeframe rather than retrying indefinitely; it will
+  // still pick up live data going forward.
+  _retryAfterQuotaReset(symbol, tf, interval) {
+    setTimeout(async () => {
+      try {
+        const candles = await this.poller.fetchTimeSeries(symbol, interval, MAX_CANDLE_HISTORY);
+        this.candleStore.bulkLoad(symbol, tf, candles);
+        console.log(`[TwelveDataFeed] Retry succeeded: loaded ${candles.length} candles for ${symbol} ${tf}`);
+      } catch (err) {
+        console.error(`[TwelveDataFeed] Retry also failed for ${symbol} ${tf}: ${err.message}`);
+        this._stats.errorsCount++;
+      }
+    }, 65000);
   }
 
   _connectWebSocket() {

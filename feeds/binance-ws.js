@@ -116,6 +116,17 @@ class BinanceFeed extends EventEmitter {
     this.reconnectAttempts = 0;
     this.backoffMs = INITIAL_BACKOFF_MS;
     this._heartbeatTimer = null;
+    // FIX: BinanceFeed had no connection-state tracking at all — not even
+    // an internal flag, let alone a public isConnected(). Bybit and
+    // TwelveData had the same functional gap in a different shape (the
+    // method existed, just on an internal helper class never exposed on
+    // the outer Feed — see the matching fixes in those two files); Binance
+    // simply never tracked it anywhere. DataIntegrityMonitor.check()
+    // (feeds/data-integrity-monitor.js) calls instance.isConnected() on
+    // whatever it was registered with, falls through to connected: null
+    // when that check fails — rendered by the frontend as literally
+    // "UNKNOWN", regardless of whether the feed was actually connected.
+    this._connected = false;
   }
 
   async connect() {
@@ -194,8 +205,13 @@ class BinanceFeed extends EventEmitter {
     return streams;
   }
 
+  isConnected() {
+    return this._connected;
+  }
+
   _onOpen() {
     console.log('[BinanceFeed] Connected');
+    this._connected = true;
     this.reconnectAttempts = 0;
     this.backoffMs = INITIAL_BACKOFF_MS;
     this.emit('connected');
@@ -285,6 +301,7 @@ class BinanceFeed extends EventEmitter {
 
   _onClose() {
     console.log('[BinanceFeed] Disconnected');
+    this._connected = false;
     this.emit('disconnected');
     this._stopHeartbeat();
     this._scheduleReconnect();

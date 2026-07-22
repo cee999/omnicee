@@ -198,6 +198,7 @@ const candleStores = {};
 // BybitFeed (which has a fully-built funding/OI engine) was never even
 // instantiated anywhere. Populated by bootBybitFeed() below.
 const bybitFundingOI = {}; // symbol -> { fundingRate, openInterest }
+const lastMarketEmit = {}; // symbol -> timestamp of last market_update emit (throttle, see onCandle)
 
 /** Per-symbol agent instances */
 const agentPool = {};
@@ -1215,10 +1216,21 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
     catch (e) { log.warn(`ExecutionEngine.onPrice error [${symbol}]: ${e.message}`); }
   }
 
-  // Only run analysis on closed candles to avoid noise
-  if (isClosed) {
-    // Stream latest price to Mini App
-    if (wsBus && candle) {
+  // FIX: market_update (the frontend's live price ticker) was gated behind
+  // `if (isClosed)` below — meaning it only updated once per candle CLOSE,
+  // i.e. once every 15 minutes at best (M15 is the fastest configured
+  // timeframe). A user watching the Mini App would see a price sit frozen
+  // for up to 15 minutes, which looks exactly like a dead feed rather than
+  // a market that ticks every second. This now runs on every tick
+  // (isClosed true or false), throttled to ~1/sec per symbol so a busy
+  // pair sending many ticks/sec doesn't flood the socket. runAnalysisCycle
+  // below stays gated on isClosed — re-running full agent analysis on
+  // every raw tick would be far too expensive/noisy; only the price
+  // stream needed to be tick-driven, not the analysis.
+  if (wsBus && candle) {
+    const now = Date.now();
+    if (!lastMarketEmit[symbol] || now - lastMarketEmit[symbol] >= 1000) {
+      lastMarketEmit[symbol] = now;
       wsBus.emit('market_update', {
         symbol,
         price:  candle.close,
@@ -1226,6 +1238,10 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
         bias:   lastVotes[symbol]?.smc?.direction?.toLowerCase() || 'wait',
       });
     }
+  }
+
+  // Only run analysis on closed candles to avoid noise
+  if (isClosed) {
     setImmediate(() => runAnalysisCycle(symbol, timeframe));
   }
 }
