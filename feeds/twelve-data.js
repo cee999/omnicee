@@ -613,6 +613,21 @@ class TwelveDataFeed extends EventEmitter {
     this._stats = { quotesReceived: 0, candlesEmitted: 0, errorsCount: 0, startTime: null, mode: 'UNINITIALIZED' };
   }
 
+  // FIX: DataIntegrityMonitor.check() (feeds/data-integrity-monitor.js) calls
+  // instance.isConnected() on whatever it was registered with — but the
+  // registered instance is TwelveDataFeed, and the only isConnected() in
+  // this file lived on the internal TDWebSocketEngine class instead, never
+  // exposed here. `typeof instance.isConnected === 'function'` was false,
+  // so every check silently fell through to connected: null, which the
+  // frontend renders as literally "UNKNOWN" — regardless of whether the
+  // feed was actually connected, disconnected, or never even started.
+  // Reflects whichever live mode is actually active: real WebSocket
+  // (paid tier) or the REST-poll fallback (free tier, this.pollIntervalMs).
+  isConnected() {
+    if (this._wsEngine) return this._wsEngine.isConnected();
+    return Boolean(this._pollTimer);
+  }
+
   async connect() {
     console.log(`[TwelveDataFeed] Connecting for: ${this.symbols.join(', ')}`);
     this._stats.startTime = Date.now();
