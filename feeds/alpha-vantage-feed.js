@@ -18,7 +18,14 @@ const https = require('https');
 const EventEmitter = require('events');
 
 const BASE_URL = 'https://www.alphavantage.co/query';
-const DEFAULT_POLL_MS = 15 * 60000; // Alpha Vantage free tier: 25 req/day — poll conservatively
+// FIX: was 15 minutes, with a comment claiming this was "conservative" —
+// the math says otherwise: 24h / 15min = 96 requests/day, nearly 4x over
+// the free tier's 25/day cap. 90 minutes gives ~16 scheduled polls/day,
+// leaving real margin for the extra immediate poll fired on every process
+// restart (see constructor below) — which, on a Render free-tier instance
+// cycling through spin-down/wake-up repeatedly, can happen many times a
+// day on top of the scheduled interval alone.
+const DEFAULT_POLL_MS = 90 * 60000;
 const DEFAULT_TOPICS = 'financial_markets,economy_macro,economy_monetary';
 
 function httpGetJSON(url) {
