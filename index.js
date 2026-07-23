@@ -1324,6 +1324,34 @@ function buildSingletons() {
       dispatcher?.sendMessage?.(`🛑 *CIRCUIT BREAKER OPEN*\n${data.reason}`)?.catch(() => {});
     });
     log.info('DrawdownGuard created');
+
+    // FIX: risk_update (the frontend's Session PnL / Circuit Breaker /
+    // Sizing display) previously only broadcast from inside the
+    // signal-approval code path (see onSignal-adjacent block further down)
+    // — meaning risk state, which is a standing system property that
+    // exists whether or not any trade has ever happened (circuit breaker
+    // status, current sizing factor), never reached the frontend until
+    // the first signal was approved. A quiet system with zero approved
+    // signals looked completely static even though DrawdownGuard was
+    // tracking real state the entire time. Now also broadcasts on a
+    // timer, independent of signal activity — the on-approval emission
+    // stays as-is for immediate updates right after a trade.
+    if (wsBus) {
+      const broadcastRiskUpdate = () => {
+        const status = drawdownGuard.getStatus();
+        wsBus.emit('risk_update', {
+          state: status.circuitBreaker?.state,
+          dailyPnl: status.daily?.pnl,
+          drawdown: status.drawdown?.current,
+          consecLoss: status.consecLoss,
+          maxDailyLoss: status.daily?.limit,
+          maxDrawdown: status.drawdown?.limit,
+          netSizingFactor: status.netSizingFactor,
+        });
+      };
+      broadcastRiskUpdate();
+      setInterval(broadcastRiskUpdate, 30000); // every 30s, independent of signal activity
+    }
   }
 
   // SignalScorer — pass circuit breaker state check
