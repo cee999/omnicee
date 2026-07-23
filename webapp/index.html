@@ -893,6 +893,7 @@ const state = {
   currentView: 'dashboard',
   connected: false,
   reconnectAttempts: 0,
+  lastConnectErrorLabel: null,
   sessionStart: Date.now(),
 };
 
@@ -995,6 +996,7 @@ if ('serviceWorker' in navigator) {
 socket.on('connect', () => {
   state.connected = true;
   state.reconnectAttempts = 0;
+  state.lastConnectErrorLabel = null;
   setStatus('live', 'LIVE');
   socket.emit('get_history', { limit: 50 });
   hydrateFromApi();
@@ -1009,17 +1011,45 @@ socket.on('connect_error', err => {
   // "the server is up but rejecting your credentials" without opening dev
   // tools. Now the actual reason is shown in the status text itself.
   const isAuthError = /token|auth|missing|expired/i.test(err.message || '');
-  setStatus('error', isAuthError ? 'AUTH ERROR' : 'OFFLINE');
+  state.lastConnectErrorLabel = isAuthError ? 'AUTH ERROR' : 'OFFLINE';
+  setStatus('error', state.reconnectAttempts > 0
+    ? `${state.lastConnectErrorLabel} (${state.reconnectAttempts})`
+    : state.lastConnectErrorLabel);
   console.warn('[OMNICEE]', err.message);
+
+  // FIX: once appToken is cached in localStorage, this app never re-prompts
+  // for login no matter how many times the server rejects it — including
+  // if the token was changed on Render at any point after the browser
+  // first logged in. That leaves the app retrying forever with a token
+  // that can never succeed, and zero way for the person to know they need
+  // to re-enter it. If we're using appToken (not Telegram) and the server
+  // is specifically rejecting it as invalid (not just "not configured" or
+  // a generic outage), clear the stale value and show the login screen
+  // again so a fresh token can actually be entered.
+  if (!initData && appToken && isAuthError && /invalid/i.test(err.message || '')) {
+    localStorage.removeItem('omnicee_app_token');
+    appToken = '';
+    showLogin('Your saved login has expired or changed — please enter the current token.');
+    return;
+  }
   if (!initData && !appToken) showLogin(err.message === 'Missing app token' ? '' : 'Session expired — enter your token again.');
 });
 socket.on('reconnect_attempt', (attempt) => {
+  // FIX: this fires on every single retry cycle, and was unconditionally
+  // overwriting whatever connect_error had just shown with a generic
+  // "RECONNECTING (N)" — since the wait between attempts is the longest
+  // part of the cycle, that generic text is what a person looking at the
+  // screen would see almost all the time, masking the actual reason
+  // connect_error had just identified. Now it preserves that reason
+  // (once known) alongside the attempt count instead of replacing it.
   state.reconnectAttempts = attempt;
-  setStatus('', `RECONNECTING (${attempt})`);
+  setStatus('', state.lastConnectErrorLabel
+    ? `${state.lastConnectErrorLabel} (${attempt})`
+    : `RECONNECTING (${attempt})`);
 });
 socket.on('disconnect', () => {
   state.connected = false;
-  setStatus('', state.reconnectAttempts > 0 ? `RECONNECTING (${state.reconnectAttempts})` : 'RECONNECTING');
+  setStatus('', state.lastConnectErrorLabel || (state.reconnectAttempts > 0 ? `RECONNECTING (${state.reconnectAttempts})` : 'RECONNECTING'));
 });
 
 socket.on('history', msg => {
