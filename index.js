@@ -23,6 +23,14 @@
 
 try { require('dotenv').config(); } catch (_) { /* dotenv optional */ }
 
+// FIX: index.js never required db.js at all before — only api/server.js
+// did. Needed now so feeds can persist/restore candle history across
+// restarts (see feeds/twelve-data.js's saveCandleHistory/loadCandleHistory
+// usage) rather than re-fetching everything from rate-limited APIs on
+// every boot. db.js's own functions already no-op safely when
+// MONGODB_URI isn't set, so no extra guarding needed here.
+const db = require('./db');
+
 const LOG_LEVEL = (process.env.LOG_LEVEL || 'info').toLowerCase();
 const log = {
   debug: (...a) => LOG_LEVEL === 'debug' && console.log('[DEBUG]', ...a),
@@ -1928,6 +1936,7 @@ function buildFeeds() {
       apiKey:     TWELVE_KEY,
       symbols:    tdSymbols,
       timeframes: TIMEFRAMES_STR,
+      db,
     });
     tdFeed.on('candle',        (d) => macroSymbols.includes(d.symbol) ? intermarketAnalyzer.updatePrice(d.symbol, d.candle.close, d.candle.timestamp || Date.now()) : onCandle(d));
     tdFeed.on('candle_update', (d) => macroSymbols.includes(d.symbol) ? intermarketAnalyzer.updatePrice(d.symbol, d.candle.close, d.candle.timestamp || Date.now()) : onCandle(d));

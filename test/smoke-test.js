@@ -479,6 +479,40 @@ async function runTests() {
   } catch (e) { fail('TwelveData rate-limit throttle fix', e); }
 
   try {
+    // Direct fix for the user's "always running out of TwelveData/
+    // AlphaVantage keys" complaint: candle history was 100% in-memory with
+    // zero persistence, so every restart (including Render free-tier
+    // spin-down/wake-up cycles, not just deliberate redeploys) needed a
+    // full re-fetch of everything, repeatedly burning through both
+    // rate-limited feeds' quotas throughout the day.
+    const { TwelveDataFeed } = require(path.join(ROOT, 'feeds/twelve-data'));
+    let apiCallCount = 0;
+    const fakeDb = {
+      loadCandleHistory: async (source, symbol) => {
+        if (symbol === 'EURUSD') {
+          return { candles: [{ timestamp: Date.now(), open: 1, high: 1, low: 1, close: 1, volume: 1 }], updatedAt: new Date(Date.now() - 5 * 60000) };
+        }
+        if (symbol === 'GBPUSD') {
+          return { candles: [{ timestamp: Date.now() - 7200000, open: 1, high: 1, low: 1, close: 1, volume: 1 }], updatedAt: new Date(Date.now() - 2 * 3600000) };
+        }
+        return null;
+      },
+      saveCandleHistory: async () => ({ saved: true }),
+    };
+    const feed = new TwelveDataFeed({ apiKey: 'fake', symbols: ['EURUSD', 'GBPUSD'], timeframes: ['M15'], db: fakeDb });
+    feed.poller.fetchTimeSeries = async () => { apiCallCount++; return [{ timestamp: Date.now(), open: 1, high: 1, low: 1, close: 1, volume: 1 }]; };
+    await feed._preloadHistory();
+
+    if (apiCallCount !== 1) {
+      throw new Error(`expected exactly 1 API call (fresh EURUSD data should skip its call, stale GBPUSD should not), got ${apiCallCount}`);
+    }
+    if (feed.candleStore.get('EURUSD', 'M15').length === 0) {
+      throw new Error('EURUSD should have been populated directly from Mongo-stored history');
+    }
+    pass(`Candle persistence: fresh Mongo data (5min old) skipped the API call, stale data (2h old) correctly fell through to a real fetch`);
+  } catch (e) { fail('Candle history Mongo persistence', e); }
+
+  try {
     // Found via live Render logs: two full MongoDB connection failures
     // logged within milliseconds of each other. Root cause: getDB() had no
     // backoff — every DB-touching call site independently re-attempted a

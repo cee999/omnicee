@@ -168,6 +168,18 @@ async function ensureIndexes(db) {
         { key: { patternKey: 1, closedAt: -1 }, name: 'outcome_pattern_recent' },
         { key: { symbol: 1, timeframe: 1, closedAt: -1 }, name: 'outcome_symbol_recent' },
       ]),
+      // FIX: candle history was 100% in-memory with zero persistence —
+      // every process restart (including Render free-tier spin-down/wake
+      // cycles, not just deliberate redeploys) required a full re-fetch of
+      // every symbol/timeframe from the rate-limited feeds (TwelveData:
+      // 8 credits/min, AlphaVantage: 25 req/day), repeatedly burning
+      // through both quotas throughout the day. One document per
+      // source/symbol/timeframe combo, upserted wholesale on each save —
+      // matches how the in-memory candleStore already keys data, so
+      // loading on boot is a direct drop-in rather than needing translation.
+      db.collection('candle_history').createIndexes([
+        { key: { source: 1, symbol: 1, timeframe: 1 }, unique: true, name: 'uniq_candle_series' },
+      ]),
     ]);
   } catch (err) {
     console.warn('[MongoDB] Index creation warning:', err.message);
@@ -237,6 +249,49 @@ async function saveMarketSnapshot(snapshot) {
   } catch (err) {
     console.error('[MongoDB] saveMarketSnapshot error:', err.message);
     return { error: true, message: err.message };
+  }
+}
+
+const MAX_STORED_CANDLES = 500;
+
+// Persist a full candle-history array for one symbol/timeframe on one feed
+// (source distinguishes e.g. 'twelvedata' vs 'binance' vs 'bybit', since
+// the same symbol can exist on more than one feed with different candle
+// semantics). Replaces the whole array on each call — matches how the
+// in-memory candleStore already treats a symbol/timeframe series as one
+// coherent unit, not row-per-candle.
+async function saveCandleHistory(source, symbol, timeframe, candles) {
+  try {
+    const db = await getDB();
+    if (!db) return { skipped: true, reason: 'MONGODB_URI not configured' };
+    if (!Array.isArray(candles) || candles.length === 0) return { skipped: true, reason: 'no candles to save' };
+    await indexPromise;
+    await db.collection('candle_history').updateOne(
+      { source, symbol, timeframe },
+      { $set: { candles: candles.slice(-MAX_STORED_CANDLES), updatedAt: new Date() } },
+      { upsert: true }
+    );
+    return { saved: true, count: Math.min(candles.length, MAX_STORED_CANDLES) };
+  } catch (err) {
+    console.error('[MongoDB] saveCandleHistory error:', err.message);
+    return { error: true, message: err.message };
+  }
+}
+
+// Returns { candles, updatedAt } or null if nothing stored / DB unavailable.
+// Callers decide staleness themselves (e.g. "if updatedAt is more than N
+// minutes old, treat this as a starting point and still fetch the most
+// recent few candles to fill the gap" rather than a full re-fetch).
+async function loadCandleHistory(source, symbol, timeframe) {
+  try {
+    const db = await getDB();
+    if (!db) return null;
+    const doc = await db.collection('candle_history').findOne({ source, symbol, timeframe });
+    if (!doc || !Array.isArray(doc.candles) || doc.candles.length === 0) return null;
+    return { candles: doc.candles, updatedAt: doc.updatedAt };
+  } catch (err) {
+    console.error('[MongoDB] loadCandleHistory error:', err.message);
+    return null;
   }
 }
 
@@ -472,6 +527,8 @@ module.exports = {
   saveSignal,
   saveTelemetry,
   saveMarketSnapshot,
+  saveCandleHistory,
+  loadCandleHistory,
   getRecentSignals,
   getTelemetry,
   saveTradeOutcome,

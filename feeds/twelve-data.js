@@ -584,6 +584,18 @@ class TDWebSocketEngine extends EventEmitter {
 //  8. MAIN TWELVE DATA FEED CLASS
 // ─────────────────────────────────────────────
 
+// How fresh Mongo-stored candle history needs to be, per timeframe, to
+// skip re-fetching from the API entirely on boot. Roughly 2x each
+// timeframe's own candle-close interval — stale enough data still gets a
+// normal fetch (and gets persisted fresh afterward), but data from a
+// recent restart (the common case on a Render free-tier instance cycling
+// through spin-down/wake-up) is reused directly.
+const CANDLE_FRESHNESS_MS = {
+  M1: 2 * 60000, M5: 10 * 60000, M15: 30 * 60000, M30: 60 * 60000,
+  H1: 2 * 3600000, H2: 4 * 3600000, H4: 8 * 3600000, H6: 12 * 3600000,
+  H8: 16 * 3600000, H12: 24 * 3600000, D1: 2 * 86400000, W1: 14 * 86400000,
+};
+
 class TwelveDataFeed extends EventEmitter {
   /**
    * @param {Object} config
@@ -613,6 +625,12 @@ class TwelveDataFeed extends EventEmitter {
     this.candleStore = new TDCandleStore();
     this.poller      = new TDRESTPoller(this.apiKey, this.quota);
     this.earnings    = new TDEarningsCalendar();
+    // Optional — enables persisting/restoring candle history across
+    // restarts so boot doesn't need to re-fetch everything from this
+    // rate-limited feed every single time. No-ops safely if not provided
+    // or if MONGODB_URI isn't configured (db.js's own functions already
+    // handle that).
+    this.db = config.db || null;
 
     this._prices = new Map();
     this._prevPrices = new Map();
@@ -691,6 +709,30 @@ class TwelveDataFeed extends EventEmitter {
     let isFirst = true;
     for (const symbol of this.symbols) {
       for (const tf of this.timeframes) {
+        // FIX: check Mongo BEFORE touching the API at all. If we have
+        // fresh-enough persisted history from a previous run (very common
+        // on a Render free-tier instance that just cycled through a
+        // spin-down/wake-up), use it directly — zero API credits spent,
+        // zero throttle delay needed. This is the actual fix for "always
+        // running out of TwelveData/AlphaVantage keys": the API usage
+        // itself was already correctly throttled (see below), but every
+        // restart still needed a FULL re-fetch of everything because
+        // nothing persisted history across restarts at all.
+        if (this.db) {
+          try {
+            const stored = await this.db.loadCandleHistory('twelvedata', symbol, tf);
+            if (stored && stored.updatedAt) {
+              const ageMs = Date.now() - new Date(stored.updatedAt).getTime();
+              const freshWindow = CANDLE_FRESHNESS_MS[tf] || 3600000;
+              if (ageMs < freshWindow) {
+                this.candleStore.bulkLoad(symbol, tf, stored.candles);
+                console.log(`[TwelveDataFeed] Restored ${stored.candles.length} candles for ${symbol} ${tf} from Mongo (${Math.round(ageMs / 60000)}min old, API call skipped)`);
+                continue;
+              }
+            }
+          } catch (_) { /* Mongo read failed — fall through to normal API fetch */ }
+        }
+
         // FIX: this delay is the actual fix — previously nothing here
         // paced requests at all, so the free tier's 8-credits/minute cap
         // was blown through in the first ~10 seconds of boot.
@@ -702,6 +744,7 @@ class TwelveDataFeed extends EventEmitter {
           const candles = await this.poller.fetchTimeSeries(symbol, interval, MAX_CANDLE_HISTORY);
           this.candleStore.bulkLoad(symbol, tf, candles);
           console.log(`[TwelveDataFeed] Loaded ${candles.length} candles for ${symbol} ${tf}`);
+          if (this.db) this.db.saveCandleHistory('twelvedata', symbol, tf, candles).catch(() => {});
         } catch (err) {
           console.error(`[TwelveDataFeed] History load failed ${symbol} ${tf}: ${err.message}`);
           this._stats.errorsCount++;
@@ -726,6 +769,7 @@ class TwelveDataFeed extends EventEmitter {
         const candles = await this.poller.fetchTimeSeries(symbol, interval, MAX_CANDLE_HISTORY);
         this.candleStore.bulkLoad(symbol, tf, candles);
         console.log(`[TwelveDataFeed] Retry succeeded: loaded ${candles.length} candles for ${symbol} ${tf}`);
+        if (this.db) this.db.saveCandleHistory('twelvedata', symbol, tf, candles).catch(() => {});
       } catch (err) {
         console.error(`[TwelveDataFeed] Retry also failed for ${symbol} ${tf}: ${err.message}`);
         this._stats.errorsCount++;
@@ -828,6 +872,7 @@ class TwelveDataFeed extends EventEmitter {
 
           if (isNew) {
             this._stats.candlesEmitted++;
+            if (this.db) this.db.saveCandleHistory('twelvedata', symbol, lowestTf, candles).catch(() => {});
             this.emit('candle', {
               symbol, timeframe: lowestTf, candle: latest, candles: [...candles],
               marketState: TDMarketStateEngine.isOpen(symbol, Date.now()),
