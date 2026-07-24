@@ -1849,7 +1849,34 @@ function buildFeeds() {
     binanceFeed.on('candle_update', onCandle);
     binanceFeed.on('error', (err) => log.error(`BinanceFeed error: ${feedErrorMessage(err)}`));
     binanceFeed.on('connected', () => log.info(`BinanceFeed connected for: ${cryptoSymbols.join(', ')}`));
-    feeds.push({ name: 'BinanceFeed', instance: binanceFeed, symbols: cryptoSymbols });
+    feeds.push({
+      name: 'BinanceFeed', instance: binanceFeed, symbols: cryptoSymbols,
+      // FIX: _preloadHistory() (feeds/binance-ws.js) populates the feed's
+      // OWN internal candleStore, but onCandle() below — the only thing
+      // that ever writes into THIS file's separate candleStores object,
+      // which regimeEngine/MarketOutlookBuilder/runAnalysisCycle all
+      // actually read from — only fires on live 'candle'/'candle_update'
+      // events. Historical backfill deliberately does NOT emit those
+      // events (avoiding a burst of stale-candle analysis triggers), so
+      // the preloaded data never reached the real analysis pipeline at
+      // all — candleStores stayed empty regardless of how well the feed
+      // itself preloaded, and regime classification's `candles.length >=
+      // 50` gate (signal-pipeline/market-outlook.js) would only ever be
+      // satisfied by waiting out real time from a cold start.
+      seed: () => {
+        let seeded = 0;
+        for (const symbol of cryptoSymbols) {
+          for (const tf of TIMEFRAMES_STR) {
+            const candles = binanceFeed.candleStore.get(`${symbol.toUpperCase()}_${tf}`);
+            if (candles?.length && candleStores[symbol]) {
+              candleStores[symbol][tf] = candles.slice(-MAX_CANDLES_PER_TF);
+              seeded += candles.length;
+            }
+          }
+        }
+        if (seeded) log.info(`BinanceFeed: seeded ${seeded} preloaded candles into the analysis pipeline`);
+      },
+    });
     log.info(`BinanceFeed configured for: ${cryptoSymbols.join(', ')}`);
     if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('BinanceFeed', binanceFeed, cryptoSymbols);
   }
@@ -1910,7 +1937,25 @@ function buildFeeds() {
     });
     bybitFeed.on('error', (err) => log.error(`BybitFeed error: ${feedErrorMessage(err)}`));
     bybitFeed.on('connected', () => log.info(`BybitFeed connected for: ${cryptoSymbols.join(', ')}`));
-    feeds.push({ name: 'BybitFeed', instance: bybitFeed, symbols: cryptoSymbols });
+    feeds.push({
+      name: 'BybitFeed', instance: bybitFeed, symbols: cryptoSymbols,
+      // FIX: same root cause as BinanceFeed's seed above — BybitFeed's own
+      // _preloadHistory() (feeds/bybit-ws.js) already existed before this
+      // session's work and had this exact same gap the whole time.
+      seed: () => {
+        let seeded = 0;
+        for (const symbol of cryptoSymbols) {
+          for (const tf of TIMEFRAMES_STR) {
+            const candles = bybitFeed.candleStore.get(bybitFeed.category, symbol, tf);
+            if (candles?.length && candleStores[symbol]) {
+              candleStores[symbol][tf] = candles.slice(-MAX_CANDLES_PER_TF);
+              seeded += candles.length;
+            }
+          }
+        }
+        if (seeded) log.info(`BybitFeed: seeded ${seeded} preloaded candles into the analysis pipeline`);
+      },
+    });
     log.info(`BybitFeed configured for: ${cryptoSymbols.join(', ')}`);
     if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('BybitFeed', bybitFeed, cryptoSymbols);
   }
@@ -1934,7 +1979,25 @@ function buildFeeds() {
     tdFeed.on('price',         (d) => macroSymbols.includes(d.symbol) && intermarketAnalyzer.updatePrice(d.symbol, d.price, d.timestamp || Date.now()));
     tdFeed.on('error', (err) => log.error(`TwelveData error: ${feedErrorMessage(err)}`));
     tdFeed.on('connected', () => log.info(`TwelveDataFeed connected for: ${tdSymbols.join(', ')}`));
-    feeds.push({ name: 'TwelveDataFeed', instance: tdFeed, symbols: fxSymbols });
+    feeds.push({
+      name: 'TwelveDataFeed', instance: tdFeed, symbols: fxSymbols,
+      // FIX: same root cause again — TwelveDataFeed's preload (plus this
+      // session's rate-limit retry fix) populates its own candleStore, but
+      // never reached the shared candleStores object either.
+      seed: () => {
+        let seeded = 0;
+        for (const symbol of fxSymbols) {
+          for (const tf of TIMEFRAMES_STR) {
+            const candles = tdFeed.candleStore.get(symbol, tf);
+            if (candles?.length && candleStores[symbol]) {
+              candleStores[symbol][tf] = candles.slice(-MAX_CANDLES_PER_TF);
+              seeded += candles.length;
+            }
+          }
+        }
+        if (seeded) log.info(`TwelveDataFeed: seeded ${seeded} preloaded candles into the analysis pipeline`);
+      },
+    });
     log.info(`TwelveDataFeed configured for: ${fxSymbols.join(', ')}${macroSymbols.length ? ` (+ macro: ${macroSymbols.join(', ')})` : ''}`);
     if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('TwelveDataFeed', tdFeed, fxSymbols);
   } else if (fxSymbols.length && !TWELVE_KEY) {
@@ -2016,6 +2079,7 @@ async function main() {
   for (const f of feeds) {
     try {
       await f.instance.connect();
+      f.seed?.();
       log.info(`${f.name} connected`);
       connected++;
     } catch (err) {
