@@ -1000,6 +1000,7 @@ socket.on('connect', () => {
   setStatus('live', 'LIVE');
   socket.emit('get_history', { limit: 50 });
   hydrateFromApi();
+  hydrateActiveView(state.currentView);
   setText('about-transport', socket.io.engine.transport.name.toUpperCase());
   setText('about-since', new Date(state.sessionStart).toLocaleTimeString());
 });
@@ -1210,6 +1211,15 @@ async function hydrateNews() {
   renderNews();
 }
 setInterval(hydrateNews, 5 * 60 * 1000);
+// FIX: this was the only periodic refresh anywhere in the app. Every other
+// tab only ever refreshed on first visit (fixed above), on switching back
+// to it (fixed above), or on a socket reconnect (fixed above) — someone
+// parked on a single tab for an extended stretch with a stable connection
+// and no reason to switch away got nothing further. Outlook/Heatmap/Monitor
+// hold data (economic calendar, COT, per-symbol regime tiles, feed health)
+// that isn't otherwise pushed live over the socket, so it needs its own
+// pull-based refresh independent of navigation or connection events.
+setInterval(() => hydrateActiveView(state.currentView), 60 * 1000);
 async function hydrateJournal() {
   const headers = authHeaders();
   try {
@@ -1266,6 +1276,21 @@ function ingestSignal(sig, rerender = true) {
 }
 
 /* ── Navigation ── */
+// FIX: this was inlined only inside switchView(), meaning the currently
+// active tab only ever refreshed when the person clicked to it. On a
+// reconnect (Render free tier spins down and reconnects constantly),
+// hydrateFromApi() refreshed a fixed handful of things (signals, stats,
+// learning) but never whatever tab was actually on screen — someone
+// sitting on Outlook or Feed Health through a spin-down/wake cycle saw
+// stale data survive the reconnect. Extracted so both call sites use it.
+function hydrateActiveView(viewId) {
+  if (viewId === 'outlook') hydrateOutlook();
+  if (viewId === 'monitor') hydrateBoard();
+  if (viewId === 'heatmap') hydrateHeatmap();
+  if (viewId === 'intel') hydrateNews();
+  if (viewId === 'risk') hydrateJournal();
+  if (viewId === 'tape') { hydrateAuditTrail(); hydrateTelemetry(); }
+}
 function switchView(viewId) {
   state.currentView = viewId;
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
@@ -1279,12 +1304,7 @@ function switchView(viewId) {
   // whatever was cached from the very first time — indefinitely. That's the
   // exact "switching tabs feels static" symptom. These are lightweight REST
   // calls; refetching on every visit is what a live dashboard should do.
-  if (viewId === 'outlook') hydrateOutlook();
-  if (viewId === 'monitor') hydrateBoard();
-  if (viewId === 'heatmap') hydrateHeatmap();
-  if (viewId === 'intel') hydrateNews();
-  if (viewId === 'risk') hydrateJournal();
-  if (viewId === 'tape') { hydrateAuditTrail(); hydrateTelemetry(); }
+  hydrateActiveView(viewId);
   renderAll();
 }
 document.querySelectorAll('[data-view]').forEach(btn => btn.addEventListener('click', () => switchView(btn.dataset.view)));
