@@ -1272,13 +1272,19 @@ function switchView(viewId) {
   document.getElementById('view-' + viewId)?.classList.add('active');
   document.querySelectorAll('.sidebar-btn, .nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === viewId));
   haptic('nav');
-  if (viewId === 'outlook' && !state.outlook) hydrateOutlook();
-  if (viewId === 'monitor' && !state.watchlist.length && !state.feedHealth) hydrateBoard();
-  if (viewId === 'heatmap' && !state.heatmap) hydrateHeatmap();
-  if (viewId === 'intel' && !state.news.length) hydrateNews();
-  if (viewId === 'risk' && !state.journal) hydrateJournal();
-  if (viewId === 'tape' && !state.auditTrail.length) hydrateAuditTrail();
-  if (viewId === 'tape' && !state.telemetry.length) hydrateTelemetry();
+  // FIX: every one of these was gated behind '!state.X' (e.g. '&& !state.outlook')
+  // — meaning it only ever fetched fresh data the FIRST time a tab was ever
+  // visited. Every subsequent visit found state.X already truthy from that
+  // first load, so the guard blocked the refetch and the tab just displayed
+  // whatever was cached from the very first time — indefinitely. That's the
+  // exact "switching tabs feels static" symptom. These are lightweight REST
+  // calls; refetching on every visit is what a live dashboard should do.
+  if (viewId === 'outlook') hydrateOutlook();
+  if (viewId === 'monitor') hydrateBoard();
+  if (viewId === 'heatmap') hydrateHeatmap();
+  if (viewId === 'intel') hydrateNews();
+  if (viewId === 'risk') hydrateJournal();
+  if (viewId === 'tape') { hydrateAuditTrail(); hydrateTelemetry(); }
   renderAll();
 }
 document.querySelectorAll('[data-view]').forEach(btn => btn.addEventListener('click', () => switchView(btn.dataset.view)));
