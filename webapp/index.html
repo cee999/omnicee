@@ -10,37 +10,33 @@
   <link rel="manifest" href="/manifest.json" />
   <link rel="icon" href="/icons/favicon-32.png" type="image/png" />
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
-  <title>OMNICEE — Institutional AI Signal Desk</title>
+  <title>OMNICEE — Mission Control</title>
 
   <!-- Telegram WebApp SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <!-- Socket.IO -->
   <script src="/socket.io/socket.io.js"></script>
-
-  <!-- Chart.js for professional charts -->
+  <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-  <!-- Font Awesome for icons -->
+  <!-- Font Awesome -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
-  <!-- Google Fonts: Inter + JetBrains Mono -->
+  <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700;800&family=Orbitron:wght@700;900&display=swap" rel="stylesheet" />
 
   <style>
-    /* ═══════════════════════════════════════════════
-       DESIGN TOKENS – Modern, Glassmorphism, Dark
-       ═══════════════════════════════════════════════ */
+    /* ═══════════════════════════════════════════════════════════════════
+       DESIGN TOKENS – Mission Control
+       ═══════════════════════════════════════════════════════════════════ */
     :root {
-      --bg: #05070a;
-      --bg-1: #0a0d14;
-      --bg-2: #0f131c;
-      --panel: rgba(18, 26, 38, 0.75);
-      --panel-border: rgba(255, 255, 255, 0.06);
-      --panel-glow: rgba(31, 227, 168, 0.05);
+      --bg: #06090e;
+      --bg-card: rgba(14, 22, 36, 0.75);
+      --border: rgba(255, 255, 255, 0.06);
+      --glow: rgba(31, 227, 168, 0.05);
       --text: #eef2f7;
       --muted: #8b9bb0;
       --faint: #526078;
       --emerald: #1fe3a8;
-      --emerald-dim: #16c492;
       --coral: #ff5470;
       --gold: #e8b64a;
       --amber: #f0b429;
@@ -48,17 +44,13 @@
       --violet: #a78bfa;
       --font-ui: 'Inter', -apple-system, sans-serif;
       --font-mono: 'JetBrains Mono', monospace;
+      --font-display: 'Orbitron', sans-serif;
       --radius: 12px;
       --shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
       --transition: all 0.25s cubic-bezier(0.22, 0.9, 0.32, 1);
     }
 
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
+    * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       background: var(--bg);
       background-image: radial-gradient(ellipse at 20% 0%, rgba(31, 227, 168, 0.04) 0%, transparent 60%),
@@ -70,140 +62,49 @@
       overflow: hidden;
       -webkit-font-smoothing: antialiased;
     }
-
-    ::-webkit-scrollbar {
-      width: 4px;
-      height: 4px;
-    }
-    ::-webkit-scrollbar-track {
-      background: transparent;
-    }
-    ::-webkit-scrollbar-thumb {
-      background: var(--faint);
-      border-radius: 2px;
-    }
+    ::-webkit-scrollbar { width: 3px; height: 3px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--faint); border-radius: 2px; }
 
     /* ─── Login Overlay ─── */
-    .login-overlay {
-      position: fixed;
-      inset: 0;
-      z-index: 1000;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: var(--bg);
-      backdrop-filter: blur(12px);
-      padding: 20px;
-    }
-    .login-overlay.hidden {
-      display: none;
-    }
-    .login-card {
-      width: 100%;
-      max-width: 360px;
-      background: var(--panel);
-      backdrop-filter: blur(16px);
-      border: 1px solid var(--panel-border);
-      border-radius: var(--radius);
-      padding: 32px 28px;
-      box-shadow: var(--shadow);
-    }
-    .login-title {
-      font-family: var(--font-mono);
-      font-size: 14px;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      background: linear-gradient(120deg, var(--emerald), var(--gold));
-      -webkit-background-clip: text;
-      background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-    .login-sub {
-      font-size: 12px;
-      color: var(--muted);
-      margin: 6px 0 18px;
-      line-height: 1.6;
-    }
-    .login-input {
-      width: 100%;
-      height: 44px;
-      padding: 0 14px;
-      background: var(--bg-1);
-      border: 1px solid var(--panel-border);
-      border-radius: 8px;
-      color: var(--text);
-      font-family: var(--font-mono);
-      font-size: 13px;
-      transition: var(--transition);
-    }
-    .login-input:focus {
-      border-color: var(--emerald);
-      box-shadow: 0 0 0 3px rgba(31, 227, 168, 0.15);
-      outline: none;
-    }
-    .login-btn {
-      width: 100%;
-      height: 44px;
-      border-radius: 8px;
-      background: var(--emerald);
-      color: #05070a;
-      font-family: var(--font-mono);
-      font-weight: 700;
-      font-size: 12px;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      transition: var(--transition);
-      margin-top: 12px;
-    }
-    .login-btn:hover {
-      background: var(--emerald-dim);
-      transform: translateY(-1px);
-    }
-    .login-btn:disabled {
-      opacity: 0.5;
-      cursor: default;
-    }
-    .login-error {
-      color: var(--coral);
-      font-size: 11px;
-      margin-top: 10px;
-      min-height: 16px;
-      font-family: var(--font-mono);
-    }
+    .login-overlay { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; background: var(--bg); backdrop-filter: blur(12px); padding: 20px; }
+    .login-overlay.hidden { display: none; }
+    .login-card { width: 100%; max-width: 360px; background: var(--bg-card); backdrop-filter: blur(16px); border: 1px solid var(--border); border-radius: var(--radius); padding: 32px 28px; box-shadow: var(--shadow); }
+    .login-title { font-family: var(--font-display); font-size: 18px; letter-spacing: 0.04em; background: linear-gradient(120deg, var(--emerald), var(--gold)); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+    .login-sub { font-size: 12px; color: var(--muted); margin: 6px 0 18px; line-height: 1.6; }
+    .login-input { width: 100%; height: 44px; padding: 0 14px; background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: var(--font-mono); font-size: 13px; transition: var(--transition); }
+    .login-input:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(31, 227, 168, 0.15); outline: none; }
+    .login-btn { width: 100%; height: 44px; border-radius: 8px; background: var(--emerald); color: #05070a; font-family: var(--font-mono); font-weight: 700; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; transition: var(--transition); margin-top: 12px; }
+    .login-btn:hover { background: #16c492; transform: translateY(-1px); }
+    .login-btn:disabled { opacity: 0.5; cursor: default; }
+    .login-error { color: var(--coral); font-size: 11px; margin-top: 10px; min-height: 16px; font-family: var(--font-mono); }
 
     /* ─── App Layout ─── */
-    .app {
-      height: 100dvh;
-      display: grid;
-      grid-template-rows: 60px 1fr;
-      grid-template-columns: 68px 1fr;
-      gap: 0;
-      background: var(--bg);
-    }
+    .app { height: 100dvh; display: grid; grid-template-rows: 56px 1fr; background: var(--bg); }
 
-    /* Top Bar */
+    /* Top Bar – Command Center */
     .topbar {
-      grid-column: 1 / -1;
       display: flex;
       align-items: center;
       justify-content: space-between;
       padding: 0 20px;
-      background: rgba(10, 13, 20, 0.85);
+      background: rgba(6, 9, 14, 0.85);
       backdrop-filter: blur(12px);
-      border-bottom: 1px solid var(--panel-border);
+      border-bottom: 1px solid var(--border);
       z-index: 10;
+      gap: 16px;
     }
     .brand {
       display: flex;
       align-items: baseline;
-      gap: 8px;
+      gap: 6px;
+      flex-shrink: 0;
     }
     .brand-mark {
-      font-family: 'Inter', sans-serif;
-      font-weight: 800;
-      font-size: 20px;
-      letter-spacing: -0.02em;
+      font-family: var(--font-display);
+      font-weight: 900;
+      font-size: 18px;
+      letter-spacing: 0.02em;
       background: linear-gradient(135deg, var(--emerald), #8be6cb, var(--text));
       -webkit-background-clip: text;
       background-clip: text;
@@ -212,80 +113,65 @@
     .brand-sub {
       font-family: var(--font-mono);
       font-weight: 600;
-      font-size: 9px;
-      letter-spacing: 0.18em;
+      font-size: 8px;
+      letter-spacing: 0.2em;
       color: var(--faint);
       text-transform: uppercase;
     }
     .topbar-center {
       display: flex;
+      align-items: center;
       gap: 12px;
-      align-items: center;
-      overflow: hidden;
       flex: 1;
-      margin: 0 20px;
+      max-width: 600px;
     }
-    .ticker-strip {
-      display: flex;
-      gap: 8px;
-      overflow-x: auto;
-      padding: 4px 0;
-      flex: 1;
-      mask-image: linear-gradient(90deg, #000 92%, transparent);
-      -webkit-mask-image: linear-gradient(90deg, #000 92%, transparent);
-      scrollbar-width: none;
-    }
-    .ticker-strip::-webkit-scrollbar {
-      display: none;
-    }
-    .ticker-pill {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 4px 12px;
-      background: var(--panel);
-      border: 1px solid var(--panel-border);
+    .command-input {
+      width: 100%;
+      height: 34px;
+      padding: 0 14px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
       border-radius: 20px;
-      font-family: var(--font-mono);
-      font-size: 11px;
-      white-space: nowrap;
-      backdrop-filter: blur(4px);
-      transition: var(--transition);
-    }
-    .ticker-pill:hover {
-      border-color: var(--emerald);
-      background: rgba(31, 227, 168, 0.06);
-    }
-    .ticker-pill .sym {
-      font-weight: 700;
       color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      transition: var(--transition);
+      backdrop-filter: blur(4px);
     }
-    .ticker-pill .price {
-      color: var(--muted);
+    .command-input:focus {
+      border-color: var(--emerald);
+      box-shadow: 0 0 20px rgba(31, 227, 168, 0.05);
+      outline: none;
+      background: rgba(255,255,255,0.05);
     }
-    .ticker-pill canvas {
-      display: block;
-      width: 32px;
-      height: 14px;
+    .command-input::placeholder {
+      color: var(--faint);
+      font-size: 11px;
+    }
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
     }
     .conn-badge {
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 6px 14px;
-      background: var(--panel);
-      border: 1px solid var(--panel-border);
+      padding: 4px 14px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
       border-radius: 20px;
       font-family: var(--font-mono);
-      font-size: 10px;
+      font-size: 9px;
       font-weight: 700;
       letter-spacing: 0.06em;
       color: var(--muted);
       backdrop-filter: blur(4px);
     }
     .pulse {
-      width: 8px;
-      height: 8px;
+      width: 7px;
+      height: 7px;
       border-radius: 50%;
       background: var(--amber);
       transition: var(--transition);
@@ -304,687 +190,248 @@
       50% { box-shadow: 0 0 18px rgba(31, 227, 168, 0.7); }
     }
 
-    /* Sidebar */
-    .sidebar {
-      grid-row: 2 / -1;
-      background: rgba(10, 13, 20, 0.8);
-      backdrop-filter: blur(12px);
-      border-right: 1px solid var(--panel-border);
+    /* ─── Navigation Tabs (compact) ─── */
+    .nav-tabs {
       display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 12px 0;
       gap: 4px;
-      overflow-y: auto;
-      scrollbar-width: none;
+      background: rgba(255,255,255,0.02);
+      border-radius: 20px;
+      padding: 2px;
+      border: 1px solid var(--border);
     }
-    .sidebar::-webkit-scrollbar {
-      display: none;
-    }
-    .sidebar-btn {
-      width: 44px;
-      height: 44px;
-      border-radius: var(--radius);
-      display: flex;
-      align-items: center;
-      justify-content: center;
+    .nav-tab {
+      padding: 4px 14px;
+      border-radius: 18px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
       color: var(--faint);
       transition: var(--transition);
-      font-size: 18px;
-      position: relative;
+      cursor: pointer;
+      border: none;
+      background: transparent;
     }
-    .sidebar-btn:hover {
-      color: var(--text);
-      background: rgba(255, 255, 255, 0.04);
-    }
-    .sidebar-btn.active {
+    .nav-tab.active {
       color: var(--emerald);
-      background: rgba(31, 227, 168, 0.1);
-      box-shadow: 0 0 20px rgba(31, 227, 168, 0.05);
+      background: rgba(31, 227, 168, 0.08);
+      box-shadow: 0 0 20px rgba(31, 227, 168, 0.02);
     }
-    .sidebar-btn.active::after {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 20%;
-      height: 60%;
-      width: 2px;
-      background: var(--emerald);
-      border-radius: 0 2px 2px 0;
-    }
-    .sidebar-btn .badge {
-      position: absolute;
-      top: 2px;
-      right: 2px;
-      min-width: 16px;
-      height: 16px;
-      border-radius: 8px;
-      background: var(--coral);
-      color: #fff;
-      font-size: 8px;
-      font-weight: 700;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 0 4px;
-    }
+    .nav-tab:hover { color: var(--text); }
 
-    /* Main Content */
+    /* ─── Main Content ─── */
     .main {
-      grid-row: 2 / -1;
       overflow: hidden;
       position: relative;
-      background: var(--bg);
+      padding: 16px 20px 20px;
     }
-    .view-container {
+    .view {
+      display: none;
       height: 100%;
       overflow-y: auto;
-      padding: 20px 24px 24px;
-      display: none;
-      animation: fadeIn 0.35s ease;
+      animation: fadeIn 0.3s ease;
     }
-    .view-container.active {
-      display: block;
-    }
+    .view.active { display: block; }
     @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(8px); }
+      from { opacity: 0; transform: translateY(6px); }
       to { opacity: 1; transform: translateY(0); }
     }
 
-    /* ─── Cards ─── */
-    .card {
-      background: var(--panel);
+    /* ─── Grid Dashboard (Mission Control) ─── */
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      grid-auto-rows: minmax(180px, auto);
+      gap: 16px;
+      height: 100%;
+    }
+    .grid-item {
+      background: var(--bg-card);
       backdrop-filter: blur(12px);
-      border: 1px solid var(--panel-border);
+      border: 1px solid var(--border);
       border-radius: var(--radius);
+      padding: 16px 18px;
       box-shadow: var(--shadow);
-      overflow: hidden;
       transition: var(--transition);
-    }
-    .card:hover {
-      border-color: rgba(255, 255, 255, 0.08);
-    }
-    .card-header {
-      padding: 14px 18px;
-      border-bottom: 1px solid var(--panel-border);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      font-family: var(--font-mono);
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      color: var(--faint);
-    }
-    .card-body {
-      padding: 18px;
-    }
-    .card-body.flush {
-      padding: 0;
-    }
-    .grid-2 {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 16px;
-    }
-    .grid-3 {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 16px;
-    }
-
-    /* ─── Hero ─── */
-    .hero {
-      background: linear-gradient(145deg, rgba(31, 227, 168, 0.04), rgba(10, 13, 20, 0.8));
-      border: 1px solid var(--panel-border);
-      border-radius: var(--radius);
-      padding: 24px 28px 16px;
-      margin-bottom: 20px;
-      position: relative;
       overflow: hidden;
-    }
-    .hero::before {
-      content: '';
-      position: absolute;
-      top: -40%;
-      right: -10%;
-      width: 300px;
-      height: 300px;
-      background: radial-gradient(circle, rgba(31, 227, 168, 0.03), transparent 70%);
-      pointer-events: none;
-    }
-    .hero-top {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      flex-wrap: wrap;
-      gap: 16px;
-    }
-    .hero-left {
       display: flex;
       flex-direction: column;
     }
-    .hero-label {
-      font-family: var(--font-mono);
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      color: var(--faint);
+    .grid-item:hover {
+      border-color: rgba(255,255,255,0.08);
     }
-    .hero-number {
-      font-family: 'Inter', sans-serif;
-      font-weight: 700;
-      font-size: 48px;
-      line-height: 1;
-      margin-top: 4px;
-      letter-spacing: -0.02em;
-      transition: var(--transition);
-    }
-    .hero-number.good { color: var(--emerald); }
-    .hero-number.bad { color: var(--coral); }
-    .hero-sub {
-      display: flex;
-      gap: 12px;
-      margin-top: 10px;
-      flex-wrap: wrap;
-    }
-    .hero-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 4px 14px;
-      border-radius: 20px;
-      background: var(--panel);
-      border: 1px solid var(--panel-border);
-      font-family: var(--font-mono);
-      font-size: 10px;
-      font-weight: 700;
-      color: var(--muted);
-      backdrop-filter: blur(4px);
-    }
-    .hero-chip.on {
-      border-color: var(--emerald);
-      color: var(--emerald);
-      background: rgba(31, 227, 168, 0.06);
-    }
-    .hero-chip.off {
-      border-color: var(--coral);
-      color: var(--coral);
-      background: rgba(255, 84, 112, 0.06);
-    }
-    .hero-spark {
-      height: 50px;
-      margin-top: 12px;
-    }
-    .hero-spark canvas {
-      width: 100%;
-      height: 100%;
-    }
-
-    /* ─── Metrics Strip ─── */
-    .metrics-strip {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-      gap: 1px;
-      background: var(--panel-border);
-      border-radius: var(--radius);
-      overflow: hidden;
-      margin-bottom: 20px;
-    }
-    .metric-cell {
-      background: var(--panel);
-      padding: 16px 18px;
-      transition: var(--transition);
-    }
-    .metric-cell:hover {
-      background: rgba(255, 255, 255, 0.02);
-    }
-    .metric-label {
+    .grid-item .card-header {
       font-family: var(--font-mono);
       font-size: 9px;
       font-weight: 700;
       letter-spacing: 0.1em;
       text-transform: uppercase;
       color: var(--faint);
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
     }
-    .metric-value {
+    .grid-item .card-value {
       font-family: 'Inter', sans-serif;
       font-weight: 700;
-      font-size: 22px;
-      line-height: 1.2;
+      font-size: 32px;
+      line-height: 1;
+      margin-top: auto;
+    }
+    .grid-item .card-sub {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--muted);
       margin-top: 4px;
     }
-    .metric-sub {
-      font-family: var(--font-mono);
-      font-size: 9.5px;
-      color: var(--muted);
-      margin-top: 2px;
+    .grid-item .chart-container {
+      flex: 1;
+      min-height: 0;
+      position: relative;
+    }
+    .grid-item .chart-container canvas {
+      width: 100% !important;
+      height: 100% !important;
     }
 
-    /* ─── Tables ─── */
-    .table-wrap {
-      overflow-x: auto;
+    /* ─── Signal Feed (left column) ─── */
+    .signal-feed {
+      grid-row: 1 / span 3;
+      overflow-y: auto;
+      padding-right: 4px;
     }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-family: var(--font-mono);
-      font-size: 11px;
+    .signal-item {
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: var(--transition);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
     }
-    table thead {
-      position: sticky;
-      top: 0;
-      z-index: 2;
-      background: var(--bg-1);
+    .signal-item:hover { background: rgba(255,255,255,0.02); margin: 0 -6px; padding: 10px 6px; border-radius: 6px; }
+    .signal-item.selected { background: rgba(31, 227, 168, 0.04); margin: 0 -6px; padding: 10px 6px; border-radius: 6px; border-left: 2px solid var(--emerald); }
+    .signal-item .sym { font-weight: 700; font-family: var(--font-mono); }
+    .signal-item .side { font-size: 10px; font-weight: 700; }
+    .signal-item .side.long { color: var(--emerald); }
+    .signal-item .side.short { color: var(--coral); }
+    .signal-item .score { font-family: var(--font-mono); font-weight: 700; font-size: 15px; }
+    .signal-item .time { font-family: var(--font-mono); font-size: 9px; color: var(--faint); }
+
+    /* ─── Detail Slide-Over ─── */
+    .detail-overlay {
+      position: fixed;
+      top: 56px;
+      right: -420px;
+      width: 400px;
+      height: calc(100dvh - 56px);
+      background: var(--bg-card);
+      backdrop-filter: blur(20px);
+      border-left: 1px solid var(--border);
+      box-shadow: -8px 0 40px rgba(0,0,0,0.6);
+      transition: right 0.35s cubic-bezier(0.22, 0.9, 0.32, 1);
+      z-index: 50;
+      padding: 20px;
+      overflow-y: auto;
     }
-    table th {
-      text-align: left;
-      padding: 10px 14px;
+    .detail-overlay.open { right: 0; }
+    .detail-overlay .close-btn {
+      position: absolute;
+      top: 12px;
+      right: 16px;
+      background: none;
+      border: none;
       color: var(--faint);
-      font-weight: 700;
-      font-size: 9px;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      border-bottom: 1px solid var(--panel-border);
-    }
-    table td {
-      padding: 10px 14px;
-      border-bottom: 1px solid var(--panel-border);
-      color: var(--muted);
-      vertical-align: middle;
-    }
-    table tr {
+      font-size: 20px;
       cursor: pointer;
       transition: var(--transition);
     }
-    table tr:hover {
-      background: rgba(255, 255, 255, 0.02);
-    }
-    table tr.selected {
-      background: rgba(31, 227, 168, 0.04);
-      border-left: 2px solid var(--emerald);
-    }
-    .dir-badge {
-      display: inline-block;
-      padding: 2px 10px;
-      border-radius: 12px;
-      font-weight: 700;
-      font-size: 9px;
-      letter-spacing: 0.04em;
-    }
-    .dir-badge.LONG {
-      background: rgba(31, 227, 168, 0.12);
-      color: var(--emerald);
-      border: 1px solid rgba(31, 227, 168, 0.2);
-    }
-    .dir-badge.SHORT {
-      background: rgba(255, 84, 112, 0.12);
-      color: var(--coral);
-      border: 1px solid rgba(255, 84, 112, 0.2);
-    }
-    .grade-badge {
-      display: inline-block;
-      width: 22px;
-      height: 22px;
-      line-height: 22px;
-      text-align: center;
-      border-radius: 6px;
-      font-weight: 800;
-      font-size: 11px;
-    }
-    .grade-badge.A {
-      background: rgba(232, 182, 74, 0.12);
-      color: var(--gold);
-      border: 1px solid rgba(232, 182, 74, 0.2);
-    }
-    .grade-badge.B {
-      background: rgba(31, 227, 168, 0.12);
-      color: var(--emerald);
-    }
-    .grade-badge.C {
-      background: rgba(240, 180, 41, 0.12);
-      color: var(--amber);
-    }
-    .grade-badge.D, .grade-badge.F {
-      background: rgba(255, 84, 112, 0.12);
-      color: var(--coral);
-    }
-
-    /* ─── Charts ─── */
-    .chart-container {
-      position: relative;
-      height: 200px;
-      width: 100%;
-    }
-    .chart-container.small {
-      height: 80px;
-    }
-
-    /* ─── Radar ─── */
-    .radar-wrap {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 8px 0;
-    }
-    .radar-wrap canvas {
-      max-width: 200px;
-      height: auto;
-    }
-    .radar-caption {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      color: var(--muted);
-      margin-top: 8px;
-      text-align: center;
-    }
-    .radar-caption b {
-      color: var(--text);
-    }
-    .radar-legend {
-      display: flex;
-      gap: 16px;
-      margin-top: 8px;
-      flex-wrap: wrap;
-      justify-content: center;
-    }
-    .radar-legend-item {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      font-family: var(--font-mono);
-      font-size: 9px;
-      color: var(--faint);
-    }
-    .radar-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-    }
-
-    /* ─── Detail Panel ─── */
-    .kv-row {
-      display: flex;
-      justify-content: space-between;
-      padding: 6px 0;
-      border-bottom: 1px solid var(--panel-border);
-      font-family: var(--font-mono);
-      font-size: 11px;
-    }
-    .kv-row:last-child {
-      border-bottom: none;
-    }
-    .kv-key {
-      color: var(--faint);
-    }
-    .kv-val {
-      color: var(--text);
-      font-weight: 500;
-      text-align: right;
-    }
-    .kv-val.good { color: var(--emerald); }
-    .kv-val.bad { color: var(--coral); }
-
-    .agent-vote {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 8px 0;
-      border-bottom: 1px solid var(--panel-border);
-    }
-    .agent-vote:last-child {
-      border-bottom: none;
-    }
-    .agent-icon {
-      width: 28px;
-      height: 28px;
-      border-radius: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-family: var(--font-mono);
-      font-size: 10px;
-      font-weight: 800;
-      flex-shrink: 0;
-    }
-    .agent-info {
-      flex: 1;
-    }
-    .agent-name {
-      font-weight: 600;
-      font-size: 12px;
-    }
-    .agent-detail {
-      font-size: 10px;
-      color: var(--faint);
-    }
-    .agent-score {
-      font-family: var(--font-mono);
-      font-size: 14px;
-      font-weight: 700;
-    }
-
-    /* ─── Outcome Buttons ─── */
-    .outcome-row {
-      display: flex;
-      gap: 6px;
-      margin-top: 12px;
-    }
-    .outcome-btn {
-      flex: 1;
-      height: 34px;
-      border-radius: 8px;
-      font-family: var(--font-mono);
-      font-size: 11px;
-      font-weight: 700;
-      transition: var(--transition);
-      border: 1px solid transparent;
-    }
-    .outcome-btn.win {
-      background: rgba(31, 227, 168, 0.08);
-      color: var(--emerald);
-      border-color: rgba(31, 227, 168, 0.2);
-    }
-    .outcome-btn.win:hover {
-      background: rgba(31, 227, 168, 0.16);
-    }
-    .outcome-btn.be {
-      background: rgba(240, 180, 41, 0.08);
-      color: var(--amber);
-      border-color: rgba(240, 180, 41, 0.2);
-    }
-    .outcome-btn.be:hover {
-      background: rgba(240, 180, 41, 0.16);
-    }
-    .outcome-btn.loss {
-      background: rgba(255, 84, 112, 0.08);
-      color: var(--coral);
-      border-color: rgba(255, 84, 112, 0.2);
-    }
-    .outcome-btn.loss:hover {
-      background: rgba(255, 84, 112, 0.16);
-    }
-
-    /* ─── Risk Gauge ─── */
-    .gauge-wrap {
-      display: flex;
-      align-items: center;
-      gap: 20px;
-      padding: 8px 0;
-    }
-    .gauge-wrap canvas {
-      flex-shrink: 0;
-    }
-    .gauge-readout {
-      flex: 1;
-    }
-    .gauge-state {
-      font-family: 'Inter', sans-serif;
-      font-weight: 700;
-      font-size: 24px;
-    }
-    .gauge-state.good { color: var(--emerald); }
-    .gauge-state.warn { color: var(--amber); }
-    .gauge-state.bad { color: var(--coral); }
-    .gauge-reason {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      color: var(--muted);
-      margin-top: 4px;
-    }
-
-    /* ─── Empty State ─── */
-    .empty-state {
-      padding: 40px 20px;
-      text-align: center;
-      color: var(--faint);
-      font-family: var(--font-mono);
-      font-size: 12px;
-      line-height: 1.7;
-    }
-    .empty-state i {
-      font-size: 28px;
-      margin-bottom: 8px;
-      display: block;
-      color: var(--faintest);
+    .detail-overlay .close-btn:hover { color: var(--text); }
+    .detail-overlay .detail-title {
+      font-family: var(--font-display);
+      font-size: 16px;
+      letter-spacing: 0.02em;
+      margin-bottom: 16px;
     }
 
     /* ─── Responsive ─── */
     @media (max-width: 1024px) {
-      .app {
-        grid-template-columns: 1fr;
-        grid-template-rows: 60px 1fr 64px;
+      .dashboard-grid {
+        grid-template-columns: 1fr 1fr;
+        grid-auto-rows: minmax(150px, auto);
       }
-      .sidebar {
-        display: none;
-      }
-      .bottom-nav {
+      .signal-feed { grid-row: auto; }
+      .detail-overlay { width: 100%; right: -100%; }
+    }
+    @media (max-width: 600px) {
+      .dashboard-grid { grid-template-columns: 1fr; }
+      .topbar .topbar-center { display: none; }
+      .nav-tabs { display: none; }
+      .mobile-nav {
         display: flex !important;
-        grid-row: 3 / -1;
-        background: rgba(10, 13, 20, 0.85);
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: rgba(6, 9, 14, 0.9);
         backdrop-filter: blur(12px);
-        border-top: 1px solid var(--panel-border);
-        overflow-x: auto;
-        scrollbar-width: none;
-        padding: 0 8px;
+        border-top: 1px solid var(--border);
+        padding: 6px 0;
+        justify-content: space-around;
+        z-index: 20;
       }
-      .bottom-nav::-webkit-scrollbar { display: none; }
-      .bottom-nav .nav-btn {
-        flex: 0 0 auto;
-        padding: 8px 14px;
+      .mobile-nav button {
+        background: none;
+        border: none;
+        color: var(--faint);
+        font-size: 12px;
         display: flex;
         flex-direction: column;
         align-items: center;
         gap: 2px;
-        color: var(--faint);
-        font-size: 8px;
-        font-weight: 700;
-        text-transform: uppercase;
         transition: var(--transition);
-        border: none;
-        background: transparent;
-        position: relative;
-        min-width: 52px;
+        padding: 4px 8px;
       }
-      .bottom-nav .nav-btn.active {
-        color: var(--emerald);
-      }
-      .bottom-nav .nav-btn.active::after {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 30%;
-        right: 30%;
-        height: 2px;
-        background: var(--emerald);
-        border-radius: 0 0 2px 2px;
-      }
-      .bottom-nav .nav-btn i {
-        font-size: 18px;
-      }
-      .main {
-        grid-row: 2 / 3;
-      }
-      .view-container {
-        padding: 16px;
-      }
-      .grid-2, .grid-3 {
-        grid-template-columns: 1fr;
-      }
-      .topbar-center {
-        display: none;
-      }
-      .hero-number {
-        font-size: 36px;
-      }
-      .metrics-strip {
-        grid-template-columns: repeat(2, 1fr);
-      }
+      .mobile-nav button.active { color: var(--emerald); }
+      .mobile-nav button i { font-size: 16px; }
+      .main { padding-bottom: 64px; }
     }
-    @media (max-width: 480px) {
-      .hero-number {
-        font-size: 28px;
-      }
-      .conn-badge span:last-child {
-        display: none;
-      }
-    }
+    .mobile-nav { display: none; }
 
-    .bottom-nav {
-      display: none;
-    }
-
-    /* ─── Utility ─── */
+    /* ─── Utilities ─── */
+    .good { color: var(--emerald); }
+    .bad { color: var(--coral); }
+    .warn { color: var(--amber); }
     .text-mono { font-family: var(--font-mono); }
     .text-xs { font-size: 10px; }
     .text-sm { font-size: 11px; }
     .text-muted { color: var(--muted); }
     .text-faint { color: var(--faint); }
     .fw-700 { font-weight: 700; }
-    .fw-800 { font-weight: 800; }
     .mt-8 { margin-top: 8px; }
     .mt-12 { margin-top: 12px; }
-    .mt-16 { margin-top: 16px; }
     .flex { display: flex; }
     .gap-8 { gap: 8px; }
-    .gap-12 { gap: 12px; }
     .items-center { align-items: center; }
     .justify-between { justify-content: space-between; }
     .hidden { display: none !important; }
 
-    /* Chip / Filter */
-    .chip {
-      display: inline-flex;
-      align-items: center;
-      padding: 4px 14px;
-      border-radius: 16px;
-      background: var(--panel);
-      border: 1px solid var(--panel-border);
-      color: var(--muted);
-      font-family: var(--font-mono);
-      font-size: 9px;
-      font-weight: 700;
-      transition: var(--transition);
-      cursor: pointer;
-    }
-    .chip.active {
-      border-color: var(--emerald);
-      color: var(--emerald);
-      background: rgba(31, 227, 168, 0.06);
-    }
-    .chip:hover {
-      border-color: var(--faint);
+    /* ─── Scrollable feed ─── */
+    .feed-scroll {
+      overflow-y: auto;
+      flex: 1;
+      min-height: 0;
     }
   </style>
 </head>
 <body>
 
-  <!-- ─── LOGIN OVERLAY ─── -->
+  <!-- ─── LOGIN ─── -->
   <div id="login-overlay" class="login-overlay hidden">
     <div class="login-card">
-      <div class="login-title">OMNICEE Access</div>
+      <div class="login-title">OMNICEE</div>
       <div class="login-sub">Enter your access token to continue outside Telegram.</div>
       <input id="login-token-input" class="login-input" type="password" placeholder="Access token" autocomplete="off" />
       <button id="login-submit-btn" class="login-btn" onclick="submitAppToken()">Unlock</button>
@@ -999,405 +446,218 @@
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark">OMNICEE</span>
-        <span class="brand-sub">COMMAND</span>
+        <span class="brand-sub">MISSION CONTROL</span>
       </div>
       <div class="topbar-center">
-        <div class="ticker-strip" id="ticker"></div>
+        <input class="command-input" id="command-input" type="text" placeholder="⌘K – Search signals, symbols, or commands..." />
+        <div class="nav-tabs" id="navTabs">
+          <button class="nav-tab active" data-view="dashboard">Dashboard</button>
+          <button class="nav-tab" data-view="signals">Signals</button>
+          <button class="nav-tab" data-view="intel">Intel</button>
+          <button class="nav-tab" data-view="risk">Risk</button>
+          <button class="nav-tab" data-view="about">About</button>
+        </div>
       </div>
-      <div class="conn-badge">
-        <span class="pulse" id="status-dot"></span>
-        <span id="status-text">CONNECTING</span>
+      <div class="topbar-right">
+        <div class="conn-badge">
+          <span class="pulse" id="status-dot"></span>
+          <span id="status-text">CONNECT</span>
+        </div>
       </div>
     </header>
-
-    <!-- Sidebar (desktop) -->
-    <nav class="sidebar" id="sidebar">
-      <button class="sidebar-btn active" data-view="dashboard" title="Dashboard"><i class="fas fa-chart-pie"></i></button>
-      <button class="sidebar-btn" data-view="signals" title="Signals"><i class="fas fa-signal"></i></button>
-      <button class="sidebar-btn" data-view="intel" title="Intel"><i class="fas fa-brain"></i></button>
-      <button class="sidebar-btn" data-view="monitor" title="Monitor"><i class="fas fa-eye"></i></button>
-      <button class="sidebar-btn" data-view="heatmap" title="Heat Map"><i class="fas fa-fire"></i></button>
-      <button class="sidebar-btn" data-view="validation" title="Validation"><i class="fas fa-check-double"></i></button>
-      <button class="sidebar-btn" data-view="tape" title="Tape"><i class="fas fa-list-ul"></i></button>
-      <button class="sidebar-btn" data-view="risk" title="Risk"><i class="fas fa-shield-alt"></i></button>
-      <button class="sidebar-btn" data-view="outlook" title="Outlook"><i class="fas fa-cloud-sun"></i></button>
-      <button class="sidebar-btn" data-view="about" title="About"><i class="fas fa-info-circle"></i></button>
-    </nav>
 
     <!-- Main Content -->
     <main class="main">
 
-      <!-- DASHBOARD -->
-      <div class="view-container active" id="view-dashboard">
-        <!-- Hero -->
-        <div class="hero">
-          <div class="hero-top">
-            <div class="hero-left">
-              <span class="hero-label">Session P&L</span>
-              <span class="hero-number" id="hero-pnl">0.0%</span>
-              <div class="hero-sub">
-                <span class="hero-chip" id="hero-cb"><i class="fas fa-circle"></i> CIRCUIT CLOSED</span>
-                <span class="hero-chip" id="hero-sizing"><i class="fas fa-weight-hanging"></i> SIZING 100%</span>
-              </div>
-            </div>
-            <div style="text-align:right;">
-              <span class="hero-label">Signals Today</span>
-              <span class="hero-number" style="font-size:32px;" id="hero-count">0</span>
-            </div>
+      <!-- DASHBOARD VIEW -->
+      <div class="view active" id="view-dashboard">
+        <div class="dashboard-grid">
+
+          <!-- Signal Feed (left) -->
+          <div class="grid-item signal-feed">
+            <div class="card-header">Live Signals <span id="signal-count" class="text-faint">0</span></div>
+            <div class="feed-scroll" id="signal-feed-list"></div>
           </div>
-          <div class="hero-spark"><canvas id="spark-canvas"></canvas></div>
-        </div>
 
-        <!-- Metrics -->
-        <div class="metrics-strip">
-          <div class="metric-cell"><span class="metric-label">Gate State</span><div class="metric-value good" id="m-gate">ARMED</div><div class="metric-sub" id="m-gate-sub">no rejects</div></div>
-          <div class="metric-cell"><span class="metric-label">Symbols Live</span><div class="metric-value" id="m-symbols">0</div><div class="metric-sub">streaming</div></div>
-          <div class="metric-cell"><span class="metric-label">Top Regime</span><div class="metric-value" style="color:var(--azure);" id="c-regime">--</div><div class="metric-sub" id="c-regime-sub">waiting</div></div>
-          <div class="metric-cell"><span class="metric-label">A-Grade</span><div class="metric-value" style="color:var(--gold);" id="c-gradea">0</div><div class="metric-sub">session</div></div>
-          <div class="metric-cell"><span class="metric-label">Avg Score</span><div class="metric-value" id="c-score">--</div><div class="metric-sub">approved</div></div>
-          <div class="metric-cell"><span class="metric-label">Learning</span><div class="metric-value" style="color:var(--amber);" id="m-learn">WARM</div><div class="metric-sub" id="m-learn-sub">awaiting outcomes</div></div>
-        </div>
+          <!-- PnL Chart -->
+          <div class="grid-item" style="grid-column: span 2;">
+            <div class="card-header">Session PnL <span class="text-faint" id="hero-pnl">0.0%</span></div>
+            <div class="chart-container"><canvas id="pnl-chart"></canvas></div>
+          </div>
 
-        <!-- Two columns: Radar + Recent Signals -->
-        <div class="grid-2">
-          <div class="card">
-            <div class="card-header"><span>Consensus Radar</span><span class="text-faint" id="radar-symbol">--</span></div>
-            <div class="card-body">
-              <div class="radar-wrap">
-                <canvas id="radar-canvas" width="220" height="220"></canvas>
-                <div class="radar-caption" id="radar-caption">Select a signal to see live agent consensus.</div>
-                <div class="radar-legend">
-                  <span class="radar-legend-item"><span class="radar-dot" style="background:var(--emerald);"></span>Supports</span>
-                  <span class="radar-legend-item"><span class="radar-dot" style="background:var(--amber);"></span>Neutral</span>
-                  <span class="radar-legend-item"><span class="radar-dot" style="background:var(--coral);"></span>Opposes</span>
+          <!-- Metrics Tiles -->
+          <div class="grid-item">
+            <div class="card-header">Gate State</div>
+            <div class="card-value" id="m-gate">ARMED</div>
+            <div class="card-sub" id="m-gate-sub">No rejects</div>
+          </div>
+          <div class="grid-item">
+            <div class="card-header">Symbols Live</div>
+            <div class="card-value" id="m-symbols">0</div>
+            <div class="card-sub">Streaming</div>
+          </div>
+          <div class="grid-item">
+            <div class="card-header">A-Grade</div>
+            <div class="card-value" style="color:var(--gold);" id="c-gradea">0</div>
+            <div class="card-sub">This session</div>
+          </div>
+          <div class="grid-item">
+            <div class="card-header">Top Regime</div>
+            <div class="card-value" style="color:var(--azure);" id="c-regime">--</div>
+            <div class="card-sub" id="c-regime-sub">Waiting</div>
+          </div>
+          <div class="grid-item">
+            <div class="card-header">Avg Score</div>
+            <div class="card-value" id="c-score">--</div>
+            <div class="card-sub">Approved</div>
+          </div>
+          <div class="grid-item">
+            <div class="card-header">Learning</div>
+            <div class="card-value" style="color:var(--amber);" id="m-learn">WARM</div>
+            <div class="card-sub" id="m-learn-sub">Awaiting outcomes</div>
+          </div>
+
+          <!-- Radar -->
+          <div class="grid-item" style="grid-column: span 2; align-items: center;">
+            <div class="card-header">Consensus Radar <span class="text-faint" id="radar-symbol">--</span></div>
+            <div style="display:flex; justify-content:center; align-items:center; gap:20px; flex:1;">
+              <canvas id="radar-canvas" width="160" height="160"></canvas>
+              <div>
+                <div class="radar-caption" id="radar-caption">Select a signal</div>
+                <div class="flex gap-8 mt-8" style="flex-wrap:wrap;">
+                  <span class="text-xs" style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:var(--emerald);display:inline-block;"></span> Supports</span>
+                  <span class="text-xs" style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:var(--amber);display:inline-block;"></span> Neutral</span>
+                  <span class="text-xs" style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:var(--coral);display:inline-block;"></span> Opposes</span>
                 </div>
               </div>
             </div>
           </div>
-          <div class="card">
-            <div class="card-header">
-              <span>Recent Signals</span>
-              <div class="flex gap-8">
-                <button class="chip active" data-filter="ALL">ALL</button>
-                <button class="chip" data-filter="A">A ONLY</button>
-              </div>
-            </div>
-            <div class="card-body flush" id="signal-cards" style="max-height:360px;overflow-y:auto;"></div>
-          </div>
-        </div>
 
-        <!-- Detail + Regime -->
-        <div class="grid-2" style="margin-top:16px;">
-          <div class="card">
-            <div class="card-header"><span id="detail-title">Signal Inspector</span></div>
-            <div class="card-body" id="detail-panel">
-              <div class="empty-state"><i class="fas fa-arrow-pointer"></i> Select a signal to inspect execution quality, agent votes, validation layers, and risk.</div>
-            </div>
+          <!-- Regime Board -->
+          <div class="grid-item" style="grid-column: span 3;">
+            <div class="card-header">Regime Board</div>
+            <div id="regime-board" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:4px;"></div>
           </div>
-          <div class="card">
-            <div class="card-header"><span>Regime Board</span></div>
-            <div class="card-body" id="regime-board">
-              <div class="text-faint text-xs text-mono">No regime data yet.</div>
-            </div>
+
+        </div>
+      </div>
+
+      <!-- SIGNALS VIEW (full table) -->
+      <div class="view" id="view-signals">
+        <div style="display:flex; flex-direction:column; height:100%; gap:12px;">
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="chip active" data-filter-sig="ALL">ALL</button>
+            <button class="chip" data-filter-sig="A">A GRADE</button>
+            <button class="chip" data-filter-sig="LONG">LONGS</button>
+            <button class="chip" data-filter-sig="SHORT">SHORTS</button>
+          </div>
+          <div style="flex:1; overflow:auto; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius); padding:0;">
+            <table style="width:100%; border-collapse:collapse; font-family:var(--font-mono); font-size:11px;">
+              <thead style="position:sticky; top:0; background:var(--bg); z-index:2;">
+                <tr>
+                  <th style="padding:10px 12px; text-align:left; color:var(--faint);">Time</th>
+                  <th style="padding:10px 12px; text-align:left; color:var(--faint);">Symbol</th>
+                  <th style="padding:10px 12px; text-align:left; color:var(--faint);">Side</th>
+                  <th style="padding:10px 12px; text-align:left; color:var(--faint);">Score</th>
+                  <th style="padding:10px 12px; text-align:left; color:var(--faint);">Regime</th>
+                  <th style="padding:10px 12px; text-align:left; color:var(--faint);">Gate</th>
+                  <th style="padding:10px 12px; text-align:left; color:var(--faint);">Entry</th>
+                  <th style="padding:10px 12px; text-align:left; color:var(--faint);">Stop</th>
+                  <th style="padding:10px 12px; text-align:left; color:var(--faint);">TP1</th>
+                  <th style="padding:10px 12px; text-align:left; color:var(--faint);">Thesis</th>
+                </tr>
+              </thead>
+              <tbody id="signal-body-full"></tbody>
+            </table>
           </div>
         </div>
       </div>
 
-      <!-- SIGNALS -->
-      <div class="view-container" id="view-signals">
-        <div class="card">
-          <div class="card-header">
-            <span>Full Signal Matrix</span>
-            <div class="flex gap-8">
-              <button class="chip active" data-filter-sig="ALL">ALL</button>
-              <button class="chip" data-filter-sig="A">A GRADE</button>
-              <button class="chip" data-filter-sig="LONG">LONGS</button>
-              <button class="chip" data-filter-sig="SHORT">SHORTS</button>
-            </div>
+      <!-- INTEL VIEW -->
+      <div class="view" id="view-intel">
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; height:100%;">
+          <div class="grid-item">
+            <div class="card-header">Institutional Flow <span class="text-faint" id="intel-count">0</span></div>
+            <div class="feed-scroll" id="intel-feed"></div>
           </div>
-          <div class="card-body flush">
-            <div class="table-wrap">
-              <table>
-                <thead><tr>
-                  <th>Time</th><th>Symbol</th><th>Side</th>
-                  <th>Score</th><th>Regime</th><th>Gate</th>
-                  <th>Entry</th><th>Stop</th><th>TP1</th><th>Thesis</th>
-                </tr></thead>
-                <tbody id="signal-body-full"></tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-        <div class="card" style="margin-top:16px;">
-          <div class="card-header"><span id="detail-title-full">Signal Detail</span></div>
-          <div class="card-body" id="detail-panel-full">
-            <div class="empty-state"><i class="fas fa-arrow-pointer"></i> Select a signal from the matrix.</div>
+          <div class="grid-item">
+            <div class="card-header">Crypto & Forex News <span class="text-faint" id="news-count">0</span></div>
+            <div class="feed-scroll" id="news-feed"></div>
           </div>
         </div>
       </div>
 
-      <!-- INTEL -->
-      <div class="view-container" id="view-intel">
-        <div class="grid-2">
-          <div class="card">
-            <div class="card-header"><span>Institutional Flow</span><span class="text-faint text-xs" id="intel-count">0 events</span></div>
-            <div class="card-body flush" id="intel-feed" style="max-height:480px;overflow-y:auto;">
-              <div class="empty-state"><i class="fas fa-chart-line"></i> Watching for economic surprises, extreme retail positioning, and insider cluster buys.</div>
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-header"><span>Watchlist</span></div>
-            <div class="card-body" id="watchlist-panel">
-              <div class="text-faint text-xs text-mono">Live prices appear once the feed connects.</div>
-            </div>
-          </div>
-        </div>
-        <div class="card" style="margin-top:16px;">
-          <div class="card-header"><span>Crypto & Forex News</span><span class="text-faint text-xs" id="news-count">0 stories</span></div>
-          <div class="card-body flush" id="news-feed" style="max-height:400px;overflow-y:auto;">
-            <div class="empty-state"><i class="fas fa-newspaper"></i> Recent headlines feeding the sentiment score behind your signals. Refreshes every 5 minutes.</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- MONITOR -->
-      <div class="view-container" id="view-monitor">
-        <div class="grid-2">
-          <div class="card">
-            <div class="card-header"><span>Opportunity Board</span><span class="text-faint text-xs" id="board-count">0 tracked</span></div>
-            <div class="card-body flush" id="board-panel" style="max-height:480px;overflow-y:auto;">
-              <div class="empty-state"><i class="fas fa-clipboard-list"></i> Every evaluated symbol/timeframe gets ranked here, not just what fires – including setups currently blocked by a gate.</div>
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-header"><span>Feed Health</span><span class="text-faint text-xs" id="health-status">--</span></div>
-            <div class="card-body" id="health-panel">
-              <div class="text-faint text-xs text-mono">No health check yet.</div>
-            </div>
-          </div>
-        </div>
-        <div class="card" style="margin-top:16px;">
-          <div class="card-header"><span>Market Alerts</span><span class="text-faint text-xs" id="alerts-count">0 events</span></div>
-          <div class="card-body flush" id="alerts-feed" style="max-height:300px;overflow-y:auto;">
-            <div class="empty-state"><i class="fas fa-bell"></i> Abnormal price action (flash spikes/crashes) and liquidation cascades appear here.</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- HEATMAP -->
-      <div class="view-container" id="view-heatmap">
-        <div class="card">
-          <div class="card-header"><span>Market Heat Map</span><span class="text-faint text-xs" id="heatmap-time">--</span></div>
-          <div class="card-body">
-            <p class="text-faint text-xs mb-8">Blends the Opportunity Board's live score with relative-strength ranking. Not a signal by itself – a quick scan of where the setups and momentum currently are.</p>
-            <div class="grid-3" id="heatmap-grid">
-              <div class="text-faint text-xs text-mono">Loading heat map...</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- VALIDATION -->
-      <div class="view-container" id="view-validation">
-        <div class="grid-2">
-          <div class="card">
-            <div class="card-header"><span>Ensemble Validation Layers</span></div>
-            <div class="card-body" id="ensemble-panel">
-              <div class="empty-state"><i class="fas fa-layer-group"></i> Ensemble data populates when signals are processed. Each signal passes through 9 validation layers before approval.</div>
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-header"><span>Statistical Tests</span></div>
-            <div class="card-body" id="stat-panel">
-              <div class="text-faint text-xs text-mono">No statistical validation data yet.</div>
-            </div>
-          </div>
-        </div>
-        <div class="grid-2" style="margin-top:16px;">
-          <div class="card">
-            <div class="card-header"><span>Monte Carlo Simulation</span></div>
-            <div class="card-body" id="mc-panel">
-              <div class="text-faint text-xs text-mono">No Monte Carlo data yet.</div>
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-header"><span>Bayesian Analysis</span></div>
-            <div class="card-body" id="bayes-panel">
-              <div class="text-faint text-xs text-mono">No Bayesian data yet.</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- TAPE -->
-      <div class="view-container" id="view-tape">
-        <div class="grid-2">
-          <div class="card">
-            <div class="card-header"><span>Gate Event Tape</span></div>
-            <div class="card-body flush" id="gate-tape" style="max-height:480px;overflow-y:auto;">
-              <div class="empty-state"><i class="fas fa-tape"></i> No gate events yet. Events appear here as signals are processed, approved, or rejected.</div>
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-header"><span>Audit Trail</span><span class="text-faint text-xs" id="audit-count">0 entries</span></div>
-            <div class="card-body flush" id="audit-feed" style="max-height:480px;overflow-y:auto;">
-              <div class="empty-state"><i class="fas fa-clipboard-check"></i> Every completed analysis cycle – fired or blocked – recorded with its reason, for a full compliance-style record of what the system decided and why.</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- RISK -->
-      <div class="view-container" id="view-risk">
-        <div class="grid-2">
-          <div class="card">
-            <div class="card-header"><span>Circuit Breaker</span></div>
-            <div class="card-body">
-              <div class="gauge-wrap">
-                <canvas id="gauge-canvas" width="96" height="96"></canvas>
-                <div class="gauge-readout">
-                  <div class="gauge-state good" id="r-circuit">CLOSED</div>
-                  <div class="gauge-reason" id="r-reason">All systems nominal. Full position sizing active.</div>
-                </div>
+      <!-- RISK VIEW -->
+      <div class="view" id="view-risk">
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; height:100%;">
+          <div class="grid-item">
+            <div class="card-header">Circuit Breaker</div>
+            <div style="display:flex; align-items:center; gap:20px; flex:1;">
+              <canvas id="gauge-canvas" width="96" height="96"></canvas>
+              <div>
+                <div class="card-value" id="r-circuit" style="font-size:24px;">CLOSED</div>
+                <div class="card-sub" id="r-reason">All systems nominal</div>
               </div>
             </div>
           </div>
-          <div class="card">
-            <div class="card-header"><span>Risk Dashboard</span></div>
-            <div class="card-body">
+          <div class="grid-item">
+            <div class="card-header">Risk Dashboard</div>
+            <div style="flex:1; overflow-y:auto;">
               <div class="kv-row"><span class="kv-key">Balance</span><span class="kv-val" id="r-balance">--</span></div>
               <div class="kv-row"><span class="kv-key">Equity</span><span class="kv-val" id="r-equity">--</span></div>
               <div class="kv-row"><span class="kv-key">Daily PnL</span><span class="kv-val" id="r-pnl">0.0%</span></div>
-              <div class="kv-row"><span class="kv-key">Max Daily Loss</span><span class="kv-val" id="r-maxdaily">3.0%</span></div>
               <div class="kv-row"><span class="kv-key">Drawdown</span><span class="kv-val" id="r-dd">0.0%</span></div>
-              <div class="kv-row"><span class="kv-key">Max Drawdown</span><span class="kv-val" id="r-maxdd">10.0%</span></div>
               <div class="kv-row"><span class="kv-key">Consecutive Losses</span><span class="kv-val" id="r-consec">0</span></div>
-              <div class="kv-row"><span class="kv-key">Net Sizing Factor</span><span class="kv-val" id="r-sizing">100%</span></div>
+              <div class="kv-row"><span class="kv-key">Sizing</span><span class="kv-val" id="r-sizing">100%</span></div>
             </div>
           </div>
-        </div>
-        <div class="grid-2" style="margin-top:16px;">
-          <div class="card">
-            <div class="card-header"><span>Learning Profiles</span></div>
-            <div class="card-body" id="learning-panel">
-              <div class="text-faint text-xs text-mono">No learning profiles yet.</div>
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-header"><span>Setup Performance</span><span class="text-faint text-xs" id="journal-total">0 trades</span></div>
-            <div class="card-body" id="journal-panel">
-              <div class="text-faint text-xs text-mono">Which strategy (SMC / MTF / momentum / etc) is actually making money – recorded per closed trade.</div>
-            </div>
+          <div class="grid-item" style="grid-column: span 2;">
+            <div class="card-header">Learning Profiles</div>
+            <div class="feed-scroll" id="learning-panel"></div>
           </div>
         </div>
       </div>
 
-      <!-- OUTLOOK -->
-      <div class="view-container" id="view-outlook">
-        <div class="card">
-          <div class="card-header"><span>Daily / Weekly Outlook</span><span class="text-faint text-xs" id="outlook-time">--</span></div>
-          <div class="card-body" id="outlook-narrative">
-            <div class="text-faint text-xs text-mono">Loading market outlook...</div>
+      <!-- ABOUT VIEW -->
+      <div class="view" id="view-about" style="display:flex; align-items:center; justify-content:center;">
+        <div style="max-width:520px; text-align:center; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius); padding:32px 24px;">
+          <div style="font-family:var(--font-display); font-size:28px; background:linear-gradient(120deg,var(--emerald),var(--gold)); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;">OMNICEE</div>
+          <div class="text-xs text-muted" style="letter-spacing:0.1em; margin-top:4px;">Institutional-Grade AI Signal Desk</div>
+          <p class="text-sm text-muted mt-12" style="line-height:1.7;">Ensemble of 8 AI agents – 9 validation layers – multi-asset – real-time.</p>
+          <div class="flex gap-8 mt-16" style="justify-content:center; flex-wrap:wrap;">
+            <span class="chip">SMC</span><span class="chip">MTF</span><span class="chip">Momentum</span>
+            <span class="chip">Volume/OI</span><span class="chip">Sentiment</span><span class="chip">Pattern</span>
           </div>
-        </div>
-        <div class="grid-3" style="margin-top:16px;">
-          <div class="card"><div class="card-header">Today</div><div class="card-body flush" id="outlook-today"><div class="empty-state">No Tier-1 releases today.</div></div></div>
-          <div class="card"><div class="card-header">This Week</div><div class="card-body flush" id="outlook-week"><div class="empty-state">No high-impact releases this week.</div></div></div>
-          <div class="card"><div class="card-header">Next Week</div><div class="card-body flush" id="outlook-nextweek"><div class="empty-state">No releases confirmed for next week yet.</div></div></div>
-        </div>
-        <div class="grid-2" style="margin-top:16px;">
-          <div class="card">
-            <div class="card-header"><span>Institutional Positioning (CFTC COT)</span></div>
-            <div class="card-body flush" id="outlook-cot">
-              <div class="empty-state">Real weekly CFTC data – commercial (hedgers) vs. large speculator (hedge fund) net positioning. Updates Fridays; only shown here when a symbol is at a historical extreme.</div>
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-header"><span>Per-Symbol Regime</span></div>
-            <div class="card-body" id="outlook-symbols">
-              <div class="text-faint text-xs text-mono">No symbol data yet.</div>
-            </div>
-          </div>
-        </div>
-        <div class="card" style="margin-top:16px;">
-          <div class="card-header"><span>Headlines</span></div>
-          <div class="card-body flush" id="outlook-news" style="max-height:300px;overflow-y:auto;">
-            <div class="empty-state">No recent headlines.</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- ABOUT -->
-      <div class="view-container" id="view-about">
-        <div class="card" style="max-width:640px;margin:0 auto;">
-          <div style="padding:32px 24px;text-align:center;">
-            <div style="font-family:Inter,sans-serif;font-weight:800;font-size:32px;background:linear-gradient(120deg,var(--emerald),var(--gold));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;">OMNICEE</div>
-            <div class="text-mono text-xs" style="letter-spacing:0.1em;color:var(--faint);margin-top:4px;">Institutional-Grade AI Signal Desk</div>
-          </div>
-          <div class="card-body">
-            <p class="text-sm text-muted" style="line-height:1.7;">
-              OMNICEE runs an ensemble of specialist AI agents – Smart Money Concepts, multi-timeframe structure,
-              momentum, volume/open interest, sentiment, harmonic and Wyckoff pattern recognition, fractal geometry,
-              and market microstructure – and reconciles their votes through a nine-layer validation pipeline
-              (statistical significance, Bayesian posterior, Monte Carlo simulation, and more) before a signal
-              is ever approved. Every approved signal you see here has already survived that gauntlet.
-            </p>
-            <div class="mt-16 text-mono text-xs" style="color:var(--faint);letter-spacing:0.1em;font-weight:700;">SYSTEM</div>
-            <div class="grid-3 mt-8">
-              <div class="chip" style="justify-content:center;">8 AI Agents</div>
-              <div class="chip" style="justify-content:center;">9 Validation Layers</div>
-              <div class="chip" style="justify-content:center;">Multi-Asset</div>
-              <div class="chip" style="justify-content:center;">Real-Time WS</div>
-              <div class="chip" style="justify-content:center;">Circuit-Breaker Risk</div>
-              <div class="chip" style="justify-content:center;">Adaptive Learning</div>
-            </div>
-            <div class="mt-16 card" style="background:var(--bg-1);border:1px solid var(--panel-border);padding:16px;">
-              <div class="kv-row"><span class="kv-key">MongoDB Persistence</span><span class="kv-val" id="m-db">CHECK</span></div>
-              <div class="kv-row"><span class="kv-key">Redis Cache</span><span class="kv-val" id="m-redis">CHECK</span></div>
-              <div class="kv-row"><span class="kv-key">Transport</span><span class="kv-val text-xs" id="about-transport">--</span></div>
-              <div class="kv-row"><span class="kv-key">Session Started</span><span class="kv-val text-xs" id="about-since">--</span></div>
-            </div>
-            <div style="text-align:center;margin-top:24px;font-family:var(--font-mono);font-size:11px;color:var(--faint);">
-              Developed by <b style="color:var(--emerald);">James Yelbert</b>
-              <span style="display:block;font-size:9px;letter-spacing:0.1em;text-transform:uppercase;color:var(--faintest);">Architect &amp; Builder — OMNICEE Trading Systems</span>
-            </div>
-          </div>
+          <div class="mt-16 text-xs text-faint">Developed by <b style="color:var(--emerald);">James Yelbert</b></div>
         </div>
       </div>
 
     </main>
 
-    <!-- Bottom Navigation (mobile) -->
-    <nav class="bottom-nav" id="bottomnav">
-      <button class="nav-btn active" data-view="dashboard"><i class="fas fa-chart-pie"></i>DASH</button>
-      <button class="nav-btn" data-view="signals"><i class="fas fa-signal"></i>SIG</button>
-      <button class="nav-btn" data-view="intel"><i class="fas fa-brain"></i>INTEL</button>
-      <button class="nav-btn" data-view="monitor"><i class="fas fa-eye"></i>MON</button>
-      <button class="nav-btn" data-view="heatmap"><i class="fas fa-fire"></i>HEAT</button>
-      <button class="nav-btn" data-view="validation"><i class="fas fa-check-double"></i>VAL</button>
-      <button class="nav-btn" data-view="tape"><i class="fas fa-list-ul"></i>TAPE</button>
-      <button class="nav-btn" data-view="risk"><i class="fas fa-shield-alt"></i>RISK</button>
-      <button class="nav-btn" data-view="outlook"><i class="fas fa-cloud-sun"></i>OUT</button>
-      <button class="nav-btn" data-view="about"><i class="fas fa-info-circle"></i>ABT</button>
+    <!-- Mobile Nav -->
+    <nav class="mobile-nav" id="mobileNav">
+      <button class="active" data-view="dashboard"><i class="fas fa-chart-pie"></i><span>Dash</span></button>
+      <button data-view="signals"><i class="fas fa-signal"></i><span>Signals</span></button>
+      <button data-view="intel"><i class="fas fa-brain"></i><span>Intel</span></button>
+      <button data-view="risk"><i class="fas fa-shield-alt"></i><span>Risk</span></button>
+      <button data-view="about"><i class="fas fa-info-circle"></i><span>About</span></button>
     </nav>
+
+    <!-- Detail Slide-Over -->
+    <div class="detail-overlay" id="detailOverlay">
+      <button class="close-btn" id="closeDetail"><i class="fas fa-times"></i></button>
+      <div class="detail-title" id="detail-title">Signal Detail</div>
+      <div id="detail-content"></div>
+    </div>
 
   </div>
 
   <script>
     'use strict';
 
-    // ══════════════════════════════════════════════════════
-    // 1. TELEGRAM & AUTH
-    // ══════════════════════════════════════════════════════
-
+    // ─── TELEGRAM & AUTH ──────────────────────────────────────
     const tg = window.Telegram?.WebApp;
-    if (tg) {
-      tg.ready();
-      tg.expand();
-      tg.setHeaderColor('#05070a');
-      tg.setBackgroundColor('#05070a');
-    }
-
+    if (tg) { tg.ready(); tg.expand(); tg.setHeaderColor('#05070a'); tg.setBackgroundColor('#05070a'); }
     function haptic(kind) {
       const h = tg?.HapticFeedback;
       if (!h) return;
@@ -1405,33 +665,17 @@
       else if (kind === 'nav') h.impactOccurred('light');
       else if (kind === 'error') h.notificationOccurred('error');
     }
-
     const initData = tg?.initData || '';
     let appToken = localStorage.getItem('omnicee_app_token') || '';
-
-    function currentAuth() {
-      return initData ? { initData } : { appToken };
-    }
-
+    function currentAuth() { return initData ? { initData } : { appToken }; }
     function authHeaders(extra = {}) {
       const headers = { ...extra };
       if (initData) headers['x-telegram-init-data'] = initData;
       else if (appToken) headers['x-app-token'] = appToken;
       return headers;
     }
-
-    function showLogin(message) {
-      const overlay = document.getElementById('login-overlay');
-      if (overlay) overlay.classList.remove('hidden');
-      const err = document.getElementById('login-error');
-      if (err) err.textContent = message || '';
-    }
-
-    function hideLogin() {
-      const overlay = document.getElementById('login-overlay');
-      if (overlay) overlay.classList.add('hidden');
-    }
-
+    function showLogin(msg) { const o = document.getElementById('login-overlay'); if (o) o.classList.remove('hidden'); const e = document.getElementById('login-error'); if (e) e.textContent = msg || ''; }
+    function hideLogin() { document.getElementById('login-overlay')?.classList.add('hidden'); }
     async function submitAppToken() {
       const input = document.getElementById('login-token-input');
       const btn = document.getElementById('login-submit-btn');
@@ -1448,86 +692,41 @@
         socket.disconnect();
         socket.connect();
         hydrateFromApi();
-      } catch (_) {
-        showLogin('Could not reach server.');
-      }
+      } catch (_) { showLogin('Could not reach server.'); }
       if (btn) btn.disabled = false;
     }
     window.submitAppToken = submitAppToken;
-
-    document.getElementById('login-token-input')?.addEventListener('keydown', e => {
-      if (e.key === 'Enter') submitAppToken();
-    });
-
+    document.getElementById('login-token-input')?.addEventListener('keydown', e => { if (e.key === 'Enter') submitAppToken(); });
     if (!initData && !appToken) showLogin();
 
-    // ══════════════════════════════════════════════════════
-    // 2. SOCKET.IO
-    // ══════════════════════════════════════════════════════
-
+    // ─── SOCKET ──────────────────────────────────────────────
     const socket = io({ path: '/socket.io', auth: currentAuth, transports: ['websocket', 'polling'] });
 
-    // ══════════════════════════════════════════════════════
-    // 3. STATE
-    // ══════════════════════════════════════════════════════
-
+    // ─── STATE ──────────────────────────────────────────────
     const state = {
-      signals: [],
-      markets: {},
-      priceHistory: {},
-      pnlHistory: [],
-      regimes: {},
-      telemetry: [],
-      intel: [],
-      watchlist: [],
-      feedHealth: null,
-      marketAlerts: [],
-      heatmap: null,
-      news: [],
-      journal: null,
-      auditTrail: [],
-      learning: [],
+      signals: [], markets: {}, priceHistory: {}, pnlHistory: [],
+      regimes: {}, telemetry: [], intel: [], watchlist: [],
+      feedHealth: null, marketAlerts: [], heatmap: null, news: [],
+      journal: null, auditTrail: [], learning: [],
       stats: { total: 0, gradeA: 0 },
       risk: { dailyPnl: 0, drawdown: 0, consecLoss: 0, netSizingFactor: 1, state: 'CLOSED', maxDailyLoss: 3, maxDrawdown: 10 },
-      accountBalance: null,
-      accountEquity: null,
-      selectedId: null,
-      filter: 'ALL',
-      filterSig: 'ALL',
-      currentView: 'dashboard',
-      connected: false,
-      sessionStart: Date.now(),
+      accountBalance: null, accountEquity: null,
+      selectedId: null, filterSig: 'ALL', currentView: 'dashboard',
+      connected: false, sessionStart: Date.now(),
       chartInstances: {},
     };
 
-    // ══════════════════════════════════════════════════════
-    // 4. SOCKET EVENT HANDLERS
-    // ══════════════════════════════════════════════════════
-
+    // ─── SOCKET EVENTS ──────────────────────────────────────
     socket.on('connect', () => {
-      state.connected = true;
-      setStatus('live', 'LIVE');
+      state.connected = true; setStatus('live', 'LIVE');
       socket.emit('get_history', { limit: 50 });
       hydrateFromApi();
-      setText('about-transport', socket.io.engine.transport.name.toUpperCase());
-      setText('about-since', new Date(state.sessionStart).toLocaleTimeString());
     });
-
-    socket.on('connect_error', err => {
-      setStatus('error', 'OFFLINE');
-      console.warn('[OMNICEE]', err.message);
-      if (!initData && !appToken) showLogin(err.message === 'Missing app token' ? '' : 'Session expired – enter your token again.');
-    });
-
+    socket.on('connect_error', err => { setStatus('error', 'OFFLINE'); console.warn(err.message); if (!initData && !appToken) showLogin(err.message === 'Missing app token' ? '' : 'Session expired.'); });
     socket.on('disconnect', () => { state.connected = false; setStatus('', 'RECONNECTING'); });
 
-    socket.on('history', msg => {
-      for (const sig of msg.signals || []) ingestSignal(sig, false);
-      renderAll();
-    });
-
+    socket.on('history', msg => { for (const sig of msg.signals || []) ingestSignal(sig, false); renderAll(); });
     socket.on('signal', sig => ingestSignal(sig));
-
     socket.on('market', data => {
       if (!data?.symbol) return;
       state.markets[data.symbol] = data;
@@ -1536,461 +735,145 @@
       if (h.length > 40) h.shift();
       renderAll();
     });
-
     socket.on('risk', data => {
       Object.assign(state.risk, data);
       state.pnlHistory.push({ t: Date.now(), v: Number(state.risk.dailyPnl || 0) });
       if (state.pnlHistory.length > 120) state.pnlHistory.shift();
       renderAll();
     });
-
-    socket.on('balance', data => {
-      state.accountBalance = data?.balance ?? state.accountBalance;
-      state.accountEquity = data?.equity ?? state.accountEquity;
-      renderAll();
-    });
-
+    socket.on('balance', data => { state.accountBalance = data?.balance ?? state.accountBalance; state.accountEquity = data?.equity ?? state.accountEquity; renderAll(); });
     socket.on('stats', data => { Object.assign(state.stats, data); renderAll(); });
+    socket.on('regime', data => { if (data?.symbol) state.regimes[`${data.symbol}:${data.timeframe || ''}`] = data; renderAll(); });
+    socket.on('telemetry', data => { state.telemetry.unshift({ ...data, receivedAt: Date.now() }); state.telemetry = state.telemetry.slice(0, 60); renderAll(); });
+    socket.on('intel', data => { state.intel.unshift({ ...data, receivedAt: Date.now() }); state.intel = state.intel.slice(0, 60); haptic('nav'); renderAll(); });
+    socket.on('watchlist', data => { state.watchlist = Array.isArray(data) ? data : []; renderAll(); });
+    socket.on('feed_health', data => { state.feedHealth = data; renderAll(); });
+    socket.on('abnormal_market', data => { if (!data?.abnormal) return; state.marketAlerts.unshift({ kind: 'abnormal_market', ...data, receivedAt: Date.now() }); state.marketAlerts = state.marketAlerts.slice(0, 60); haptic('nav'); renderAll(); });
+    socket.on('liquidation_cascade', data => { state.marketAlerts.unshift({ kind: 'liquidation_cascade', ...data, receivedAt: Date.now() }); state.marketAlerts = state.marketAlerts.slice(0, 60); haptic('nav'); renderAll(); });
+    socket.on('outcome_saved', msg => { state.telemetry.unshift({ type: 'outcome_saved', symbol: msg.symbol, payload: msg, receivedAt: Date.now() }); hydrateLearning().then(renderAll); });
 
-    socket.on('regime', data => {
-      if (data?.symbol) state.regimes[`${data.symbol}:${data.timeframe || ''}`] = data;
-      renderAll();
-    });
-
-    socket.on('telemetry', data => {
-      state.telemetry.unshift({ ...data, receivedAt: Date.now() });
-      state.telemetry = state.telemetry.slice(0, 60);
-      renderAll();
-    });
-
-    socket.on('intel', data => {
-      state.intel.unshift({ ...data, receivedAt: Date.now() });
-      state.intel = state.intel.slice(0, 60);
-      haptic('nav');
-      renderAll();
-    });
-
-    socket.on('watchlist', data => {
-      state.watchlist = Array.isArray(data) ? data : [];
-      renderWatchlistBoard();
-    });
-
-    socket.on('feed_health', data => {
-      state.feedHealth = data;
-      renderFeedHealth();
-    });
-
-    socket.on('abnormal_market', data => {
-      if (!data?.abnormal) return;
-      state.marketAlerts.unshift({ kind: 'abnormal_market', ...data, receivedAt: Date.now() });
-      state.marketAlerts = state.marketAlerts.slice(0, 60);
-      haptic('nav');
-      renderMarketAlerts();
-    });
-
-    socket.on('liquidation_cascade', data => {
-      state.marketAlerts.unshift({ kind: 'liquidation_cascade', ...data, receivedAt: Date.now() });
-      state.marketAlerts = state.marketAlerts.slice(0, 60);
-      haptic('nav');
-      renderMarketAlerts();
-    });
-
-    socket.on('outcome_saved', msg => {
-      state.telemetry.unshift({ type: 'outcome_saved', symbol: msg.symbol, payload: msg, receivedAt: Date.now() });
-      hydrateLearning().then(renderAll);
-    });
-
-    // ══════════════════════════════════════════════════════
-    // 5. API HYDRATION
-    // ══════════════════════════════════════════════════════
-
+    // ─── API HYDRATION ──────────────────────────────────────
     async function hydrateFromApi() {
       const headers = authHeaders();
-      try {
-        const health = await fetch('/health').then(r => r.json());
-        setText('m-db', health.mongo?.enabled ? (health.mongo.ok ? 'LIVE' : 'ERROR') : 'OFFLINE');
-        setClass('m-db', 'kv-val ' + (health.mongo?.ok ? 'good' : health.mongo?.enabled ? 'bad' : 'text-faint'));
-        if (health.cache?.redis) {
-          const r = health.cache.redis;
-          setText('m-redis', r.connected ? `LIVE (${r.errors} err)` : 'OFFLINE');
-          setClass('m-redis', 'kv-val ' + (r.connected && r.errors === 0 ? 'good' : r.connected ? 'warn-text' : 'text-faint'));
-        }
-      } catch (_) {}
-      try {
-        const res = await fetch('/api/signals?limit=50', { headers }).then(r => r.json());
-        for (const sig of res.signals || []) ingestSignal(sig, false);
-      } catch (_) {}
-      try {
-        const res = await fetch('/api/stats', { headers }).then(r => r.json());
-        if (res.ok && res.accountBalance != null) state.accountBalance = res.accountBalance;
-      } catch (_) {}
+      try { await fetch('/health').then(r => r.json()); } catch (_) {}
+      try { const res = await fetch('/api/signals?limit=50', { headers }).then(r => r.json()); for (const sig of res.signals || []) ingestSignal(sig, false); } catch (_) {}
+      try { const res = await fetch('/api/stats', { headers }).then(r => r.json()); if (res.ok && res.accountBalance != null) state.accountBalance = res.accountBalance; } catch (_) {}
       await hydrateLearning();
       renderAll();
     }
-
     async function hydrateLearning() {
       const headers = authHeaders();
-      try {
-        const res = await fetch('/api/learning?limit=30', { headers }).then(r => r.json());
-        state.learning = res.profiles || [];
-      } catch (_) { state.learning = []; }
+      try { const res = await fetch('/api/learning?limit=30', { headers }).then(r => r.json()); state.learning = res.profiles || []; } catch (_) { state.learning = []; }
     }
 
-    async function hydrateOutlook() {
-      const headers = authHeaders();
-      try {
-        const res = await fetch('/api/outlook', { headers }).then(r => r.json());
-        if (res.ok) state.outlook = res.outlook;
-      } catch (_) {}
-      renderOutlook();
-    }
-
-    async function hydrateBoard() {
-      const headers = authHeaders();
-      try {
-        const res = await fetch('/api/watchlist', { headers }).then(r => r.json());
-        if (res.ok) state.watchlist = res.opportunities || [];
-      } catch (_) {}
-      try {
-        const res = await fetch('/api/health', { headers }).then(r => r.json());
-        if (res.ok) state.feedHealth = res;
-      } catch (_) {}
-      renderWatchlistBoard();
-      renderFeedHealth();
-    }
-
-    async function hydrateHeatmap() {
-      const headers = authHeaders();
-      try {
-        const res = await fetch('/api/heatmap', { headers }).then(r => r.json());
-        if (res.ok) state.heatmap = res;
-      } catch (_) {}
-      renderHeatMap();
-    }
-
-    async function hydrateNews() {
-      const headers = authHeaders();
-      try {
-        const [cryptoRes, forexRes] = await Promise.all([
-          fetch('/api/news?category=crypto', { headers }).then(r => r.json()).catch(() => ({ ok: false })),
-          fetch('/api/news?category=forex', { headers }).then(r => r.json()).catch(() => ({ ok: false })),
-        ]);
-        const crypto = cryptoRes.ok ? (cryptoRes.news || []).map(n => ({ ...n, _category: 'crypto' })) : [];
-        const forex  = forexRes.ok  ? (forexRes.news  || []).map(n => ({ ...n, _category: 'forex'  })) : [];
-        state.news = [...crypto, ...forex].sort((a, b) => (b.datetime || 0) - (a.datetime || 0));
-      } catch (_) { state.news = []; }
-      renderNews();
-    }
-    setInterval(hydrateNews, 5 * 60 * 1000);
-
-    async function hydrateJournal() {
-      const headers = authHeaders();
-      try {
-        const res = await fetch('/api/journal', { headers }).then(r => r.json());
-        if (res.ok) state.journal = res.stats;
-      } catch (_) {}
-      renderJournal();
-    }
-
-    async function hydrateAuditTrail() {
-      const headers = authHeaders();
-      try {
-        const res = await fetch('/api/audit-trail?limit=40', { headers }).then(r => r.json());
-        state.auditTrail = res.ok ? (res.entries || []) : [];
-      } catch (_) { state.auditTrail = []; }
-      renderAuditTrail();
-    }
-
-    async function hydrateTelemetry() {
-      const headers = authHeaders();
-      try {
-        const res = await fetch('/api/telemetry?limit=60', { headers }).then(r => r.json());
-        if (res.ok && Array.isArray(res.telemetry) && res.telemetry.length) {
-          const seen = new Set(state.telemetry.map(t => `${t.timestamp || t.receivedAt}_${t.type}_${t.symbol}`));
-          for (const t of res.telemetry) {
-            const key = `${t.timestamp}_${t.type}_${t.symbol}`;
-            if (!seen.has(key)) { state.telemetry.push(t); seen.add(key); }
-          }
-          state.telemetry.sort((a, b) => (b.timestamp || b.receivedAt || 0) - (a.timestamp || a.receivedAt || 0));
-          state.telemetry = state.telemetry.slice(0, 60);
-        }
-      } catch (_) {}
-      renderTape();
-    }
-
-    // ══════════════════════════════════════════════════════
-    // 6. INGEST SIGNAL
-    // ══════════════════════════════════════════════════════
-
+    // ─── INGEST SIGNAL ──────────────────────────────────────
     function ingestSignal(sig, rerender = true) {
       if (!sig || sig.action === 'WAIT') return;
       if (state.signals.some(s => s.id === sig.id)) return;
-      const isNew = rerender && state.signals.length > 0;
       state.signals.unshift(sig);
       state.signals = state.signals.slice(0, 200);
       if (!state.selectedId) state.selectedId = sig.id;
-      if (isNew) haptic('signal');
-      if (rerender) renderAll();
+      if (rerender) { haptic('signal'); renderAll(); }
     }
 
-    // ══════════════════════════════════════════════════════
-    // 7. NAVIGATION
-    // ══════════════════════════════════════════════════════
-
+    // ─── NAVIGATION ──────────────────────────────────────────
     function switchView(viewId) {
       state.currentView = viewId;
-      document.querySelectorAll('.view-container').forEach(v => v.classList.remove('active'));
+      document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
       document.getElementById('view-' + viewId)?.classList.add('active');
-      document.querySelectorAll('.sidebar-btn, .nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === viewId));
+      document.querySelectorAll('.nav-tab, .mobile-nav button').forEach(b => b.classList.toggle('active', b.dataset.view === viewId));
       haptic('nav');
-      if (viewId === 'outlook' && !state.outlook) hydrateOutlook();
-      if (viewId === 'monitor' && !state.watchlist.length && !state.feedHealth) hydrateBoard();
-      if (viewId === 'heatmap' && !state.heatmap) hydrateHeatmap();
-      if (viewId === 'intel' && !state.news.length) hydrateNews();
-      if (viewId === 'risk' && !state.journal) hydrateJournal();
-      if (viewId === 'tape' && !state.auditTrail.length) hydrateAuditTrail();
-      if (viewId === 'tape' && !state.telemetry.length) hydrateTelemetry();
       renderAll();
     }
-
-    document.querySelectorAll('[data-view]').forEach(btn => btn.addEventListener('click', () => switchView(btn.dataset.view)));
-
-    document.querySelectorAll('[data-filter]').forEach(btn => btn.addEventListener('click', () => {
-      state.filter = btn.dataset.filter;
-      document.querySelectorAll('[data-filter]').forEach(b => b.classList.toggle('active', b.dataset.filter === state.filter));
-      renderSignalCards();
-    }));
-
+    document.querySelectorAll('.nav-tab, .mobile-nav button').forEach(btn => btn.addEventListener('click', () => switchView(btn.dataset.view)));
     document.querySelectorAll('[data-filter-sig]').forEach(btn => btn.addEventListener('click', () => {
       state.filterSig = btn.dataset.filterSig;
       document.querySelectorAll('[data-filter-sig]').forEach(b => b.classList.toggle('active', b.dataset.filterSig === state.filterSig));
-      renderSignalTable('signal-body-full', state.filterSig);
+      renderSignalTable();
     }));
 
-    // ══════════════════════════════════════════════════════
-    // 8. RENDER ENGINE
-    // ══════════════════════════════════════════════════════
-
+    // ─── RENDER ENGINE ──────────────────────────────────────
     function renderAll() {
-      renderTicker();
+      renderSignalFeed();
+      renderPnLChart();
       renderMetrics();
-      renderHero();
-      renderSignalCards();
-      renderSignalTable('signal-body-full', state.filterSig);
-      renderDetail('detail-panel', 'detail-title');
-      renderDetail('detail-panel-full', 'detail-title-full');
       renderRadar();
       renderRegimes();
-      renderTape();
-      renderRisk();
-      renderValidation();
-      renderLearning();
+      renderSignalTable();
       renderIntel();
-      renderWatchlist();
-      renderWatchlistBoard();
-      renderFeedHealth();
-      renderMarketAlerts();
-      renderHeatMap();
+      renderNews();
+      renderRisk();
+      renderLearning();
+      renderDetail();
+      updateBadges();
     }
 
-    // ─── Ticker ──────────────────────────────────────────
-    function renderTicker() {
-      const container = document.getElementById('ticker');
-      const items = Object.values(state.markets).slice(0, 8);
-      if (!items.length) { container.innerHTML = '<span class="text-faint text-xs">Waiting for market data...</span>'; return; }
-      container.innerHTML = items.map(m => {
-        const ch = Number(m.change || 0);
-        const id = 'spark-' + esc(m.symbol);
-        return `<div class="ticker-pill"><span class="sym">${esc(m.symbol)}</span><canvas id="${id}" width="32" height="14"></canvas><span class="price">${formatPrice(m.price)}</span><span class="${ch >= 0 ? 'good' : 'bad'}">${ch >= 0 ? '+' : ''}${ch.toFixed(2)}%</span></div>`;
-      }).join('');
-      for (const m of items) {
-        const c = document.getElementById('spark-' + m.symbol);
-        if (c) drawSparkline(c, state.priceHistory[m.symbol] || [], Number(m.change) >= 0 ? '#1fe3a8' : '#ff5470');
+    // ─── Signal Feed ────────────────────────────────────────
+    function renderSignalFeed() {
+      const container = document.getElementById('signal-feed-list');
+      const count = document.getElementById('signal-count');
+      if (!container) return;
+      count.textContent = state.signals.length;
+      if (!state.signals.length) {
+        container.innerHTML = '<div class="text-faint text-xs text-mono" style="padding:20px 0;">No signals yet.</div>';
+        return;
       }
+      container.innerHTML = state.signals.slice(0, 40).map(sig => {
+        const dir = String(sig.action || '').toLowerCase();
+        const selected = sig.id === state.selectedId ? 'selected' : '';
+        const score = Number(sig.score?.final || 0);
+        return `<div class="signal-item ${selected}" onclick="selectSignal('${escAttr(sig.id)}')">
+          <div>
+            <span class="sym">${esc(sig.symbol)}</span>
+            <span class="side ${dir}">${esc(sig.action)}</span>
+          </div>
+          <div style="text-align:right;">
+            <div class="score" style="color:${score >= 85 ? 'var(--emerald)' : score >= 75 ? 'var(--amber)' : 'var(--coral)'};">${score}</div>
+            <div class="time">${time(sig.timestamp)}</div>
+          </div>
+        </div>`;
+      }).join('');
     }
 
-    // ─── Hero ────────────────────────────────────────────
-    function renderHero() {
-      const pnl = Number(state.risk.dailyPnl || 0);
-      const el = document.getElementById('hero-pnl');
-      el.textContent = pnl.toFixed(2) + '%';
-      el.className = 'hero-number ' + (pnl < 0 ? 'bad' : pnl > 0 ? 'good' : '');
-      const cb = document.getElementById('hero-cb');
-      const isOpen = state.risk.state === 'OPEN';
-      cb.innerHTML = `<i class="fas fa-circle"></i> CIRCUIT ${state.risk.state || 'CLOSED'}`;
-      cb.className = 'hero-chip ' + (isOpen ? 'off' : 'on');
-      document.getElementById('hero-sizing').innerHTML = `<i class="fas fa-weight-hanging"></i> SIZING ${Math.round((state.risk.netSizingFactor ?? 1) * 100)}%`;
-      document.getElementById('hero-count').textContent = state.signals.length;
-      drawSparkline(document.getElementById('spark-canvas'), state.pnlHistory.map(p => p.v), pnl >= 0 ? '#1fe3a8' : '#ff5470', true);
+    // ─── PnL Chart ──────────────────────────────────────────
+    function renderPnLChart() {
+      const canvas = document.getElementById('pnl-chart');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      const data = state.pnlHistory.map(p => p.v);
+      const labels = state.pnlHistory.map(p => new Date(p.t).toLocaleTimeString());
+      if (state.chartInstances.pnl) { state.chartInstances.pnl.destroy(); }
+      state.chartInstances.pnl = new Chart(ctx, {
+        type: 'line',
+        data: { labels, datasets: [{ label: 'PnL %', data, borderColor: '#1fe3a8', backgroundColor: 'rgba(31,227,168,0.05)', fill: true, tension: 0.3, pointRadius: 0 }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { display: true, grid: { color: 'rgba(255,255,255,0.03)' } } } }
+      });
     }
 
-    // ─── Metrics ─────────────────────────────────────────
+    // ─── Metrics ────────────────────────────────────────────
     function renderMetrics() {
+      const pnl = Number(state.risk.dailyPnl || 0);
+      document.getElementById('hero-pnl').textContent = pnl.toFixed(2) + '%';
+      document.getElementById('hero-pnl').style.color = pnl < 0 ? 'var(--coral)' : pnl > 0 ? 'var(--emerald)' : 'var(--text)';
       const best = Object.values(state.regimes).sort((a, b) => (b.tradeability || 0) - (a.tradeability || 0))[0];
       const lastGate = state.telemetry.find(t => t.gate)?.gate;
       const rejected = lastGate?.status === 'REJECTED';
       setText('m-gate', lastGate?.status || 'ARMED');
-      setClass('m-gate', 'metric-value ' + (rejected ? 'bad' : lastGate?.status?.includes('WARN') ? 'warn-text' : 'good'));
-      setText('m-gate-sub', lastGate?.failures?.[0] || lastGate?.warnings?.[0] || 'no rejected setup');
+      document.getElementById('m-gate').style.color = rejected ? 'var(--coral)' : lastGate?.status?.includes('WARN') ? 'var(--amber)' : 'var(--emerald)';
+      setText('m-gate-sub', lastGate?.failures?.[0] || lastGate?.warnings?.[0] || 'No rejects');
       setText('m-symbols', Object.keys(state.markets).length);
       setText('m-learn', state.learning.length ? 'ACTIVE' : 'WARM');
-      setClass('m-learn', 'metric-value ' + (state.learning.length ? 'good' : 'warn-text'));
+      document.getElementById('m-learn').style.color = state.learning.length ? 'var(--emerald)' : 'var(--amber)';
       const worst = state.learning[0];
-      setText('m-learn-sub', worst ? `${(Number(worst.winRate || 0) * 100).toFixed(0)}% WR / ${Number(worst.expectancyR || 0).toFixed(2)}R` : 'awaiting outcomes');
+      setText('m-learn-sub', worst ? `${(Number(worst.winRate || 0) * 100).toFixed(0)}% WR / ${Number(worst.expectancyR || 0).toFixed(2)}R` : 'Awaiting outcomes');
       setText('c-regime', best?.regime || '--');
-      setText('c-regime-sub', best ? `${best.symbol} ${best.tradeability}/100` : 'waiting for feed');
+      setText('c-regime-sub', best ? `${best.symbol} ${best.tradeability}/100` : 'Waiting for feed');
       setText('c-gradea', state.signals.filter(s => s.score?.grade === 'A').length);
       const avg = state.signals.length ? state.signals.reduce((s, x) => s + Number(x.score?.final || 0), 0) / state.signals.length : 0;
       setText('c-score', avg ? avg.toFixed(0) : '--');
     }
 
-    // ─── Signal Cards ────────────────────────────────────
-    function renderSignalCards() {
-      const el = document.getElementById('signal-cards');
-      if (!el) return;
-      let rows = state.signals;
-      if (state.filter === 'A') rows = rows.filter(s => s.score?.grade === 'A');
-      if (!rows.length) {
-        el.innerHTML = state.connected
-          ? `<div class="empty-state"><i class="fas fa-signal"></i> Waiting for the first approved institutional signal...</div>`
-          : `<div class="empty-state"><i class="fas fa-spinner fa-pulse"></i> Connecting...</div>`;
-        return;
-      }
-      el.innerHTML = rows.slice(0, 25).map((sig, i) => {
-        const dir = String(sig.action || '').toLowerCase();
-        const selected = sig.id === state.selectedId ? 'selected' : '';
-        const score = Number(sig.score?.final || 0);
-        const grade = sig.score?.grade || '-';
-        const thesis = (sig.allReasons || sig.reasons || [sig.reasoning || '']).join(' ') || 'No thesis recorded.';
-        return `<div class="signal-card" style="padding:12px 16px;border-bottom:1px solid var(--panel-border);display:flex;align-items:center;gap:12px;cursor:pointer;transition:var(--transition);${selected ? 'background:rgba(31,227,168,0.04);border-left:2px solid var(--emerald);' : ''}" onclick="selectSignal('${escAttr(sig.id)}')">
-          <div style="width:3px;align-self:stretch;border-radius:2px;flex-shrink:0;background:${dir === 'long' ? 'var(--emerald)' : 'var(--coral)'};"></div>
-          <div style="flex:1;min-width:0;">
-            <div style="display:flex;align-items:center;gap:8px;">
-              <span style="font-family:var(--font-mono);font-weight:700;font-size:13px;">${esc(sig.symbol)}</span>
-              <span class="dir-badge ${esc(sig.action)}">${esc(sig.action)}</span>
-              <span class="grade-badge ${esc(grade)}">${esc(grade)}</span>
-            </div>
-            <div style="font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px;">${esc(thesis)}</div>
-          </div>
-          <div style="text-align:right;flex-shrink:0;">
-            <div style="font-family:var(--font-mono);font-weight:800;font-size:16px;${score >= 85 ? 'color:var(--emerald)' : score >= 75 ? 'color:var(--amber)' : 'color:var(--coral)'};">${score}</div>
-            <div style="font-family:var(--font-mono);font-size:9.5px;color:var(--faint);margin-top:2px;">${time(sig.timestamp)}</div>
-          </div>
-        </div>`;
-      }).join('');
-    }
-
-    // ─── Signal Table ────────────────────────────────────
-    function renderSignalTable(bodyId, filter) {
-      const body = document.getElementById(bodyId);
-      if (!body) return;
-      let rows = state.signals;
-      if (filter === 'A') rows = rows.filter(s => s.score?.grade === 'A');
-      if (filter === 'LONG') rows = rows.filter(s => s.action === 'LONG');
-      if (filter === 'SHORT') rows = rows.filter(s => s.action === 'SHORT');
-      if (!rows.length) {
-        body.innerHTML = `<tr><td colspan="10"><div class="empty-state"><i class="fas fa-signal"></i> Waiting for approved institutional signals...</div></td></tr>`;
-        return;
-      }
-      body.innerHTML = rows.map(sig => {
-        const dir = String(sig.action || '').toLowerCase();
-        const selected = sig.id === state.selectedId ? 'selected' : '';
-        const score = Number(sig.score?.final || 0);
-        const scoreColor = score >= 85 ? 'var(--emerald)' : score >= 75 ? 'var(--amber)' : 'var(--coral)';
-        const gateStatus = sig.gate?.status || 'APPROVED';
-        const gateCls = gateStatus === 'REJECTED' ? 'bad' : gateStatus.includes('WARN') ? 'warn-text' : 'good';
-        const thesis = (sig.allReasons || sig.reasons || [sig.reasoning || '']).join(' ').slice(0, 120);
-        return `<tr class="${selected}" onclick="selectSignal('${escAttr(sig.id)}')">
-          <td>${time(sig.timestamp)}</td>
-          <td style="color:var(--azure);font-weight:600;">${esc(sig.symbol)}</td>
-          <td><span class="dir-badge ${esc(sig.action)}">${esc(sig.action)}</span></td>
-          <td><div class="fw-700">${score}</div><div style="height:3px;background:var(--panel-border);border-radius:2px;margin-top:2px;"><div style="height:100%;width:${Math.min(score,100)}%;border-radius:2px;background:${scoreColor};"></div></div></td>
-          <td class="text-xs">${esc(sig.regime?.regime || '--')}</td>
-          <td><span class="${gateCls} fw-700 text-xs">${esc(gateStatus)}</span></td>
-          <td>${formatPrice(sig.entry?.midpoint || sig.entry?.zoneHigh || sig.currentPrice)}</td>
-          <td style="color:var(--coral);">${formatPrice(sig.stopLoss?.price)}</td>
-          <td style="color:var(--emerald);">${formatPrice(sig.targets?.tp1?.price)}</td>
-          <td class="text-xs text-muted">${esc(thesis || '--')}</td>
-        </tr>`;
-      }).join('');
-    }
-
-    // ─── Detail ──────────────────────────────────────────
-    const AGENT_COLORS = { SMC: '#1fe3a8', MTF: '#5ea8ff', Momentum: '#f0b429', 'Volume/OI': '#a78bfa', Microstructure: '#22d3ee', Fractal: '#ff5470', Sentiment: '#8b9bb0', Pattern: '#e8b64a' };
-
-    function renderDetail(panelId, titleId) {
-      const sig = state.signals.find(s => s.id === state.selectedId);
-      const el = document.getElementById(panelId);
-      const titleEl = document.getElementById(titleId);
-      if (!el) return;
-      if (!sig) {
-        el.innerHTML = `<div class="empty-state"><i class="fas fa-arrow-pointer"></i> Select a signal to inspect.</div>`;
-        if (titleEl) titleEl.textContent = 'Signal Inspector';
-        return;
-      }
-      if (titleEl) titleEl.textContent = `${sig.symbol} ${sig.action} ${sig.timeframe || ''}`;
-
-      const agents = (sig.agentBreakdown || sig.agents || []);
-      const agentHtml = agents.map(a => {
-        const name = a.agent || a.label || '';
-        const color = AGENT_COLORS[name] || '#526078';
-        const dirCls = a.status === 'OPPOSES' ? 'bad' : a.status === 'NEUTRAL' ? 'warn-text' : 'good';
-        return `<div class="agent-vote">
-          <div class="agent-icon" style="background:${color}22;color:${color}">${esc(name).slice(0,2).toUpperCase()}</div>
-          <div class="agent-info"><div class="agent-name">${esc(name)}</div><div class="agent-detail">${esc(a.status || a.direction || '--')}</div></div>
-          <div class="agent-score ${dirCls}">${esc(a.score)}</div>
-        </div>`;
-      }).join('');
-
-      const reasons = (sig.allReasons || sig.reasons || []).slice(0, 6).map(r =>
-        `<div style="display:flex;gap:8px;padding:4px 0;border-bottom:1px solid var(--panel-border);font-family:var(--font-mono);font-size:11px;color:var(--muted);"><span style="color:var(--emerald);">›</span>${esc(r)}</div>`
-      ).join('');
-
-      let validationHtml = '';
-      if (sig.validation || sig.ensemble) {
-        validationHtml = '<div class="mt-12"><div class="text-mono text-xs" style="color:var(--faint);font-weight:700;letter-spacing:0.1em;">VALIDATION SUMMARY</div>';
-        if (sig.validation?.monteCarlo) {
-          const mc = sig.validation.monteCarlo;
-          validationHtml += `<div class="kv-row"><span class="kv-key">Monte Carlo</span><span class="kv-val ${mc.approved ? 'good' : 'bad'}">${(mc.winProbability * 100).toFixed(1)}% win / ${mc.simulations} sims</span></div>`;
-        }
-        if (sig.validation?.bayesian) {
-          const b = sig.validation.bayesian;
-          validationHtml += `<div class="kv-row"><span class="kv-key">Bayesian</span><span class="kv-val ${b.approved ? 'good' : 'bad'}">${(b.posterior * 100).toFixed(1)}% posterior</span></div>`;
-        }
-        if (sig.validation?.statistical) {
-          const s = sig.validation.statistical;
-          validationHtml += `<div class="kv-row"><span class="kv-key">Statistical</span><span class="kv-val ${s.approved ? 'good' : 'bad'}">${s.passed}/${s.total} tests passed</span></div>`;
-        }
-        if (sig.ensemble) {
-          validationHtml += `<div class="kv-row"><span class="kv-key">Ensemble</span><span class="kv-val ${sig.ensemble.approved ? 'good' : 'bad'}">${sig.ensemble.ensembleScore}/100</span></div>`;
-        }
-        validationHtml += '</div>';
-      }
-
-      el.innerHTML = `
-        <div class="kv-row"><span class="kv-key">Score</span><span class="kv-val fw-800">${esc(sig.score?.final)} / Grade ${esc(sig.score?.grade || '--')}</span></div>
-        <div class="kv-row"><span class="kv-key">Gate</span><span class="kv-val ${sig.gate?.status === 'REJECTED' ? 'bad' : 'good'}">${esc(sig.gate?.status || 'APPROVED')}</span></div>
-        <div class="kv-row"><span class="kv-key">Confidence</span><span class="kv-val">${esc(sig.gate?.confidence ?? '--')}</span></div>
-        <div class="kv-row"><span class="kv-key">Regime</span><span class="kv-val">${esc(sig.regime?.regime || '--')} / ${esc(sig.regime?.tradeability ?? '--')}</span></div>
-        <div class="kv-row"><span class="kv-key">Entry</span><span class="kv-val">${formatPrice(sig.entry?.midpoint || sig.entry?.zoneHigh || sig.currentPrice)}</span></div>
-        <div class="kv-row"><span class="kv-key">Stop Loss</span><span class="kv-val bad">${formatPrice(sig.stopLoss?.price)}</span></div>
-        <div class="kv-row"><span class="kv-key">TP1 / TP2</span><span class="kv-val good">${formatPrice(sig.targets?.tp1?.price)} / ${formatPrice(sig.targets?.tp2?.price)}</span></div>
-        <div class="kv-row"><span class="kv-key">Risk</span><span class="kv-val">${esc(sig.riskEvaluation?.effectiveRisk ?? sig.risk?.effectiveRisk ?? '--')}%</span></div>
-        <div class="kv-row"><span class="kv-key">Learning</span><span class="kv-val text-xs">${esc(sig.gate?.learning?.note || 'No profile yet')}</span></div>
-        ${validationHtml}
-        <div class="outcome-row">
-          <button class="outcome-btn win" onclick="recordOutcome('${escAttr(sig.id)}', 1)">WIN +1R</button>
-          <button class="outcome-btn be" onclick="recordOutcome('${escAttr(sig.id)}', 0)">BE 0R</button>
-          <button class="outcome-btn loss" onclick="recordOutcome('${escAttr(sig.id)}', -1)">LOSS -1R</button>
-        </div>
-        <div class="mt-12 text-mono text-xs" style="color:var(--faint);font-weight:700;letter-spacing:0.1em;">AGENT VOTES (${agents.length})</div>
-        ${agentHtml || '<div class="text-xs text-muted mt-8">No agent breakdown.</div>'}
-        <div class="mt-12 text-mono text-xs" style="color:var(--faint);font-weight:700;letter-spacing:0.1em;">THESIS</div>
-        ${reasons || '<div class="text-muted text-xs">No reasons.</div>'}
-      `;
-    }
-
-    // ─── Radar ───────────────────────────────────────────
+    // ─── Radar ──────────────────────────────────────────────
     function renderRadar() {
       const sig = state.signals.find(s => s.id === state.selectedId);
       const canvas = document.getElementById('radar-canvas');
@@ -2000,26 +883,25 @@
       const agents = sig ? (sig.agentBreakdown || sig.agents || []) : [];
       symEl.textContent = sig ? `${sig.symbol} ${sig.action}` : '--';
       if (!sig || !agents.length) {
-        drawRadarChart(canvas, [], sig?.action);
-        caption.innerHTML = sig ? 'This signal has no per-agent breakdown available.' : 'Select a signal to see live agent consensus.';
+        drawRadar(canvas, [], sig?.action);
+        caption.textContent = sig ? 'No agent breakdown' : 'Select a signal';
         return;
       }
-      drawRadarChart(canvas, agents, sig.action);
+      drawRadar(canvas, agents, sig.action);
       const supporting = agents.filter(a => a.status !== 'OPPOSES' && a.status !== 'NEUTRAL').length;
-      caption.innerHTML = `<b>${supporting}/${agents.length}</b> agents support this ${esc(sig.action)} — score <b>${esc(sig.score?.final)}</b>`;
+      caption.innerHTML = `<b>${supporting}/${agents.length}</b> agents support this ${sig.action}`;
     }
 
-    function drawRadarChart(canvas, agents, direction) {
+    function drawRadar(canvas, agents, direction) {
       const ctx = canvas.getContext('2d');
       const dpr = window.devicePixelRatio || 1;
-      const size = 220;
+      const size = 160;
       canvas.width = size * dpr; canvas.height = size * dpr;
       canvas.style.width = size + 'px'; canvas.style.height = size + 'px';
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, size, size);
-      const cx = size / 2, cy = size / 2, R = size / 2 - 28;
+      const cx = size / 2, cy = size / 2, R = size / 2 - 16;
       const n = Math.max(agents.length, 3);
-
       ctx.strokeStyle = 'rgba(255,255,255,.06)';
       ctx.lineWidth = 1;
       for (let ring = 1; ring <= 4; ring++) {
@@ -2033,21 +915,17 @@
         ctx.stroke();
       }
       ctx.fillStyle = '#526078';
-      ctx.font = '600 8px "JetBrains Mono", monospace';
+      ctx.font = '600 7px "JetBrains Mono", monospace';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       for (let i = 0; i < n; i++) {
         const a = (Math.PI * 2 * i / n) - Math.PI / 2;
-        const x2 = cx + Math.cos(a) * R, y2 = cy + Math.sin(a) * R;
-        ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(x2, y2);
-        ctx.strokeStyle = 'rgba(255,255,255,.06)'; ctx.stroke();
         if (agents[i]) {
-          const lx = cx + Math.cos(a) * (R + 16), ly = cy + Math.sin(a) * (R + 16);
+          const lx = cx + Math.cos(a) * (R + 12), ly = cy + Math.sin(a) * (R + 12);
           const name = (agents[i].agent || agents[i].label || '').slice(0, 4).toUpperCase();
           ctx.fillText(name, lx, ly);
         }
       }
       if (!agents.length) return;
-
       const fillColor = direction === 'SHORT' ? '255,84,112' : '31,227,168';
       ctx.beginPath();
       agents.forEach((ag, i) => {
@@ -2063,426 +941,122 @@
       ctx.strokeStyle = `rgba(${fillColor},.9)`;
       ctx.lineWidth = 1.6;
       ctx.stroke();
-
       agents.forEach((ag, i) => {
         const a = (Math.PI * 2 * i / n) - Math.PI / 2;
         const score = ag.status === 'OPPOSES' ? 0.15 : ag.status === 'NEUTRAL' ? 0.5 : Math.min(1, Math.max(0.3, Number(ag.score || 50) / 100));
         const r = R * score;
         const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
         const dotColor = ag.status === 'OPPOSES' ? '#ff5470' : ag.status === 'NEUTRAL' ? '#f0b429' : '#1fe3a8';
-        ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+        ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2);
         ctx.fillStyle = dotColor; ctx.fill();
       });
     }
 
-    // ─── Regimes ──────────────────────────────────────────
+    // ─── Regimes ────────────────────────────────────────────
     function renderRegimes() {
       const el = document.getElementById('regime-board');
       if (!el) return;
-      const rows = Object.values(state.regimes).sort((a, b) => (b.tradeability || 0) - (a.tradeability || 0)).slice(0, 10);
-      if (!rows.length) { el.innerHTML = '<div class="text-faint text-xs text-mono">No regime data yet.</div>'; return; }
+      const rows = Object.values(state.regimes).sort((a, b) => (b.tradeability || 0) - (a.tradeability || 0)).slice(0, 8);
+      if (!rows.length) { el.innerHTML = '<span class="text-faint text-xs">No regime data</span>'; return; }
       el.innerHTML = rows.map(r => {
-        const color = r.tradeability >= 70 ? 'good' : r.tradeability >= 50 ? 'warn-text' : 'bad';
-        return `<div class="kv-row"><span class="kv-key">${esc(r.symbol)} ${esc(r.timeframe || '')}</span><span class="kv-val ${color}">${esc(r.regime)} / ${esc(r.tradeability)}</span></div>`;
+        const color = r.tradeability >= 70 ? 'var(--emerald)' : r.tradeability >= 50 ? 'var(--amber)' : 'var(--coral)';
+        return `<span style="background:var(--bg);padding:4px 10px;border-radius:12px;border:1px solid var(--border);font-family:var(--font-mono);font-size:9px;"><span style="font-weight:700;">${esc(r.symbol)}</span> <span style="color:${color};">${esc(r.regime)}</span> <span class="text-faint">${r.tradeability}</span></span>`;
       }).join('');
     }
 
-    // ─── Tape ────────────────────────────────────────────
-    function renderTape() {
-      const el = document.getElementById('gate-tape');
+    // ─── Signal Table ──────────────────────────────────────
+    function renderSignalTable() {
+      const body = document.getElementById('signal-body-full');
+      if (!body) return;
+      let rows = state.signals;
+      const filter = state.filterSig;
+      if (filter === 'A') rows = rows.filter(s => s.score?.grade === 'A');
+      if (filter === 'LONG') rows = rows.filter(s => s.action === 'LONG');
+      if (filter === 'SHORT') rows = rows.filter(s => s.action === 'SHORT');
+      if (!rows.length) { body.innerHTML = `<tr><td colspan="10"><div class="text-faint text-xs text-mono" style="padding:20px;">No signals match filter.</div></td></tr>`; return; }
+      body.innerHTML = rows.map(sig => {
+        const dir = String(sig.action || '').toLowerCase();
+        const selected = sig.id === state.selectedId ? 'selected' : '';
+        const score = Number(sig.score?.final || 0);
+        const scoreColor = score >= 85 ? 'var(--emerald)' : score >= 75 ? 'var(--amber)' : 'var(--coral)';
+        const gateStatus = sig.gate?.status || 'APPROVED';
+        const gateCls = gateStatus === 'REJECTED' ? 'bad' : gateStatus.includes('WARN') ? 'warn' : 'good';
+        const thesis = (sig.allReasons || sig.reasons || [sig.reasoning || '']).join(' ').slice(0, 80);
+        return `<tr class="${selected}" onclick="selectSignal('${escAttr(sig.id)}')" style="cursor:pointer;">
+          <td style="padding:8px 10px;">${time(sig.timestamp)}</td>
+          <td style="padding:8px 10px;font-weight:600;color:var(--azure);">${esc(sig.symbol)}</td>
+          <td style="padding:8px 10px;"><span class="side ${dir}">${esc(sig.action)}</span></td>
+          <td style="padding:8px 10px;font-weight:700;color:${scoreColor};">${score}</td>
+          <td style="padding:8px 10px;font-size:10px;">${esc(sig.regime?.regime || '--')}</td>
+          <td style="padding:8px 10px;"><span class="${gateCls} text-xs">${esc(gateStatus)}</span></td>
+          <td style="padding:8px 10px;">${formatPrice(sig.entry?.midpoint || sig.entry?.zoneHigh || sig.currentPrice)}</td>
+          <td style="padding:8px 10px;color:var(--coral);">${formatPrice(sig.stopLoss?.price)}</td>
+          <td style="padding:8px 10px;color:var(--emerald);">${formatPrice(sig.targets?.tp1?.price)}</td>
+          <td style="padding:8px 10px;font-size:10px;color:var(--muted);">${esc(thesis || '--')}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    // ─── Intel ──────────────────────────────────────────────
+    function renderIntel() {
+      const el = document.getElementById('intel-feed');
+      const count = document.getElementById('intel-count');
       if (!el) return;
-      if (!state.telemetry.length) { el.innerHTML = '<div class="empty-state"><i class="fas fa-tape"></i> No gate events yet.</div>'; return; }
-      el.innerHTML = state.telemetry.slice(0, 40).map(t => {
-        const status = t.gate?.status || t.type || 'EVENT';
-        const cls = status === 'REJECTED' ? 'bad' : String(status).includes('WARN') ? 'warn-text' : 'good';
-        const text = t.gate?.failures?.[0] || t.gate?.warnings?.[0] || t.type || 'telemetry';
-        return `<div style="display:flex;align-items:center;gap:12px;padding:8px 14px;border-bottom:1px solid var(--panel-border);font-family:var(--font-mono);font-size:10.5px;transition:var(--transition);">
-          <span style="color:var(--faint);width:46px;flex-shrink:0;font-size:9.5px;">${time(t.receivedAt || t.timestamp)}</span>
-          <span style="color:var(--azure);width:68px;flex-shrink:0;font-weight:600;">${esc(t.symbol || 'SYS')}</span>
-          <span style="flex:1;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(text)}</span>
-          <span class="text-xs fw-600 ${cls}">${esc(status)}</span>
+      count.textContent = state.intel.length;
+      if (!state.intel.length) { el.innerHTML = '<div class="text-faint text-xs">No intel yet</div>'; return; }
+      el.innerHTML = state.intel.slice(0, 20).map(it => {
+        const meta = INTEL_META[it.kind] || { icon: '📊', color: '#8b9bb0', label: it.kind || 'Event' };
+        let desc = '';
+        if (it.kind === 'economic_surprise') desc = `${it.event?.name || ''} — ${it.impact || '--'}`;
+        else if (it.kind === 'cluster_buy') desc = `${it.ticker}: ${it.insiderCount} insiders, ${it.confidence}%`;
+        else if (it.kind === 'extreme_retail_positioning') desc = `${it.symbol}: ${it.data?.contrarianReason || 'extreme'}`;
+        else desc = JSON.stringify(it).slice(0, 60);
+        return `<div style="padding:6px 0;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center;">
+          <span style="font-size:14px;">${meta.icon}</span>
+          <div style="flex:1;min-width:0;">
+            <div style="font-weight:600;font-size:11px;">${esc(meta.label)}</div>
+            <div style="font-size:10px;color:var(--muted);">${esc(desc)}</div>
+            <div style="font-size:9px;color:var(--faint);">${time(it.receivedAt || it.timestamp)}</div>
+          </div>
         </div>`;
       }).join('');
     }
 
-    // ─── Risk ────────────────────────────────────────────
+    // ─── News ──────────────────────────────────────────────
+    function renderNews() {
+      const el = document.getElementById('news-feed');
+      const count = document.getElementById('news-count');
+      if (!el) return;
+      count.textContent = state.news.length;
+      if (!state.news.length) { el.innerHTML = '<div class="text-faint text-xs">No news</div>'; return; }
+      el.innerHTML = state.news.slice(0, 20).map(n => {
+        const catColor = n._category === 'crypto' ? 'var(--emerald)' : 'var(--gold)';
+        return `<div style="padding:6px 0;border-bottom:1px solid var(--border);">
+          <div style="font-weight:600;font-size:11px;">${esc(n.headline || 'Untitled')}</div>
+          <div style="font-size:10px;color:var(--muted);">${esc(n.summary ? n.summary.slice(0, 100) : (n.source || ''))}</div>
+          <div style="font-size:9px;color:var(--faint);"><span style="color:${catColor};">${esc(n._category || '')}</span> · ${time(n.datetime ? n.datetime * 1000 : Date.now())}</div>
+        </div>`;
+      }).join('');
+    }
+
+    // ─── Risk ──────────────────────────────────────────────
     function renderRisk() {
-      const fmtMoney = (v) => v == null ? 'Awaiting EA report' : `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      const fmtMoney = (v) => v == null ? '--' : `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
       setText('r-balance', fmtMoney(state.accountBalance));
       setText('r-equity', fmtMoney(state.accountEquity));
       const pnl = Number(state.risk.dailyPnl || 0);
-      setText('r-pnl', `${pnl.toFixed(2)}%`);
-      setClass('r-pnl', 'kv-val ' + (pnl < 0 ? 'bad' : 'good'));
-      setText('r-maxdaily', `${Number(state.risk.maxDailyLoss ?? 3).toFixed(1)}%`);
-      setText('r-dd', `${Number(state.risk.drawdown || 0).toFixed(2)}%`);
-      setText('r-maxdd', `${Number(state.risk.maxDrawdown ?? 10).toFixed(1)}%`);
+      setText('r-pnl', pnl.toFixed(2) + '%');
+      document.getElementById('r-pnl').style.color = pnl < 0 ? 'var(--coral)' : 'var(--emerald)';
+      setText('r-dd', Number(state.risk.drawdown || 0).toFixed(2) + '%');
       setText('r-consec', state.risk.consecLoss || 0);
-      setText('r-sizing', `${Math.round((state.risk.netSizingFactor ?? 1) * 100)}%`);
-
+      setText('r-sizing', Math.round((state.risk.netSizingFactor ?? 1) * 100) + '%');
       const circuitEl = document.getElementById('r-circuit');
       const isOpen = state.risk.state === 'OPEN';
       const isHalf = state.risk.state === 'HALF';
       circuitEl.textContent = state.risk.state || 'CLOSED';
-      circuitEl.className = 'gauge-state ' + (isOpen ? 'bad' : isHalf ? 'warn' : 'good');
-      setText('r-reason', isOpen
-        ? 'Trading halted. A protective limit has been breached — new signals are blocked until conditions recover.'
-        : isHalf
-        ? 'Reduced sizing in effect while the system watches recent performance.'
-        : 'All systems nominal. Full position sizing active.');
+      circuitEl.style.color = isOpen ? 'var(--coral)' : isHalf ? 'var(--amber)' : 'var(--emerald)';
+      document.getElementById('r-reason').textContent = isOpen ? 'Trading halted.' : isHalf ? 'Reduced sizing.' : 'All nominal.';
       drawGauge(document.getElementById('gauge-canvas'), Math.min(100, Math.abs(Number(state.risk.drawdown || 0)) / Math.max(1, Number(state.risk.maxDrawdown || 10)) * 100), isOpen ? '#ff5470' : isHalf ? '#f0b429' : '#1fe3a8');
-    }
-
-    // ─── Validation ──────────────────────────────────────
-    function renderValidation() {
-      const sig = state.signals.find(s => s.id === state.selectedId);
-      if (!sig) return;
-      const ensEl = document.getElementById('ensemble-panel');
-      if (ensEl && sig.ensemble?.layers) {
-        const layers = sig.ensemble.layers;
-        ensEl.innerHTML = `
-          <div class="kv-row"><span class="kv-key">Ensemble Score</span><span class="kv-val fw-800 ${sig.ensemble.approved ? 'good' : 'bad'}">${sig.ensemble.ensembleScore}/100</span></div>
-          <div class="kv-row"><span class="kv-key">Status</span><span class="kv-val ${sig.ensemble.approved ? 'good' : 'bad'}">${sig.ensemble.approved ? 'APPROVED' : 'REJECTED'}</span></div>
-          <div class="kv-row"><span class="kv-key">Penalty</span><span class="kv-val">${sig.ensemble.totalPenalty} pts</span></div>
-          <div class="mt-12">${layers.map(l => {
-            const pct = Math.min(100, Math.max(0, l.score || 0));
-            const color = l.approved ? 'var(--emerald)' : 'var(--coral)';
-            return `<div style="display:flex;align-items:center;gap:10px;padding:4px 0;border-bottom:1px solid var(--panel-border);">
-              <span style="width:108px;flex-shrink:0;font-family:var(--font-mono);font-size:10px;font-weight:600;color:var(--muted);">${esc(l.name)}</span>
-              <div style="flex:1;height:6px;background:var(--panel-border);border-radius:3px;overflow:hidden;"><div style="height:100%;width:${pct}%;background:${color};border-radius:3px;transition:width 0.6s ease;"></div></div>
-              <span style="width:34px;text-align:right;font-family:var(--font-mono);font-size:11px;font-weight:700;color:${color};">${pct}</span>
-            </div>`;
-          }).join('')}</div>`;
-      }
-      const mcEl = document.getElementById('mc-panel');
-      if (mcEl && sig.validation?.monteCarlo) {
-        const mc = sig.validation.monteCarlo;
-        mcEl.innerHTML = `
-          <div class="kv-row"><span class="kv-key">Status</span><span class="kv-val ${mc.approved ? 'good' : 'bad'}">${mc.approved ? 'APPROVED' : 'REJECTED'}</span></div>
-          <div class="kv-row"><span class="kv-key">Win Probability</span><span class="kv-val fw-700">${(mc.winProbability * 100).toFixed(1)}%</span></div>
-          <div class="kv-row"><span class="kv-key">Expected R</span><span class="kv-val">${mc.expectedR}R</span></div>
-          <div class="kv-row"><span class="kv-key">Simulations</span><span class="kv-val">${mc.simulations?.toLocaleString()}</span></div>`;
-      }
-      const bayesEl = document.getElementById('bayes-panel');
-      if (bayesEl && sig.validation?.bayesian) {
-        const b = sig.validation.bayesian;
-        bayesEl.innerHTML = `
-          <div class="kv-row"><span class="kv-key">Status</span><span class="kv-val ${b.approved ? 'good' : 'bad'}">${b.approved ? 'APPROVED' : 'REJECTED'}</span></div>
-          <div class="kv-row"><span class="kv-key">Posterior P(Win)</span><span class="kv-val fw-700">${(b.posterior * 100).toFixed(1)}%</span></div>`;
-      }
-      const statEl = document.getElementById('stat-panel');
-      if (statEl && sig.validation?.statistical) {
-        const s = sig.validation.statistical;
-        statEl.innerHTML = `
-          <div class="kv-row"><span class="kv-key">Status</span><span class="kv-val ${s.approved ? 'good' : 'bad'}">${s.approved ? 'APPROVED' : 'REJECTED'}</span></div>
-          <div class="kv-row"><span class="kv-key">Tests Passed</span><span class="kv-val fw-700">${s.passed}/${s.total}</span></div>`;
-      }
-    }
-
-    // ─── Learning ────────────────────────────────────────
-    function renderLearning() {
-      const el = document.getElementById('learning-panel');
-      if (!el) return;
-      if (!state.learning.length) { el.innerHTML = '<div class="text-faint text-xs text-mono">No learning profiles yet.</div>'; return; }
-      el.innerHTML = state.learning.slice(0, 10).map(p => {
-        const wr = (Number(p.winRate || 0) * 100).toFixed(0);
-        const ev = Number(p.expectancyR || 0).toFixed(2);
-        const cls = Number(p.winRate || 0) > 0.5 ? 'good' : Number(p.winRate || 0) < 0.3 ? 'bad' : 'warn-text';
-        return `<div class="kv-row"><span class="kv-key text-xs">${esc((p.patternKey || '').slice(0, 30))}</span><span class="kv-val ${cls}">${wr}% WR / ${ev}R / ${p.samples || 0} trades</span></div>`;
-      }).join('');
-    }
-
-    // ─── Intel ───────────────────────────────────────────
-    const INTEL_META = {
-      economic_surprise: { icon: '📊', color: '#5ea8ff', label: 'Economic Surprise' },
-      extreme_retail_positioning: { icon: '⚡', color: '#f0b429', label: 'Extreme Retail Positioning' },
-      upcoming_events: { icon: '🗓', color: '#a78bfa', label: 'Upcoming Events' },
-      cluster_buy: { icon: '💼', color: '#1fe3a8', label: 'Insider Cluster Buy' },
-      executive_activity: { icon: '👔', color: '#e8b64a', label: 'Executive Activity' },
-    };
-
-    function renderIntel() {
-      const el = document.getElementById('intel-feed');
-      const countEl = document.getElementById('intel-count');
-      if (!el) return;
-      if (countEl) countEl.textContent = `${state.intel.length} event${state.intel.length === 1 ? '' : 's'}`;
-      if (!state.intel.length) return;
-      el.innerHTML = state.intel.slice(0, 40).map(it => {
-        const meta = INTEL_META[it.kind] || { icon: '•', color: '#8b9bb0', label: it.kind || 'Event' };
-        let desc = '';
-        if (it.kind === 'economic_surprise') desc = `${it.event?.name || ''} — impact ${it.impact || '--'} on ${(it.affectedCurrencies || []).join(', ')}`;
-        else if (it.kind === 'cluster_buy') desc = `${it.ticker}: ${it.insiderCount} insiders in ${it.windowDays}d, confidence ${it.confidence}%`;
-        else if (it.kind === 'extreme_retail_positioning') desc = `${it.symbol}: ${it.data?.contrarianReason || 'extreme positioning detected'}`;
-        else if (it.kind === 'executive_activity') desc = `${it.ticker}: ${it.signal || 'executive trade activity'}`;
-        else if (it.kind === 'upcoming_events') desc = `${it.count} high-impact events on the calendar`;
-        else desc = JSON.stringify(it).slice(0, 100);
-        return `<div style="display:flex;gap:12px;padding:12px 16px;border-bottom:1px solid var(--panel-border);">
-          <div style="width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:${meta.color}1c;color:${meta.color};">${meta.icon}</div>
-          <div style="flex:1;min-width:0;">
-            <div style="font-weight:600;font-size:12px;">${esc(meta.label)}</div>
-            <div style="font-size:11px;color:var(--muted);margin-top:2px;line-height:1.5;">${esc(desc)}</div>
-            <div style="font-family:var(--font-mono);font-size:9.5px;color:var(--faint);margin-top:4px;">${time(it.receivedAt || it.timestamp)}</div>
-          </div>
-        </div>`;
-      }).join('');
-    }
-
-    // ─── News ────────────────────────────────────────────
-    function renderNews() {
-      const el = document.getElementById('news-feed');
-      const countEl = document.getElementById('news-count');
-      if (!el) return;
-      if (countEl) countEl.textContent = `${state.news.length} stor${state.news.length === 1 ? 'y' : 'ies'}`;
-      if (!state.news.length) return;
-      el.innerHTML = state.news.slice(0, 30).map(n => {
-        const catColor = n._category === 'crypto' ? 'var(--emerald)' : 'var(--gold)';
-        return `<div style="display:flex;gap:12px;padding:12px 16px;border-bottom:1px solid var(--panel-border);">
-          <div style="flex:1;min-width:0;">
-            <div style="font-weight:600;font-size:12px;">${esc(n.headline || 'Untitled')}</div>
-            <div style="font-size:11px;color:var(--muted);margin-top:2px;">${esc(n.summary ? n.summary.slice(0, 140) : (n.source || ''))}</div>
-            <div style="font-family:var(--font-mono);font-size:9.5px;color:var(--faint);margin-top:4px;"><span style="color:${catColor};text-transform:uppercase;">${esc(n._category || '')}</span> · ${esc(n.source || '')} · ${time(n.datetime ? n.datetime * 1000 : Date.now())}</div>
-          </div>
-        </div>`;
-      }).join('');
-    }
-
-    // ─── Journal ─────────────────────────────────────────
-    function renderJournal() {
-      const el = document.getElementById('journal-panel');
-      const totalEl = document.getElementById('journal-total');
-      if (!el) return;
-      const j = state.journal;
-      const bySetup = j?.bySetup || {};
-      const setups = Object.entries(bySetup).sort((a, b) => (b[1].totalPnl || 0) - (a[1].totalPnl || 0));
-      if (totalEl) totalEl.textContent = `${j?.total || 0} trade${j?.total === 1 ? '' : 's'}`;
-      if (!setups.length) {
-        el.innerHTML = '<div class="text-faint text-xs text-mono">No closed trades recorded yet.</div>';
-        return;
-      }
-      el.innerHTML = setups.map(([setup, s]) => {
-        const good = (s.totalPnl || 0) >= 0;
-        return `<div class="kv-row">
-          <span class="kv-key">${esc(setup)} <span class="text-faint">(${s.total})</span></span>
-          <span class="kv-val ${good ? 'good' : 'bad'}">${s.winRate}% WR · ${good ? '+' : ''}${s.totalPnl}R</span>
-        </div>`;
-      }).join('');
-    }
-
-    // ─── Audit Trail ─────────────────────────────────────
-    function renderAuditTrail() {
-      const el = document.getElementById('audit-feed');
-      const countEl = document.getElementById('audit-count');
-      if (!el) return;
-      if (countEl) countEl.textContent = `${state.auditTrail.length} entries`;
-      if (!state.auditTrail.length) return;
-      el.innerHTML = state.auditTrail.slice(0, 40).map(e => {
-        const fired = !!e.signalFired;
-        return `<div style="display:flex;gap:12px;padding:12px 16px;border-bottom:1px solid var(--panel-border);">
-          <div style="width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:${fired ? 'var(--emerald-soft)' : 'var(--coral-soft)'};color:${fired ? 'var(--emerald)' : 'var(--coral)'};">${fired ? '✓' : '✕'}</div>
-          <div style="flex:1;min-width:0;">
-            <div style="font-weight:600;font-size:12px;">${esc(e.symbol || '--')} ${esc(e.timeframe || '')}</div>
-            <div style="font-size:11px;color:var(--muted);">${fired ? 'Signal fired' : esc((e.blockedReason || 'no signal').replace(/_/g, ' '))} — score ${e.score ?? '--'}</div>
-            <div style="font-family:var(--font-mono);font-size:9.5px;color:var(--faint);margin-top:4px;">${time(e.recordedAt)}</div>
-          </div>
-        </div>`;
-      }).join('');
-    }
-
-    // ─── Watchlist ───────────────────────────────────────
-    function renderWatchlist() {
-      const el = document.getElementById('watchlist-panel');
-      if (!el) return;
-      const items = Object.values(state.markets);
-      if (!items.length) { el.innerHTML = '<div class="text-faint text-xs text-mono">Live prices appear once the feed connects.</div>'; return; }
-      el.innerHTML = items.map(m => {
-        const ch = Number(m.change || 0);
-        return `<div class="kv-row"><span class="kv-key">${esc(m.symbol)}</span><span class="kv-val ${ch >= 0 ? 'good' : 'bad'}">${formatPrice(m.price)} (${ch >= 0 ? '+' : ''}${ch.toFixed(2)}%)</span></div>`;
-      }).join('');
-    }
-
-    // ─── Watchlist Board ────────────────────────────────
-    function renderWatchlistBoard() {
-      const el = document.getElementById('board-panel');
-      const countEl = document.getElementById('board-count');
-      if (!el) return;
-      const items = state.watchlist || [];
-      if (countEl) countEl.textContent = `${items.length} tracked`;
-      if (!items.length) return;
-      el.innerHTML = items.slice(0, 30).map(o => {
-        const score = Math.round(Number(o.score) || 0);
-        const tone = o.fired ? 'good' : score >= 60 ? '' : 'text-faint';
-        const statusLabel = o.fired ? 'FIRED' : o.blockedReason ? 'BLOCKED' : o.action === 'WAIT' ? 'WAIT' : 'READY';
-        const statusClass = o.fired ? 'good' : o.blockedReason ? 'bad' : 'text-faint';
-        return `<div style="display:flex;gap:12px;padding:12px 16px;border-bottom:1px solid var(--panel-border);">
-          <div style="width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:#3b82f61c;color:#3b82f6;">${esc((o.grade || '-').slice(0, 2))}</div>
-          <div style="flex:1;min-width:0;">
-            <div style="font-weight:600;font-size:12px;">${esc(o.symbol)} <span class="${tone}">${score}</span> <span class="text-faint text-xs">${esc(o.action || 'WAIT')}</span></div>
-            <div style="font-size:11px;color:var(--muted);">${o.blockedReason ? esc(o.blockedReason) : (o.regime ? `Regime: ${esc(o.regime)}` : 'No blocking reason recorded')}${o.session ? ` · ${esc(o.session)}` : ''}</div>
-            <div style="font-family:var(--font-mono);font-size:9.5px;color:var(--faint);margin-top:4px;"><span class="${statusClass}">${statusLabel}</span> · ${time(o.timestamp)}${o.stale ? ' · stale' : ''}</div>
-          </div>
-        </div>`;
-      }).join('');
-    }
-
-    // ─── Feed Health ─────────────────────────────────────
-    function renderFeedHealth() {
-      const el = document.getElementById('health-panel');
-      const statusEl = document.getElementById('health-status');
-      if (!el) return;
-      const h = state.feedHealth;
-      if (!h) return;
-      if (statusEl) {
-        statusEl.textContent = h.ok ? 'OK' : 'ISSUES';
-        statusEl.className = 'text-faint text-xs ' + (h.ok ? 'good' : 'bad');
-      }
-      const feedRows = (h.feeds || []).map(f => {
-        const stateLabel = f.connected === true ? 'CONNECTED' : f.connected === false ? 'DISCONNECTED' : 'UNKNOWN';
-        const cls = f.connected === true ? 'good' : f.connected === false ? 'bad' : 'text-faint';
-        return `<div class="kv-row"><span class="kv-key">${esc(f.name)}</span><span class="kv-val ${cls}">${stateLabel}</span></div>`;
-      }).join('');
-      const staleRows = (h.staleSeries || []).map(s =>
-        `<div class="kv-row"><span class="kv-key">${esc(s.symbol)} ${esc(s.timeframe)}</span><span class="kv-val bad">stale ${Math.round(s.ageMs / 60000)}m</span></div>`
-      ).join('');
-      const cache = h.cache || null;
-      const cacheRows = cache ? [
-        cache.redis && `<div class="kv-row"><span class="kv-key">Redis Cache</span><span class="kv-val ${!cache.redis.connected ? 'text-faint' : cache.redis.errors > 0 ? 'bad' : 'good'}">${!cache.redis.connected ? 'not connected' : cache.redis.errors > 0 ? cache.redis.errors + ' errors' : 'OK'}</span></div>`,
-        cache.pinecone && cache.pinecone.enabled && `<div class="kv-row"><span class="kv-key">Vector Store</span><span class="kv-val ${cache.pinecone.errors > 0 ? 'bad' : 'good'}">${cache.pinecone.errors > 0 ? cache.pinecone.errors + ' errors' : 'OK'}</span></div>`,
-      ].filter(Boolean).join('') : '';
-      el.innerHTML = feedRows + staleRows + cacheRows || '<div class="text-faint text-xs text-mono">No feeds registered yet.</div>';
-    }
-
-    // ─── Market Alerts ──────────────────────────────────
-    function renderMarketAlerts() {
-      const el = document.getElementById('alerts-feed');
-      const countEl = document.getElementById('alerts-count');
-      if (!el) return;
-      const items = state.marketAlerts || [];
-      if (countEl) countEl.textContent = `${items.length} event${items.length === 1 ? '' : 's'}`;
-      if (!items.length) return;
-      el.innerHTML = items.slice(0, 40).map(a => {
-        const isLiq = a.kind === 'liquidation_cascade';
-        const color = isLiq ? '#ff5470' : (a.severity === 'severe' ? '#ff5470' : '#f5a623');
-        const title = isLiq ? 'Liquidation Cascade' : `Abnormal Market — ${esc(a.symbol || '')}`;
-        const desc = isLiq
-          ? (a.alert || `$${((a.totalUSDT || 0) / 1e6).toFixed(2)}M liquidated — ${esc(a.dominance || '')}`)
-          : (a.reasons || []).join('; ') || 'Flagged abnormal';
-        return `<div style="display:flex;gap:12px;padding:12px 16px;border-bottom:1px solid var(--panel-border);">
-          <div style="width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:${color}1c;color:${color};">⚠</div>
-          <div style="flex:1;min-width:0;">
-            <div style="font-weight:600;font-size:12px;">${title}</div>
-            <div style="font-size:11px;color:var(--muted);">${esc(desc)}</div>
-            <div style="font-family:var(--font-mono);font-size:9.5px;color:var(--faint);margin-top:4px;">${time(a.receivedAt || a.timestamp)}</div>
-          </div>
-        </div>`;
-      }).join('');
-    }
-
-    // ─── Heatmap ─────────────────────────────────────────
-    const HEAT_COLORS = { HOT: '#ff5470', WARM: '#f5a623', NEUTRAL: '#8b93a7', COOL: '#3b82f6', COLD: '#4b5563' };
-
-    function renderHeatMap() {
-      const grid = document.getElementById('heatmap-grid');
-      const timeEl = document.getElementById('heatmap-time');
-      if (!grid) return;
-      const data = state.heatmap;
-      if (!data) return;
-      if (timeEl) timeEl.textContent = data.generatedAt ? new Date(data.generatedAt).toLocaleTimeString() : '--';
-      const tiles = data.tiles || [];
-      if (!tiles.length) { grid.innerHTML = '<div class="text-faint text-xs text-mono">No tiles yet – waiting on Opportunity Ranker / Relative Strength data.</div>'; return; }
-      grid.innerHTML = tiles.map(t => {
-        const color = HEAT_COLORS[t.bucket] || HEAT_COLORS.NEUTRAL;
-        const opp = t.opportunity;
-        const sub = opp?.fired ? 'FIRED' : opp?.blockedReason ? 'blocked' : (t.bias || '--');
-        return `<div style="padding:12px;border-radius:var(--radius);background:${color}1c;border:1px solid ${color}55;color:${color};">
-          <div style="display:flex;justify-content:space-between;align-items:baseline;"><b style="color:inherit;font-size:13px;">${esc(t.symbol)}</b><span style="font-size:10px;">${Math.round(t.heatScore)}</span></div>
-          <div style="font-size:9px;opacity:0.85;margin-top:2px;">${esc(t.bucket)} · ${esc(sub)}</div>
-        </div>`;
-      }).join('');
-    }
-
-    // ─── Outlook ─────────────────────────────────────────
-    function renderOutlook() {
-      const o = state.outlook;
-      if (!o) return;
-      setText('outlook-time', new Date(o.generatedAt).toLocaleString());
-      const narrEl = document.getElementById('outlook-narrative');
-      if (narrEl) narrEl.innerHTML = `<p class="text-sm text-muted" style="line-height:1.7;">${esc(o.narrative || 'No narrative available.')}</p>`;
-
-      const renderEvents = (events) => events.length
-        ? events.map(e => `<div style="display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--panel-border);font-family:var(--font-mono);font-size:10.5px;">
-            <span style="color:var(--faint);width:46px;flex-shrink:0;">${e.hoursAway != null ? e.hoursAway.toFixed(1) + 'h' : '--'}</span>
-            <span style="color:var(--azure);width:68px;flex-shrink:0;font-weight:600;">${esc(e.currency)}</span>
-            <span style="flex:1;color:var(--muted);">${esc(e.name)}</span>
-          </div>`).join('')
-        : '<div class="empty-state">No releases.</div>';
-
-      const todayEl = document.getElementById('outlook-today');
-      if (todayEl) todayEl.innerHTML = renderEvents(o.today?.tier1Events || []);
-      const weekEl = document.getElementById('outlook-week');
-      if (weekEl) weekEl.innerHTML = renderEvents([...(o.week?.tier1Events || []), ...(o.week?.tier2Events || [])]);
-      const nextWeekEl = document.getElementById('outlook-nextweek');
-      if (nextWeekEl) nextWeekEl.innerHTML = renderEvents([...(o.nextWeek?.tier1Events || []), ...(o.nextWeek?.tier2Events || [])]);
-
-      const cotEl = document.getElementById('outlook-cot');
-      if (cotEl) {
-        const withCot = (o.symbols || []).filter(s => s.institutionalPositioning);
-        cotEl.innerHTML = withCot.length ? withCot.map(s => {
-          const p = s.institutionalPositioning;
-          const extremeTag = p.isExtreme ? '<span class="bad">EXTREME</span>' : '<span class="text-faint">normal range</span>';
-          return `<div style="display:flex;gap:12px;padding:12px 16px;border-bottom:1px solid var(--panel-border);">
-            <div style="flex:1;min-width:0;">
-              <div style="font-weight:600;font-size:12px;">${esc(s.symbol)} — ${extremeTag}</div>
-              <div style="font-size:11px;color:var(--muted);">${friendlyCotSignal(p.signal)}${p.note ? ' — ' + esc(p.note) : ''}</div>
-              <div style="font-family:var(--font-mono);font-size:9.5px;color:var(--faint);margin-top:4px;">Large-spec net: ${esc(p.largeSpecNet)} (${p.largeSpecPercentile != null ? Math.round(p.largeSpecPercentile) + 'th pct' : '--'}) · as of ${esc(p.date)}</div>
-            </div>
-          </div>`;
-        }).join('') : '<div class="empty-state">Real weekly CFTC data — commercial (hedgers) vs. large speculator (hedge fund) net positioning. Updates Fridays; only shown here when a symbol is at a historical extreme.</div>';
-      }
-
-      const symEl = document.getElementById('outlook-symbols');
-      if (symEl) {
-        const rows = o.symbols || [];
-        symEl.innerHTML = rows.length ? rows.map(s => {
-          const cls = (s.tradeability || 0) >= 70 ? 'good' : (s.tradeability || 0) >= 50 ? 'warn-text' : 'bad';
-          return `<div class="kv-row"><span class="kv-key">${esc(s.symbol)}</span><span class="kv-val ${cls}">${friendlyRegime(s.regime)} / ${s.tradeability ?? '--'} — ${esc(s.sessionStatus || '--')}</span></div>`;
-        }).join('') : '<div class="text-faint text-xs text-mono">No symbol data yet.</div>';
-      }
-
-      const newsEl = document.getElementById('outlook-news');
-      if (newsEl) {
-        const news = o.news || [];
-        newsEl.innerHTML = news.length ? news.map(n => `<div style="display:flex;gap:12px;padding:12px 16px;border-bottom:1px solid var(--panel-border);"><div style="flex:1;min-width:0;"><div style="font-weight:600;font-size:12px;">${esc(n.headline)}</div><div style="font-size:11px;color:var(--muted);">${esc(n.source || '')}</div><div style="font-family:var(--font-mono);font-size:9.5px;color:var(--faint);margin-top:4px;">${time(n.datetime)}</div></div></div>`).join('') : '<div class="empty-state">No recent headlines.</div>';
-      }
-    }
-
-    // ══════════════════════════════════════════════════════
-    // 9. SPARKLINE & GAUGE HELPERS
-    // ══════════════════════════════════════════════════════
-
-    function drawSparkline(canvas, values, color, filled) {
-      if (!canvas) return;
-      const dpr = window.devicePixelRatio || 1;
-      const w = canvas.clientWidth || canvas.width, h = canvas.clientHeight || canvas.height;
-      canvas.width = w * dpr; canvas.height = h * dpr;
-      const ctx = canvas.getContext('2d');
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, w, h);
-      if (!values || values.length < 2) return;
-      const min = Math.min(...values), max = Math.max(...values);
-      const range = (max - min) || 1;
-      const pts = values.map((v, i) => [ (i / (values.length - 1)) * w, h - ((v - min) / range) * (h - 4) - 2 ]);
-      if (filled) {
-        ctx.beginPath();
-        ctx.moveTo(pts[0][0], h);
-        pts.forEach(p => ctx.lineTo(p[0], p[1]));
-        ctx.lineTo(pts[pts.length - 1][0], h);
-        ctx.closePath();
-        const grad = ctx.createLinearGradient(0, 0, 0, h);
-        grad.addColorStop(0, color + '33'); grad.addColorStop(1, color + '02');
-        ctx.fillStyle = grad; ctx.fill();
-      }
-      ctx.beginPath();
-      pts.forEach((p, i) => i === 0 ? ctx.moveTo(p[0], p[1]) : ctx.lineTo(p[0], p[1]));
-      ctx.strokeStyle = color; ctx.lineWidth = 1.4; ctx.lineJoin = 'round'; ctx.stroke();
     }
 
     function drawGauge(canvas, pct, color) {
@@ -2498,17 +1072,108 @@
       ctx.beginPath(); ctx.arc(cx, cy, r, start, end); ctx.strokeStyle = 'rgba(255,255,255,.08)'; ctx.lineWidth = 9; ctx.lineCap = 'round'; ctx.stroke();
       const sweep = start + (end - start) * Math.min(1, Math.max(0, pct / 100));
       ctx.beginPath(); ctx.arc(cx, cy, r, start, sweep); ctx.strokeStyle = color; ctx.lineWidth = 9; ctx.lineCap = 'round'; ctx.stroke();
-      ctx.fillStyle = '#eef2f7'; ctx.font = '700 17px "JetBrains Mono", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#eef2f7'; ctx.font = '700 15px "JetBrains Mono", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(Math.round(pct) + '%', cx, cy - 2);
-      ctx.fillStyle = '#526078'; ctx.font = '600 8px "JetBrains Mono", monospace';
-      ctx.fillText('OF LIMIT', cx, cy + 14);
+      ctx.fillStyle = '#526078'; ctx.font = '600 7px "JetBrains Mono", monospace';
+      ctx.fillText('DRAWDOWN', cx, cy + 14);
     }
 
-    // ══════════════════════════════════════════════════════
-    // 10. ACTIONS
-    // ══════════════════════════════════════════════════════
+    // ─── Learning ──────────────────────────────────────────
+    function renderLearning() {
+      const el = document.getElementById('learning-panel');
+      if (!el) return;
+      if (!state.learning.length) { el.innerHTML = '<div class="text-faint text-xs">No profiles</div>'; return; }
+      el.innerHTML = state.learning.slice(0, 10).map(p => {
+        const wr = (Number(p.winRate || 0) * 100).toFixed(0);
+        const ev = Number(p.expectancyR || 0).toFixed(2);
+        const cls = Number(p.winRate || 0) > 0.5 ? 'good' : 'warn';
+        return `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);font-size:10px;font-family:var(--font-mono);">
+          <span>${esc((p.patternKey || '').slice(0, 20))}</span>
+          <span class="${cls}">${wr}% WR / ${ev}R</span>
+        </div>`;
+      }).join('');
+    }
 
-    function selectSignal(id) { state.selectedId = id; haptic('nav'); renderAll(); }
+    // ─── Detail Slide-Over ──────────────────────────────────
+    function renderDetail() {
+      const overlay = document.getElementById('detailOverlay');
+      const content = document.getElementById('detail-content');
+      const title = document.getElementById('detail-title');
+      const sig = state.signals.find(s => s.id === state.selectedId);
+      if (!sig) { overlay.classList.remove('open'); return; }
+      overlay.classList.add('open');
+      title.textContent = `${sig.symbol} ${sig.action} ${sig.timeframe || ''}`;
+      const agents = sig.agentBreakdown || sig.agents || [];
+      const agentHtml = agents.map(a => {
+        const name = a.agent || a.label || '';
+        const color = AGENT_COLORS[name] || '#526078';
+        const dirCls = a.status === 'OPPOSES' ? 'bad' : a.status === 'NEUTRAL' ? 'warn' : 'good';
+        return `<div style="display:flex;align-items:center;gap:10px;padding:4px 0;border-bottom:1px solid var(--border);">
+          <span style="width:24px;height:24px;border-radius:6px;display:flex;align-items:center;justify-content:center;background:${color}22;color:${color};font-weight:700;font-size:10px;">${esc(name).slice(0,2).toUpperCase()}</span>
+          <span style="flex:1;font-size:11px;">${esc(name)}</span>
+          <span style="font-size:11px;font-weight:700;" class="${dirCls}">${esc(a.score)}</span>
+        </div>`;
+      }).join('');
+      const reasons = (sig.allReasons || sig.reasons || []).slice(0, 6).map(r => `<div style="font-size:11px;padding:2px 0;">› ${esc(r)}</div>`).join('');
+      content.innerHTML = `
+        <div class="kv-row"><span class="kv-key">Score</span><span class="kv-val fw-700">${esc(sig.score?.final)} / Grade ${esc(sig.score?.grade || '--')}</span></div>
+        <div class="kv-row"><span class="kv-key">Gate</span><span class="kv-val ${sig.gate?.status === 'REJECTED' ? 'bad' : 'good'}">${esc(sig.gate?.status || 'APPROVED')}</span></div>
+        <div class="kv-row"><span class="kv-key">Regime</span><span class="kv-val">${esc(sig.regime?.regime || '--')}</span></div>
+        <div class="kv-row"><span class="kv-key">Entry</span><span class="kv-val">${formatPrice(sig.entry?.midpoint || sig.entry?.zoneHigh || sig.currentPrice)}</span></div>
+        <div class="kv-row"><span class="kv-key">Stop</span><span class="kv-val bad">${formatPrice(sig.stopLoss?.price)}</span></div>
+        <div class="kv-row"><span class="kv-key">TP1</span><span class="kv-val good">${formatPrice(sig.targets?.tp1?.price)}</span></div>
+        <div class="mt-12"><span class="text-xs text-faint" style="font-weight:700;letter-spacing:0.1em;">AGENTS</span></div>
+        ${agentHtml || '<div class="text-xs text-muted">No agent breakdown</div>'}
+        <div class="mt-12"><span class="text-xs text-faint" style="font-weight:700;letter-spacing:0.1em;">THESIS</span></div>
+        ${reasons || '<div class="text-xs text-muted">No reasons</div>'}
+        <div class="outcome-row mt-12">
+          <button class="outcome-btn win" onclick="recordOutcome('${escAttr(sig.id)}', 1)">WIN</button>
+          <button class="outcome-btn be" onclick="recordOutcome('${escAttr(sig.id)}', 0)">BE</button>
+          <button class="outcome-btn loss" onclick="recordOutcome('${escAttr(sig.id)}', -1)">LOSS</button>
+        </div>
+      `;
+    }
+
+    document.getElementById('closeDetail')?.addEventListener('click', () => {
+      document.getElementById('detailOverlay')?.classList.remove('open');
+    });
+
+    // ─── UTILITIES ──────────────────────────────────────────
+    function setStatus(cls, text) {
+      const dot = document.getElementById('status-dot');
+      dot.className = 'pulse' + (cls ? ' ' + cls : '');
+      setText('status-text', text);
+    }
+    function setText(id, text) { const el = document.getElementById(id); if (el) el.textContent = text; }
+    function esc(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
+    function escAttr(value) { return esc(value).replace(/`/g, '&#96;'); }
+    function time(ts) { if (!ts) return '--:--'; const d = new Date(ts); return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
+    function formatPrice(value) {
+      const n = Number(value);
+      if (!isFinite(n) || value == null) return '--';
+      if (n >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+      if (n >= 1) return n.toFixed(4);
+      return n.toFixed(6);
+    }
+    function updateBadges() {
+      // nothing needed
+    }
+    const INTEL_META = {
+      economic_surprise: { icon: '📊', color: '#5ea8ff', label: 'Economic Surprise' },
+      extreme_retail_positioning: { icon: '⚡', color: '#f0b429', label: 'Extreme Retail' },
+      upcoming_events: { icon: '🗓', color: '#a78bfa', label: 'Events' },
+      cluster_buy: { icon: '💼', color: '#1fe3a8', label: 'Cluster Buy' },
+      executive_activity: { icon: '👔', color: '#e8b64a', label: 'Exec Activity' },
+    };
+    const AGENT_COLORS = { SMC: '#1fe3a8', MTF: '#5ea8ff', Momentum: '#f0b429', 'Volume/OI': '#a78bfa', Microstructure: '#22d3ee', Fractal: '#ff5470', Sentiment: '#8b9bb0', Pattern: '#e8b64a' };
+
+    function selectSignal(id) {
+      state.selectedId = id;
+      haptic('nav');
+      renderAll();
+      // open detail
+      document.getElementById('detailOverlay')?.classList.add('open');
+    }
     window.selectSignal = selectSignal;
 
     async function recordOutcome(signalId, pnlR) {
@@ -2518,64 +1183,26 @@
       try {
         const res = await fetch('/api/outcomes', { method: 'POST', headers, body: JSON.stringify(payload) });
         if (res.status === 409) { haptic('error'); return; }
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          console.warn('[recordOutcome] not saved:', res.status, body.error || res.statusText);
-          haptic('error');
-          return;
-        }
-      } catch (err) {
-        console.warn('[recordOutcome] network error:', err.message);
-        haptic('error');
-      }
+        if (!res.ok) { const body = await res.json().catch(() => ({})); console.warn('[recordOutcome] not saved:', res.status, body.error); haptic('error'); return; }
+      } catch (err) { console.warn('[recordOutcome] network error:', err.message); haptic('error'); }
     }
     window.recordOutcome = recordOutcome;
 
-    // ══════════════════════════════════════════════════════
-    // 11. UTILITIES
-    // ══════════════════════════════════════════════════════
-
-    function setStatus(cls, text) {
-      const dot = document.getElementById('status-dot');
-      dot.className = 'pulse' + (cls ? ' ' + cls : '');
-      setText('status-text', text);
-    }
-    function setText(id, text) { const el = document.getElementById(id); if (el) el.textContent = text; }
-    function setClass(id, className) { const el = document.getElementById(id); if (el) el.className = className; }
-    function esc(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
-    function escAttr(value) { return esc(value).replace(/`/g, '&#96;'); }
-    function time(ts) { if (!ts) return '--:--'; const d = new Date(ts); return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
-
-    const REGIME_LABELS = {
-      BULL_TREND: 'Uptrend', BEAR_TREND: 'Downtrend', UNKNOWN: 'Unclear',
-      DIRECTIONAL_NORMAL: 'Trending', DIRECTIONAL_EXPANSION: 'Trending (volatile)', DIRECTIONAL_COMPRESSION: 'Trending (coiling)',
-      RANGE_NORMAL: 'Ranging', RANGE_EXPANSION: 'Ranging (volatile)', RANGE_COMPRESSION: 'Ranging (tight)',
-      CHOP_NORMAL: 'Choppy', CHOP_EXPANSION: 'Choppy (volatile)', CHOP_COMPRESSION: 'Choppy (tight)',
-    };
-    function friendlyRegime(code) { return REGIME_LABELS[code] || esc(code || '--'); }
-
-    const COT_SIGNAL_LABELS = {
-      EXTREME_LONG_SPEC_REVERSAL_RISK: 'Hedge funds crowded LONG — reversal risk',
-      EXTREME_SHORT_SPEC_REVERSAL_RISK: 'Hedge funds crowded SHORT — reversal risk',
-      NEUTRAL: 'No extreme positioning',
-    };
-    function friendlyCotSignal(code) { return COT_SIGNAL_LABELS[code] || esc(code || 'NEUTRAL'); }
-
-    function formatPrice(value) {
-      const n = Number(value);
-      if (!isFinite(n) || value == null) return '--';
-      if (n >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
-      if (n >= 1) return n.toFixed(4);
-      return n.toFixed(6);
-    }
-
-    // ══════════════════════════════════════════════════════
-    // 12. BOOT
-    // ══════════════════════════════════════════════════════
-
+    // ─── BOOT ──────────────────────────────────────────────
     renderAll();
     setStatus('', 'CONNECTING');
 
+    // Command input (placeholder – can be extended)
+    document.getElementById('command-input')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const val = e.target.value.trim().toLowerCase();
+        if (val) {
+          // Simple search: try to find a signal by symbol
+          const found = state.signals.find(s => s.symbol.toLowerCase().includes(val));
+          if (found) { selectSignal(found.id); e.target.value = ''; }
+        }
+      }
+    });
   </script>
 </body>
 </html>
