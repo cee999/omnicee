@@ -25,7 +25,12 @@ class FMPFeed {
     this.apiKey = config.apiKey || process.env.FMP_API_KEY || '';
     this.cacheMs = Number(config.cacheMs || process.env.FMP_CACHE_MS || 30 * 60000);
     this._cache = new Map();
-    this._baseUrl = 'https://financialmodelingprep.com/api/v3';
+    // FIX: /api/v3/economic_calendar is FMP's deprecated legacy endpoint.
+    // Current endpoint is /stable/economic-calendar (confirmed against FMP's
+    // live docs). Response field names are unchanged (date, country, event,
+    // currency, previous, estimate, actual, impact, change, changePercentage)
+    // — only the path structure changed — plus a new 'unit' field was added.
+    this._baseUrl = 'https://financialmodelingprep.com/stable';
   }
 
   enabled() {
@@ -51,7 +56,7 @@ class FMPFeed {
     const start = from || new Date().toISOString().slice(0, 10);
     const end = to || new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString().slice(0, 10);
     const result = await this._cached(`econ-cal:${start}:${end}`, () =>
-      this._get(`/economic_calendar?from=${start}&to=${end}`)
+      this._get(`/economic-calendar?from=${start}&to=${end}`)
     );
 
     // FMP returns a plain object (often {"Error Message": "..."}) instead of
@@ -72,7 +77,7 @@ class FMPFeed {
         actual: e.actual ?? null,
         estimate: e.estimate ?? null,
         prev: e.previous ?? null,
-        unit: '',
+        unit: e.unit || '',
       }))
       .filter(e => e.currency && Number.isFinite(e.time));
   }
