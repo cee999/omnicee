@@ -59,6 +59,7 @@ class AlphaVantageFeed extends EventEmitter {
     this.topics = config.topics || DEFAULT_TOPICS;
     this.pollIntervalMs = Number(config.pollIntervalMs || process.env.ALPHA_VANTAGE_POLL_MS || DEFAULT_POLL_MS);
     this._lastLabel = null;
+    this._quotaExceededDate = null;
     this._pollTimer = null;
 
     if (this.enabled()) {
@@ -79,6 +80,14 @@ class AlphaVantageFeed extends EventEmitter {
   }
 
   async _poll() {
+    // FIX: once a quota-exceeded response is seen, every poll for the rest
+    // of the same calendar day would just hit the identical wall again —
+    // pointless repeated calls and log spam (confirmed in production: the
+    // same error logged again exactly one interval later). Alpha Vantage's
+    // free-tier quota resets daily; skip polling until the UTC day changes.
+    const today = new Date().toISOString().slice(0, 10);
+    if (this._quotaExceededDate === today) return;
+
     try {
       const url = `${BASE_URL}?function=NEWS_SENTIMENT&topics=${encodeURIComponent(this.topics)}&sort=LATEST&limit=50&apikey=${this.apiKey}`;
       const result = await httpGetJSON(url);
@@ -87,6 +96,7 @@ class AlphaVantageFeed extends EventEmitter {
       // field instead of an error status when the daily quota is hit — a
       // classic silent-failure shape if not checked explicitly.
       if (result?.Note || result?.Information) {
+        this._quotaExceededDate = today;
         throw new Error(result.Note || result.Information);
       }
 
