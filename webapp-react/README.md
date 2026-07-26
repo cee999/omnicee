@@ -70,21 +70,52 @@ route toggle from) the current `webapp/`, or serve `dist/` from a
 `webapp-react/` static mount if you want both frontends live side by side
 during rollout.
 
-## Known gaps (by design, for now)
+## It's now the live production frontend
 
-- **Prices tick from signals, not a true feed.** REST polling has no
-  endpoint for a continuous per-symbol price stream (that only exists on
-  the `market` socket channel). In live mode, the ticker updates a
-  symbol's price whenever a fresh signal references it — accurate, just
-  not tick-by-tick. `connectOmniceeSocket()`'s `market` handler is the fix
-  if you switch to sockets.
-- **Equity curve stays illustrative even in live mode** — there's no
-  dedicated equity-history endpoint in the current API, only point-in-time
-  `/api/stats`. Worth adding a `db.getEquityCurve()` + route if you want
-  this real too.
-- **DASH/RISK account-balance figures** aren't yet pulled from
-  `/api/stats`'s `accountBalance` field — still the demo-seeded number.
-  Small follow-up if you want it.
+`api/server.js`'s `STATIC_ROOT` points at `webapp-react/dist` (the retired
+`webapp/` vanilla-JS frontend, including its `index.html`, has been
+removed). `render.yaml`'s `buildCommand` builds this app during deploy —
+locally, run `npm install && npm run build --prefix webapp-react` once (or
+`npm run dev` here for hot-reload against the backend on :3001).
+
+## Closed gaps (previously listed below as "by design, for now")
+
+- **Prices now tick from a real feed, not just from signals.** `App.jsx`
+  dynamically imports `socket.io-client` in live mode and subscribes to the
+  `market` channel (`index.js`'s `market_update`, throttled to ~1/sec/
+  symbol) for true push updates. The dynamic import (not a static
+  top-level one) is deliberate — it keeps this file working unmodified as
+  a standalone preview outside the real Vite build, where that package
+  isn't resolvable; a failed import just leaves the original signal-driven
+  REST polling as the price source, so nothing regresses. The top bar
+  shows a `push`/`poll` tag reflecting which one is actually active.
+- **Equity curve is real in live mode.** `db.getEquityCurve()` + `GET
+  /api/equity-curve` compound each closed `trade_outcomes` row's `pnlPct`
+  onto a starting balance, in `closedAt` order. This is realized-only (no
+  floating/unrealized P&L between trades) — the dashboard labels it "live ·
+  realized trades" rather than presenting it as more precise than it is,
+  and falls back to the demo curve until the first trade closes.
+- **DASH/RISK account-balance figures now pull from `/api/stats`'s
+  `accountBalance` field** (and get pushed live over the `balance` socket
+  channel the instant a new MT5 EA report lands). RISK's calculator still
+  keeps the value user-editable for what-if sizing — the real balance only
+  seeds it once, on the first real value.
+
+## Also fixed while wiring this up
+
+`App.jsx` and `src/lib/api.js` never actually sent Telegram's
+`initData` anywhere, even though `api/telegram-auth.js`'s
+`telegramAuthMiddleware` requires it (or a valid `x-app-token`) on every
+`/api/*` route in production. Since this Mini App's primary surface *is*
+Telegram, every authenticated request would have 401'd the moment this
+went live outside of local dev. Both files now read
+`window.Telegram.WebApp.initData` and send it as `x-telegram-init-data`
+(REST) / `auth.initData` (socket) — a no-op outside Telegram, where that
+object is simply `undefined`. `index.html` also now loads the Telegram
+Mini App SDK script and the PWA manifest/icons (copied from the retired
+`webapp/`), and calls `tg.ready()`/`tg.expand()` + registers the service
+worker on mount, matching what the old file did.
+
 
 ## Notes
 

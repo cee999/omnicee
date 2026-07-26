@@ -1,0 +1,16 @@
+{
+  "name": "OMNICEE — Institutional AI Trading Signal Desk",
+  "short_name": "OMNICEE",
+  "description": "Multi-agent AI trading signal desk: live signals, market regime, risk monitoring, and institutional positioning.",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#05070a",
+  "theme_color": "#05070a",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

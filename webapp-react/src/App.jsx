@@ -274,12 +274,32 @@ const NEWS_SEED = [
 const API_BASE = '';
 const APP_TOKEN = '';
 
+// FIX: api/telegram-auth.js's telegramAuthMiddleware checks for an
+// `x-telegram-init-data` header (or `initData` on sockets) and, in
+// production, 401s every /api/* route without it or a valid x-app-token —
+// but nothing in this file ever read window.Telegram.WebApp.initData or
+// sent it anywhere. Opened for real as a Telegram Mini App (this project's
+// actual primary frontend — see README), every authenticated call would
+// have silently 401'd forever, "live" mode notwithstanding. Safe to call
+// outside Telegram too: window.Telegram is simply undefined there.
+function getTelegramInitData() {
+  try { return window.Telegram?.WebApp?.initData || ''; } catch (_) { return ''; }
+}
+
+function authHeaders() {
+  const h = {};
+  if (APP_TOKEN) h['x-app-token'] = APP_TOKEN;
+  const initData = getTelegramInitData();
+  if (initData) h['x-telegram-init-data'] = initData;
+  return h;
+}
+
 async function omniFetch(path, timeoutMs = 4000) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(API_BASE + path, {
-      headers: APP_TOKEN ? { 'x-app-token': APP_TOKEN } : {},
+      headers: authHeaders(),
       signal: ctrl.signal,
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -323,6 +343,17 @@ function useLiveFeed() {
   const [heatmapTiles, setHeatmapTiles] = useState(null);
   const [feedHealth, setFeedHealth] = useState(null);
   const [uptimeSec, setUptimeSec] = useState(null);
+  // FIX (Known gap #3 in webapp-react/README.md): "DASH/RISK account-
+  // balance figures aren't yet pulled from /api/stats's accountBalance
+  // field — still the demo-seeded number." null until a real EA-reported
+  // balance (POST /api/ea/balance) arrives via poll or the 'balance' socket
+  // channel; DashTab/RiskTab fall back to the demo default while it's null.
+  const [accountBalance, setAccountBalance] = useState(null);
+  const [equityCurveLive, setEquityCurveLive] = useState(false);
+  // FIX (Known gap #1): "Prices tick from signals, not a true feed." True,
+  // whenever the socket below actually connects — this just tracks that so
+  // the UI can show whether it's on tick-by-tick push or 5s-poll fallback.
+  const [socketLive, setSocketLive] = useState(false);
   const priceRef = useRef(prices);
   priceRef.current = prices;
 
@@ -339,6 +370,21 @@ function useLiveFeed() {
   useEffect(() => {
     const clock = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(clock);
+  }, []);
+
+  /* Telegram Mini App shell init + PWA service-worker registration — both
+     ran unconditionally in the retired webapp/index.html (see its final
+     <script> block) but had no equivalent here. tg.ready()/tg.expand() are
+     no-ops (window.Telegram undefined) when this loads in a plain browser,
+     so this is safe outside Telegram too. */
+  useEffect(() => {
+    try {
+      const tg = window.Telegram && window.Telegram.WebApp;
+      if (tg) { tg.ready(); tg.expand(); }
+    } catch (_) { /* not inside Telegram, or SDK not loaded yet — fine */ }
+    if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
   }, []);
 
   /* Demo simulation — unchanged behaviour from the original preview,
@@ -403,7 +449,13 @@ function useLiveFeed() {
       } catch (_) { /* keep last-known signals on a transient failure */ }
       try {
         const r = await omniFetch('/api/stats');
-        if (!cancelled && r.ok) setStats(r.stats);
+        if (!cancelled && r.ok) {
+          setStats(r.stats);
+          // FIX (Known gap #3): real balance, once an MT5 EA has reported
+          // one via POST /api/ea/balance. Stays null (→ demo fallback in
+          // DashTab/RiskTab) until then, e.g. before any EA is connected.
+          if (r.accountBalance != null) setAccountBalance(Number(r.accountBalance));
+        }
       } catch (_) { /* stats optional */ }
     };
     const pullSlow = async () => {
@@ -412,6 +464,19 @@ function useLiveFeed() {
       try { const r = await omniFetch('/api/audit-trail?limit=30'); if (!cancelled && r.ok) setAuditLog(r.entries); } catch (_) {}
       try { const r = await omniFetch('/api/health'); if (!cancelled && r.ok) setFeedHealth(r.feeds); } catch (_) {}
       try { const r = await omniFetch('/health'); if (!cancelled && r.ok) setUptimeSec(r.uptime); } catch (_) {}
+      // FIX (Known gap #2): "Equity curve stays illustrative even in live
+      // mode ... worth adding a db.getEquityCurve() + route." Realized-trade
+      // curve, ~20s refresh (same cadence as the other heavier routes here)
+      // — a brand-new deployment with zero closed trades yet returns an
+      // empty curve, so keep the demo-seeded one on screen until real
+      // points exist rather than blanking the chart.
+      try {
+        const r = await omniFetch('/api/equity-curve?limit=300');
+        if (!cancelled && r.ok && Array.isArray(r.curve) && r.curve.length > 1) {
+          setEquityCurve(r.curve.map((pt, i) => ({ t: i, equity: pt.balance, timestamp: pt.timestamp, symbol: pt.symbol, result: pt.result })));
+          setEquityCurveLive(true);
+        }
+      } catch (_) {}
     };
 
     pullFast(); pullSlow();
@@ -420,9 +485,66 @@ function useLiveFeed() {
     return () => { cancelled = true; clearInterval(fastTimer); clearInterval(slowTimer); };
   }, [mode]);
 
+  /* FIX (Known gap #1): "Prices tick from signals, not a true feed ...
+     connectOmniceeSocket()'s market handler is the fix if you switch to
+     sockets." index.js emits market_update (→ io.emit('market', ...), see
+     api/server.js's forward('market_update', 'market', ...)) on every raw
+     price tick, throttled to ~1/sec/symbol — a real feed, unlike the REST
+     poll above which only moves a price when a fresh signal references it.
+     Dynamically imported rather than a static top-level `import { io } from
+     'socket.io-client'` — this file is also used as a standalone preview
+     outside the real Vite build (see the comment on API_BASE above, and
+     webapp-react/README.md), where that package isn't resolvable. A failed
+     dynamic import is caught and simply leaves the REST-polling price
+     updates above as the only source, so this only adds capability and
+     never breaks the existing fallback chain (probe → live/demo, and now
+     within live: socket → poll). */
+  useEffect(() => {
+    if (mode !== 'live') return;
+    let socket = null;
+    let cancelled = false;
+
+    import('socket.io-client').then(({ io }) => {
+      if (cancelled) return;
+      socket = io(API_BASE || undefined, {
+        path: '/socket.io',
+        auth: { appToken: APP_TOKEN || undefined, initData: getTelegramInitData() || undefined },
+        transports: ['websocket', 'polling'],
+      });
+
+      socket.on('connect', () => { if (!cancelled) setSocketLive(true); });
+      socket.on('disconnect', () => { if (!cancelled) setSocketLive(false); });
+
+      socket.on('market', payload => {
+        if (cancelled || !payload?.symbol || payload.price == null || !(payload.symbol in BASE_PRICE)) return;
+        const sym = payload.symbol;
+        const prevPrice = priceRef.current[sym];
+        setFlash(f => ({ ...f, [sym]: payload.price >= prevPrice ? 'up' : 'down' }));
+        setPrices(prev => ({ ...prev, [sym]: payload.price }));
+        setChanges(c => ({ ...c, [sym]: ((payload.price - BASE_PRICE[sym]) / BASE_PRICE[sym]) * 100 }));
+      });
+
+      // Complements the /api/stats poll above with push updates the
+      // instant a new EA balance report lands, instead of waiting up to 5s.
+      socket.on('balance', payload => {
+        if (!cancelled && payload?.balance != null) setAccountBalance(Number(payload.balance));
+      });
+    }).catch(() => {
+      /* socket.io-client not resolvable in this environment — REST polling
+         above already covers prices/stats, so the dashboard runs slightly
+         less real-time, not broken. */
+    });
+
+    return () => {
+      cancelled = true;
+      if (socket) socket.disconnect();
+      setSocketLive(false);
+    };
+  }, [mode]);
+
   return {
-    now, prices, changes, flash, signals, auditLog, equityCurve,
-    stats, outlook, heatmapTiles, feedHealth, uptimeSec,
+    now, prices, changes, flash, signals, auditLog, equityCurve, equityCurveLive,
+    stats, outlook, heatmapTiles, feedHealth, uptimeSec, accountBalance, socketLive,
     mode, connected: mode === 'live',
   };
 }
@@ -439,7 +561,7 @@ const TABS = [
   { key: 'RISK', label: 'Risk', fkey: 'F8', icon: ShieldAlert },
 ];
 
-function TopBar({ now, mode, onCommand }) {
+function TopBar({ now, mode, socketLive, onCommand }) {
   const [cmd, setCmd] = useState('');
   const time = new Date(now).toISOString().slice(11, 19);
   const date = new Date(now).toISOString().slice(0, 10);
@@ -474,6 +596,15 @@ function TopBar({ now, mode, onCommand }) {
           <Circle size={7} fill="currentColor" className={status.pulse ? 'omni-pulse' : ''} />
           {status.label}
         </span>
+        {mode === 'live' && (
+          <span
+            className="font-mono text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded hidden sm:inline"
+            style={{ color: socketLive ? 'var(--emerald)' : 'var(--textFaint)', border: `1px solid ${socketLive ? 'var(--emerald)' : 'var(--border)'}` }}
+            title={socketLive ? 'Tick-by-tick prices over Socket.IO' : 'Falling back to 5s REST polling'}
+          >
+            {socketLive ? 'push' : 'poll'}
+          </span>
+        )}
         <span className="font-mono text-[11px] hidden md:inline" style={{ color: 'var(--textDim)' }}>{date}</span>
         <span className="font-mono text-[12px] font-semibold" style={{ color: 'var(--text)' }}>{time} UTC</span>
       </div>
@@ -519,7 +650,7 @@ function Sidebar({ active, onSelect }) {
 }
 
 /* ── DASH ───────────────────────────────────────────────────────────── */
-function DashTab({ signals, equityCurve, prices, changes }) {
+function DashTab({ signals, equityCurve, equityCurveLive, accountBalance, prices, changes, mode }) {
   const approved = signals.filter(s => s.gate.status === 'approved');
   const winRate = 61 + Math.round((signals.reduce((a, s) => a + (s.score > 75 ? 1 : -1), 0)) % 8);
   const avgScore = signals.length ? Math.round(signals.reduce((a, s) => a + s.score, 0) / signals.length) : 0;
@@ -529,6 +660,10 @@ function DashTab({ signals, equityCurve, prices, changes }) {
     const total = votes.length || 1;
     return { agent, bullPct: Math.round((bull / total) * 100) };
   });
+  // FIX (Known gap #3): prefer the real EA-reported balance over the
+  // equity curve's last point, which is itself now real once trades have
+  // closed (Known gap #2) but stays at the demo-seeded 10000 before that.
+  const displayBalance = accountBalance ?? equityCurve[equityCurve.length - 1]?.equity ?? 10000;
   return (
     <div className="p-4 space-y-4">
       <div className="flex flex-wrap gap-3">
@@ -536,13 +671,13 @@ function DashTab({ signals, equityCurve, prices, changes }) {
         <StatCard label="Win Rate (30d)" value={`${winRate}%`} icon={Target} accent="var(--gold)" />
         <StatCard label="Avg Score" value={avgScore} icon={GaugeIcon} accent="var(--blue)" />
         <StatCard label="Signals Today" value={signals.length} icon={Zap} accent="var(--violet)" />
-        <StatCard label="Account Bal." value={`$${(equityCurve[equityCurve.length - 1]?.equity ?? 10000).toLocaleString()}`} icon={DollarSign} accent="var(--emerald)" />
+        <StatCard label="Account Bal." value={`$${displayBalance.toLocaleString()}`} icon={DollarSign} accent="var(--emerald)" />
         <StatCard label="Max DD Limit" value="10.0%" icon={ShieldAlert} accent="var(--coral)" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="omni-panel p-4 lg:col-span-2">
-          <SectionHeader icon={LayoutDashboard} title="Equity Curve" sub="simulated · 60-cycle window" />
+          <SectionHeader icon={LayoutDashboard} title="Equity Curve" sub={equityCurveLive ? 'live · realized trades' : mode === 'live' ? 'live · awaiting closed trades' : 'simulated · 60-cycle window'} />
           <ResponsiveContainer width="100%" height={220}>
             <AreaChart data={equityCurve}>
               <defs>
@@ -1115,11 +1250,23 @@ function TapeTab({ signals, prices }) {
 }
 
 /* ── RISK ───────────────────────────────────────────────────────────── */
-function RiskTab({ prices, changes }) {
+function RiskTab({ prices, changes, accountBalance }) {
   const [balance, setBalance] = useState(10000);
   const [riskPct, setRiskPct] = useState(1.0);
   const [stopPips, setStopPips] = useState(20);
   const [symbol, setSymbol] = useState('EURUSD');
+  // FIX (Known gap #3): "DASH/RISK account-balance figures aren't yet
+  // pulled from /api/stats's accountBalance field." Applied once, on the
+  // first real value — this field is also a live what-if calculator input,
+  // so it stays user-editable afterward rather than snapping back on every
+  // 5s poll.
+  const appliedRealBalance = useRef(false);
+  useEffect(() => {
+    if (accountBalance != null && !appliedRealBalance.current) {
+      appliedRealBalance.current = true;
+      setBalance(accountBalance);
+    }
+  }, [accountBalance]);
 
   const riskAmount = balance * (riskPct / 100);
   const pipValue = PIP[symbol];
@@ -1241,19 +1388,19 @@ export default function OmniceeDashboard() {
   return (
     <div className="omni-root flex flex-col h-full min-h-[640px] w-full text-sm">
       <ThemeStyle />
-      <TopBar now={feed.now} mode={feed.mode} onCommand={handleCommand} />
+      <TopBar now={feed.now} mode={feed.mode} socketLive={feed.socketLive} onCommand={handleCommand} />
       <TickerTape prices={feed.prices} changes={feed.changes} flash={feed.flash} />
       <div className="flex flex-1 min-h-0">
         <Sidebar active={activeTab} onSelect={setActiveTab} />
         <div className="flex-1 overflow-y-auto omni-scroll">
-          {activeTab === 'DASH' && <DashTab signals={feed.signals} equityCurve={feed.equityCurve} prices={feed.prices} changes={feed.changes} stats={feed.stats} mode={feed.mode} />}
+          {activeTab === 'DASH' && <DashTab signals={feed.signals} equityCurve={feed.equityCurve} equityCurveLive={feed.equityCurveLive} accountBalance={feed.accountBalance} prices={feed.prices} changes={feed.changes} stats={feed.stats} mode={feed.mode} />}
           {activeTab === 'SIGNALS' && <SignalsTab signals={feed.signals} />}
           {activeTab === 'INTEL' && <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} />}
           {activeTab === 'MONITOR' && <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} />}
           {activeTab === 'HEAT' && <HeatTab heatmapTiles={feed.heatmapTiles} mode={feed.mode} />}
           {activeTab === 'VALID' && <ValidTab />}
           {activeTab === 'TAPE' && <TapeTab signals={feed.signals} prices={feed.prices} />}
-          {activeTab === 'RISK' && <RiskTab prices={feed.prices} changes={feed.changes} stats={feed.stats} />}
+          {activeTab === 'RISK' && <RiskTab prices={feed.prices} changes={feed.changes} stats={feed.stats} accountBalance={feed.accountBalance} />}
         </div>
       </div>
     </div>

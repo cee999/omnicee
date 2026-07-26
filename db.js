@@ -510,6 +510,50 @@ async function close() {
   }
 }
 
+// FIX: webapp-react/README.md's "Known gaps" section flagged this exact
+// hole — "no dedicated equity-history endpoint in the current API, only
+// point-in-time /api/stats". Built from trade_outcomes (already populated
+// by every recordOutcomeEverywhere() call — see signal-pipeline/outcome-
+// recorder.js), compounding each closed trade's pnlPct onto a starting
+// balance in closedAt order. This is REALIZED equity only (no floating/
+// unrealized P&L between trades) — an honest simplification, not a true
+// tick-by-tick balance feed, and the frontend labels it as such rather
+// than presenting it as more precise than it is.
+async function getEquityCurve({ startBalance, limit = 500 } = {}) {
+  try {
+    const db = await getDB();
+    if (!db) return [];
+    const outcomes = await db.collection('trade_outcomes')
+      .find({}, { projection: { closedAt: 1, pnlPct: 1, pnlR: 1, symbol: 1, result: 1 } })
+      .sort({ closedAt: 1 })
+      .limit(Math.min(Number(limit) || 500, 1000))
+      .toArray();
+    if (!outcomes.length) return [];
+
+    const base = Number(startBalance) > 0 ? Number(startBalance) : Number(process.env.ACCOUNT_BALANCE || 10000);
+    let balance = base;
+    const curve = [{ timestamp: outcomes[0].closedAt - 1, balance: round2(base), symbol: null, result: null, pnlR: null }];
+    for (const o of outcomes) {
+      balance *= (1 + Number(o.pnlPct || 0) / 100);
+      curve.push({
+        timestamp: o.closedAt,
+        balance: round2(balance),
+        symbol: o.symbol || null,
+        result: o.result || null,
+        pnlR: o.pnlR ?? null,
+      });
+    }
+    return curve;
+  } catch (err) {
+    console.error('[MongoDB] getEquityCurve error:', err.message);
+    return [];
+  }
+}
+
+function round2(n) {
+  return Math.round(Number(n) * 100) / 100;
+}
+
 async function getTradeOutcome(signalId) {
   try {
     const db = await getDB();
@@ -533,6 +577,7 @@ module.exports = {
   getTelemetry,
   saveTradeOutcome,
   getTradeOutcome,
+  getEquityCurve,
   getLearningProfile,
   getLearningProfiles,
   upsertTelegramUser,

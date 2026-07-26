@@ -16,8 +16,19 @@ import { io } from 'socket.io-client';
 
 const APP_TOKEN = import.meta.env.VITE_APP_TOKEN || '';
 
+// FIX: same gap as App.jsx's omniFetch — telegramAuthMiddleware checks for
+// x-telegram-init-data (REST) / auth.initData (socket), but this module
+// never read window.Telegram.WebApp.initData. Undefined outside Telegram,
+// so this is a no-op there.
+function getTelegramInitData() {
+  try { return window.Telegram?.WebApp?.initData || ''; } catch (_) { return ''; }
+}
+
 function authHeaders() {
-  return APP_TOKEN ? { 'x-app-token': APP_TOKEN } : {};
+  const h = APP_TOKEN ? { 'x-app-token': APP_TOKEN } : {};
+  const initData = getTelegramInitData();
+  if (initData) h['x-telegram-init-data'] = initData;
+  return h;
 }
 
 async function get(path, params = {}) {
@@ -49,15 +60,17 @@ export const OmniceeAPI = {
   learning: ({ limit } = {}) => get('/api/learning', { limit }),
   news: ({ symbol, category } = {}) => get('/api/news', { symbol, category }),
   stats: () => get('/api/stats'),
+  equityCurve: ({ limit } = {}) => get('/api/equity-curve', { limit }),
   recordOutcome: (signalId, outcome) => post('/api/outcomes', { signalId, outcome }),
 };
 
 /**
  * Opens the live socket and subscribes to the channels the backend actually
  * emits (see io.emit(channel, payload) in api/server.js): signal, market,
- * risk, stats, regime, telemetry, intel — plus the one-off `connected`
- * event and the `history`/`outcome_saved`/`outcome_error` replies to
- * `get_history` / `record_outcome`.
+ * risk, stats, regime, telemetry, intel, feed_health, balance,
+ * watchlist_update, abnormal_market, liquidation_cascade — plus the
+ * one-off `connected` event and the `history`/`outcome_saved`/
+ * `outcome_error` replies to `get_history` / `record_outcome`.
  *
  * `handlers` is a partial map of { channel: (payload) => void }; only the
  * channels you pass are subscribed.
@@ -65,11 +78,20 @@ export const OmniceeAPI = {
 export function connectOmniceeSocket(handlers = {}) {
   const socket = io('/', {
     path: '/socket.io',
-    auth: APP_TOKEN ? { appToken: APP_TOKEN } : {},
+    auth: { appToken: APP_TOKEN || undefined, initData: getTelegramInitData() || undefined },
     transports: ['websocket', 'polling'],
   });
 
-  const channels = ['connected', 'signal', 'market', 'risk', 'stats', 'regime', 'telemetry', 'intel', 'outcome_saved', 'outcome_error'];
+  // FIX: this doc comment already promised feed_health/balance/watchlist_
+  // update/abnormal_market/liquidation_cascade (api/server.js does forward()
+  // all of them), but the actual subscription list below only wired
+  // signal/market/risk/stats/regime/telemetry/intel — the rest silently
+  // went nowhere even if a caller passed a handler for them.
+  const channels = [
+    'connected', 'signal', 'market', 'risk', 'stats', 'regime', 'telemetry',
+    'intel', 'feed_health', 'balance', 'watchlist_update', 'abnormal_market',
+    'liquidation_cascade', 'outcome_saved', 'outcome_error',
+  ];
   channels.forEach(ch => {
     if (handlers[ch]) socket.on(ch, handlers[ch]);
   });

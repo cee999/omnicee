@@ -133,7 +133,14 @@ services:
     # after a service already exists — this only takes effect on a fresh
     # deploy or a manually recreated service.
     region: singapore
-    buildCommand: npm ci --omit=dev
+    # FIX: was just `npm ci --omit=dev` (root only) — api/server.js now
+    # serves webapp-react/dist instead of the retired webapp/ static
+    # folder, so the React app has to actually be built during deploy or
+    # dist/ won't exist and every route falls through to a 404/blank page.
+    # webapp-react's own deps (vite, tailwind, etc.) are devDependencies it
+    # needs at build time, so that install can't use --omit=dev the way the
+    # root one does — only the root server bundle skips dev deps.
+    buildCommand: npm ci --omit=dev && npm --prefix webapp-react ci && npm --prefix webapp-react run build
     startCommand: node start-all.js
     healthCheckPath: /health
     autoDeployTrigger: commit

@@ -20,7 +20,14 @@ const { recordOutcomeEverywhere } = require('../signal-pipeline/outcome-recorder
 const { MarketHeatMap } = require('../automation/market-heatmap');
 
 const API_PORT = Number(process.env.PORT || process.env.WS_PORT || 3001);
-const STATIC_ROOT = path.join(__dirname, '..', 'webapp');
+// FIX: was 'webapp' (the vanilla-JS single-file frontend) — that file has
+// been retired in favor of webapp-react (see its README: "A Bloomberg-
+// terminal-style replacement for the vanilla-JS webapp/ frontend"). Points
+// at the Vite build output; render.yaml's buildCommand runs `npm run build`
+// inside webapp-react/ before this ever starts, so dist/ exists in
+// production. Locally, run `npm run build --prefix webapp-react` once (or
+// `npm run dev` inside webapp-react/ for hot-reload against this backend).
+const STATIC_ROOT = path.join(__dirname, '..', 'webapp-react', 'dist');
 const finnhub = new FinnhubFeed();
 const learningEngine = new AdaptiveLearningEngine({ store: db });
 
@@ -234,6 +241,24 @@ function createApp() {
     const dispatcher = getDispatcher();
     const accountBalance = dispatcher?.accountBalance ?? null;
     res.json({ ok: true, stats, accountBalance });
+  });
+
+  // ── Equity Curve (doc gap: webapp-react/README.md's "Known gaps" note —
+  // "no dedicated equity-history endpoint ... only point-in-time
+  // /api/stats. Worth adding a db.getEquityCurve() + route"). Realized-only
+  // (compounds each closed trade_outcomes.pnlPct onto a starting balance),
+  // not a tick-by-tick feed — see the comment on db.getEquityCurve().
+  app.get('/api/equity-curve', telegramAuthMiddleware, async (req, res) => {
+    const dispatcher = getDispatcher();
+    const startBalance = dispatcher?.accountBalance || Number(process.env.ACCOUNT_BALANCE) || 10000;
+    const curve = await db.getEquityCurve({
+      startBalance,
+      limit: req.query.limit ? Number(req.query.limit) : 500,
+    }).catch(err => {
+      res.status(503).json({ ok: false, error: err.message });
+      return null;
+    });
+    if (curve) res.json({ ok: true, curve, startBalance });
   });
 
   app.get('/api/news', telegramAuthMiddleware, async (req, res) => {
