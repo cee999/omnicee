@@ -133,7 +133,7 @@ services:
     # after a service already exists — this only takes effect on a fresh
     # deploy or a manually recreated service.
     region: singapore
-    buildCommand: npm ci --omit=dev
+    buildCommand: npm ci --omit=dev && (cd webapp-react && npm ci && npm run build)
     startCommand: node start-all.js
     healthCheckPath: /health
     autoDeployTrigger: commit

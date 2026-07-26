@@ -19,8 +19,17 @@ const { MarketOutlookBuilder } = require('../signal-pipeline/market-outlook');
 const { recordOutcomeEverywhere } = require('../signal-pipeline/outcome-recorder');
 const { MarketHeatMap } = require('../automation/market-heatmap');
 
+const fs = require('fs');
 const API_PORT = Number(process.env.PORT || process.env.WS_PORT || 3001);
-const STATIC_ROOT = path.join(__dirname, '..', 'webapp');
+// FIX: STATIC_ROOT only ever pointed at the vanilla-JS webapp/ — the new
+// webapp-react/ dashboard (see that folder's README) was never actually
+// served no matter how it was built, because nothing here looked for it.
+// That's the real reason it only ever showed demo/simulated data: it
+// wasn't the thing running in production at all. Prefer the built React
+// app when it exists; fall back to webapp/ so a checkout that hasn't run
+// `npm run build` inside webapp-react/ yet doesn't break.
+const REACT_DIST = path.join(__dirname, '..', 'webapp-react', 'dist');
+const STATIC_ROOT = fs.existsSync(REACT_DIST) ? REACT_DIST : path.join(__dirname, '..', 'webapp');
 const finnhub = new FinnhubFeed();
 const learningEngine = new AdaptiveLearningEngine({ store: db });
 
@@ -249,7 +258,11 @@ function createApp() {
       res.status(503).json({ ok: false, error: err.message });
       return null;
     });
-    if (profiles) res.json({ ok: true, profiles });
+    // FIX: learningEngine (AdaptiveLearningEngine) was instantiated at the
+    // top of this file but never called anywhere in the API layer — its
+    // Q-table size, blacklist size, and cache state were invisible outside
+    // a log line. Cheap to expose alongside the per-pattern profiles.
+    if (profiles) res.json({ ok: true, profiles, engine: learningEngine.getStats() });
   });
 
   app.post('/api/outcomes', telegramAuthMiddleware, async (req, res) => {
