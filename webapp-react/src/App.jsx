@@ -259,9 +259,42 @@ const NEWS_SEED = [
   'Asia session liquidity thin ahead of London open',
 ];
 
-/* ── Live-feed simulation hook — the seam where this swaps for real
-   fetch()/socket.io-client calls against the documented API. ─────────── */
+/* ── Live-data seam ─────────────────────────────────────────────────────
+   Point API_BASE at a deployed OMNICEE backend (e.g. your Render URL) and
+   APP_TOKEN at its APP_ACCESS_TOKEN to pull real data — CORS_ORIGIN
+   defaults to '*' server-side (api/server.js), so a same-origin blank
+   API_BASE or a cross-origin absolute URL both work. Left as-is, requests
+   go nowhere, the one-time /health probe below fails, and the UI falls
+   back to a clearly-labeled on-screen simulation instead of a blank page.
+   This uses plain fetch()/polling rather than socket.io-client so the
+   exact same file works unmodified in this sandboxed preview (which can't
+   load unlisted npm packages) and in the real Vite build; src/lib/api.js
+   in the companion project adds true real-time push via socket.io-client
+   on top of this once you're running it for real. */
+const API_BASE = '';
+const APP_TOKEN = '';
+
+async function omniFetch(path, timeoutMs = 4000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(API_BASE + path, {
+      headers: APP_TOKEN ? { 'x-app-token': APP_TOKEN } : {},
+      signal: ctrl.signal,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/* ── Live-feed hook — probes the real API once; on success it polls the
+   documented REST routes, on failure it falls back to the original
+   self-contained simulator so the dashboard is never just a blank
+   loading screen. ──────────────────────────────────────────────────── */
 function useLiveFeed() {
+  const [mode, setMode] = useState('checking'); // 'checking' | 'live' | 'demo'
   const [now, setNow] = useState(Date.now());
   const [prices, setPrices] = useState(() => ({ ...BASE_PRICE }));
   const [changes, setChanges] = useState(() => Object.fromEntries(SYMBOLS.map(s => [s, 0])));
@@ -285,11 +318,33 @@ function useLiveFeed() {
     }
     return pts;
   });
+  const [stats, setStats] = useState(null);
+  const [outlook, setOutlook] = useState(null);
+  const [heatmapTiles, setHeatmapTiles] = useState(null);
+  const [feedHealth, setFeedHealth] = useState(null);
+  const [uptimeSec, setUptimeSec] = useState(null);
   const priceRef = useRef(prices);
   priceRef.current = prices;
 
+  /* One-time reachability probe against the unauthenticated /health route. */
+  useEffect(() => {
+    let cancelled = false;
+    omniFetch('/health', 2500)
+      .then(() => { if (!cancelled) setMode('live'); })
+      .catch(() => { if (!cancelled) setMode('demo'); });
+    return () => { cancelled = true; };
+  }, []);
+
+  /* Clock runs regardless of mode. */
   useEffect(() => {
     const clock = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(clock);
+  }, []);
+
+  /* Demo simulation — unchanged behaviour from the original preview,
+     just gated so it only runs once the live probe has failed. */
+  useEffect(() => {
+    if (mode !== 'demo') return;
     const tick = setInterval(() => {
       setPrices(prev => {
         const next = { ...prev };
@@ -322,10 +377,54 @@ function useLiveFeed() {
         return [...prev.slice(1), { t: prev[prev.length - 1].t + 1, equity: next }];
       });
     }, 4000);
-    return () => { clearInterval(clock); clearInterval(tick); clearInterval(signalTimer); clearInterval(auditTimer); clearInterval(eqTimer); };
-  }, []);
+    return () => { clearInterval(tick); clearInterval(signalTimer); clearInterval(auditTimer); clearInterval(eqTimer); };
+  }, [mode]);
 
-  return { now, prices, changes, flash, signals, auditLog, equityCurve };
+  /* Live polling — real backend. Fast loop covers signals/stats (the
+     things worth refreshing every few seconds); slow loop covers
+     outlook/heatmap/audit-trail/feed-health (heavier, computed routes
+     that 503 until the trading engine finishes booting, so failures here
+     are expected right after a cold start and just retry next tick). */
+  useEffect(() => {
+    if (mode !== 'live') return;
+    let cancelled = false;
+
+    const pullFast = async () => {
+      try {
+        const r = await omniFetch(`/api/signals?limit=40`);
+        if (!cancelled && r.ok) {
+          setSignals(r.signals);
+          setPrices(prev => {
+            const next = { ...prev };
+            r.signals.forEach(s => { if (s.symbol && s.currentPrice) next[s.symbol] = s.currentPrice; });
+            return next;
+          });
+        }
+      } catch (_) { /* keep last-known signals on a transient failure */ }
+      try {
+        const r = await omniFetch('/api/stats');
+        if (!cancelled && r.ok) setStats(r.stats);
+      } catch (_) { /* stats optional */ }
+    };
+    const pullSlow = async () => {
+      try { const r = await omniFetch('/api/outlook'); if (!cancelled && r.ok) setOutlook(r.outlook); } catch (_) {}
+      try { const r = await omniFetch('/api/heatmap'); if (!cancelled && r.ok) setHeatmapTiles(r.tiles); } catch (_) {}
+      try { const r = await omniFetch('/api/audit-trail?limit=30'); if (!cancelled && r.ok) setAuditLog(r.entries); } catch (_) {}
+      try { const r = await omniFetch('/api/health'); if (!cancelled && r.ok) setFeedHealth(r.feeds); } catch (_) {}
+      try { const r = await omniFetch('/health'); if (!cancelled && r.ok) setUptimeSec(r.uptime); } catch (_) {}
+    };
+
+    pullFast(); pullSlow();
+    const fastTimer = setInterval(pullFast, 5000);
+    const slowTimer = setInterval(pullSlow, 20000);
+    return () => { cancelled = true; clearInterval(fastTimer); clearInterval(slowTimer); };
+  }, [mode]);
+
+  return {
+    now, prices, changes, flash, signals, auditLog, equityCurve,
+    stats, outlook, heatmapTiles, feedHealth, uptimeSec,
+    mode, connected: mode === 'live',
+  };
 }
 
 /* ── Navigation model ───────────────────────────────────────────────── */
@@ -340,10 +439,15 @@ const TABS = [
   { key: 'RISK', label: 'Risk', fkey: 'F8', icon: ShieldAlert },
 ];
 
-function TopBar({ now, connected, onCommand }) {
+function TopBar({ now, mode, onCommand }) {
   const [cmd, setCmd] = useState('');
   const time = new Date(now).toISOString().slice(11, 19);
   const date = new Date(now).toISOString().slice(0, 10);
+  const status = {
+    checking: { label: 'Connecting', color: 'var(--gold)', pulse: true },
+    live: { label: 'Live', color: 'var(--emerald)', pulse: true },
+    demo: { label: 'Demo Data', color: 'var(--textDim)', pulse: false },
+  }[mode] || { label: 'Offline', color: 'var(--coral)', pulse: false };
   return (
     <div className="flex items-center gap-4 px-4 py-2.5 border-b" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
       <div className="flex items-center gap-2">
@@ -366,9 +470,9 @@ function TopBar({ now, connected, onCommand }) {
         />
       </div>
       <div className="flex items-center gap-3 ml-auto">
-        <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase" style={{ color: connected ? 'var(--emerald)' : 'var(--coral)' }}>
-          <Circle size={7} fill="currentColor" className={connected ? 'omni-pulse' : ''} />
-          {connected ? 'Live' : 'Offline'}
+        <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase" style={{ color: status.color }}>
+          <Circle size={7} fill="currentColor" className={status.pulse ? 'omni-pulse' : ''} />
+          {status.label}
         </span>
         <span className="font-mono text-[11px] hidden md:inline" style={{ color: 'var(--textDim)' }}>{date}</span>
         <span className="font-mono text-[12px] font-semibold" style={{ color: 'var(--text)' }}>{time} UTC</span>
@@ -586,59 +690,94 @@ function SignalsTab({ signals }) {
 }
 
 /* ── INTEL ──────────────────────────────────────────────────────────── */
-function IntelTab({ now }) {
-  const sentiment = useMemo(() => SYMBOLS.map(s => ({ symbol: s, score: Math.round(rand(-80, 80)) })), []);
-  const cot = useMemo(() => ['EUR', 'GBP', 'JPY', 'XAU'].map(c => ({
-    currency: c, nonComm: Math.round(rand(-60000, 60000)), comm: Math.round(rand(-40000, 40000)),
-  })), []);
-  const calendar = useMemo(() => ([
+function IntelTab({ now, outlook, mode }) {
+  const live = mode === 'live' && outlook;
+
+  /* Demo-mode fallback content — unchanged from the original preview. */
+  const mockSentiment = useMemo(() => SYMBOLS.map(s => ({ symbol: s, score: Math.round(rand(-80, 80)) })), []);
+  const mockCot = useMemo(() => ['EUR', 'GBP', 'JPY', 'XAU'].map(c => ({ currency: c, nonComm: Math.round(rand(-60000, 60000)) })), []);
+  const mockCalendar = useMemo(() => ([
     { event: 'US CPI y/y', impact: 'high', mins: 42 },
     { event: 'ECB Rate Decision', impact: 'high', mins: 185 },
     { event: 'US Initial Jobless Claims', impact: 'medium', mins: 340 },
     { event: 'UK Retail Sales m/m', impact: 'low', mins: 610 },
   ]), []);
-  const outlook = useMemo(() => pick([
+  const mockNarrative = useMemo(() => pick([
     'Majors are consolidating inside prior-week ranges; institutional positioning shows specs trimming dollar longs while gold holds a bid on softer real yields. Crypto remains correlated to macro liquidity signals rather than trading on-chain fundamentals this session.',
     'Trend structure favors continuation on XAUUSD and BTCUSDT while EURUSD chops inside a well-defined range ahead of the ECB. Session filters currently favor the London/NY overlap for entries.',
     'Volatility is compressing across forex majors — the pipeline is flagging this as a pre-breakout regime and tightening entry criteria accordingly until a directional resolution confirms.',
   ]), [Math.floor(now / 45000)]);
 
+  /* Real MarketOutlookBuilder payload (signal-pipeline/market-outlook.js),
+     as returned by GET /api/outlook. */
+  const narrative = live ? (outlook.narrative || 'No narrative generated yet.') : mockNarrative;
+  const regimeRows = live ? (outlook.symbols || []).map(s => ({ symbol: s.symbol, regime: s.regime || '—', tradeability: s.tradeability || '—' })) : null;
+  const cotRows = live
+    ? (outlook.symbols || []).filter(s => s.institutionalPositioning).map(s => ({ currency: s.symbol, nonComm: s.institutionalPositioning.largeSpecNet ?? 0, signal: s.institutionalPositioning.signal }))
+    : mockCot;
+  const calendarRows = live
+    ? [...(outlook.today?.tier1Events || []), ...(outlook.week?.tier1Events || [])].slice(0, 6).map(e => ({ event: `${e.name} (${e.currency})`, impact: 'high', mins: Math.max(0, Math.round((e.hoursAway || 0) * 60)) }))
+    : mockCalendar;
+  const newsRows = live ? (outlook.news || []).slice(0, 6).map(n => n.headline) : NEWS_SEED.slice(0, 6);
+
   return (
     <div className="p-4 space-y-4">
       <div className="omni-panel p-4">
-        <SectionHeader icon={Globe2} title="Market Outlook" sub="plain-English · signal-explainer" />
-        <p className="text-[12px] leading-relaxed" style={{ color: 'var(--textDim)' }}>{outlook}</p>
+        <SectionHeader icon={Globe2} title="Market Outlook" sub={live ? 'live · signal-pipeline/market-outlook' : 'demo · signal-explainer'} />
+        <p className="text-[12px] leading-relaxed" style={{ color: 'var(--textDim)' }}>{narrative}</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="omni-panel p-4">
-          <SectionHeader icon={Activity} title="Macro Sentiment" sub="Alpha Vantage" />
-          <div className="space-y-2">
-            {sentiment.map(s => (
-              <div key={s.symbol} className="flex items-center gap-2 font-mono text-[11px]">
-                <span className="w-16" style={{ color: 'var(--textDim)' }}>{s.symbol}</span>
-                <div className="flex-1 h-2 rounded-full relative" style={{ background: 'var(--border)' }}>
-                  <div className="absolute top-0 bottom-0 left-1/2" style={{ width: 1, background: 'var(--borderBright)' }} />
-                  <div className="absolute top-0 bottom-0 rounded-full" style={{
-                    left: s.score >= 0 ? '50%' : `${50 + s.score / 2}%`,
-                    width: `${Math.abs(s.score) / 2}%`,
-                    background: s.score >= 0 ? 'var(--emerald)' : 'var(--coral)',
-                  }} />
-                </div>
-                <span className="w-10 text-right" style={{ color: s.score >= 0 ? 'var(--emerald)' : 'var(--coral)' }}>{s.score}</span>
+          {live ? (
+            <>
+              <SectionHeader icon={Activity} title="Regime & Tradeability" sub="per symbol" />
+              <div className="space-y-2">
+                {regimeRows.length === 0 && <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No symbol data yet.</div>}
+                {regimeRows.map(r => (
+                  <div key={r.symbol} className="flex items-center justify-between font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
+                    <span style={{ color: 'var(--text)' }}>{r.symbol}</span>
+                    <span style={{ color: 'var(--textDim)' }}>{r.regime}</span>
+                    <Pill tone={r.tradeability === 'high' ? 'up' : r.tradeability === 'low' ? 'down' : 'neutral'}>{r.tradeability}</Pill>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </>
+          ) : (
+            <>
+              <SectionHeader icon={Activity} title="Macro Sentiment" sub="Alpha Vantage · demo" />
+              <div className="space-y-2">
+                {mockSentiment.map(s => (
+                  <div key={s.symbol} className="flex items-center gap-2 font-mono text-[11px]">
+                    <span className="w-16" style={{ color: 'var(--textDim)' }}>{s.symbol}</span>
+                    <div className="flex-1 h-2 rounded-full relative" style={{ background: 'var(--border)' }}>
+                      <div className="absolute top-0 bottom-0 left-1/2" style={{ width: 1, background: 'var(--borderBright)' }} />
+                      <div className="absolute top-0 bottom-0 rounded-full" style={{
+                        left: s.score >= 0 ? '50%' : `${50 + s.score / 2}%`,
+                        width: `${Math.abs(s.score) / 2}%`,
+                        background: s.score >= 0 ? 'var(--emerald)' : 'var(--coral)',
+                      }} />
+                    </div>
+                    <span className="w-10 text-right" style={{ color: s.score >= 0 ? 'var(--emerald)' : 'var(--coral)' }}>{s.score}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
 
         <div className="omni-panel p-4">
-          <SectionHeader icon={ShieldAlert} title="CFTC COT Positioning" sub="non-comm vs comm, contracts" />
+          <SectionHeader icon={ShieldAlert} title="CFTC COT Positioning" sub={live ? 'large-spec net, per symbol' : 'non-comm, demo'} />
           <div className="space-y-3">
-            {cot.map(c => (
+            {cotRows.length === 0 && <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No COT data available for tracked symbols.</div>}
+            {cotRows.map(c => (
               <div key={c.currency} className="font-mono text-[11px]">
-                <div className="flex justify-between mb-1"><span style={{ color: 'var(--text)' }}>{c.currency}</span></div>
+                <div className="flex justify-between mb-1">
+                  <span style={{ color: 'var(--text)' }}>{c.currency}</span>
+                  {c.signal && <span style={{ color: 'var(--textFaint)' }}>{c.signal}</span>}
+                </div>
                 <div className="flex items-center gap-2">
-                  <span className="w-16" style={{ color: 'var(--textFaint)' }}>Non-comm</span>
+                  <span className="w-16" style={{ color: 'var(--textFaint)' }}>Large spec</span>
                   <div className="flex-1 h-1.5 rounded-full" style={{ background: 'var(--border)' }}>
                     <div className="h-full rounded-full" style={{ width: `${Math.min(100, Math.abs(c.nonComm) / 600)}%`, background: c.nonComm >= 0 ? 'var(--emerald)' : 'var(--coral)' }} />
                   </div>
@@ -652,9 +791,10 @@ function IntelTab({ now }) {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="omni-panel p-4">
-          <SectionHeader icon={Clock} title="Economic Calendar" sub="Myfxbook" />
+          <SectionHeader icon={Clock} title="Economic Calendar" sub={live ? 'Myfxbook · tier-1' : 'Myfxbook · demo'} />
           <div className="space-y-1.5">
-            {calendar.map((e, i) => (
+            {calendarRows.length === 0 && <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No tier-1 events on the horizon.</div>}
+            {calendarRows.map((e, i) => (
               <div key={i} className="flex items-center gap-2 font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
                 <Pill tone={e.impact === 'high' ? 'down' : e.impact === 'medium' ? 'warn' : 'neutral'}>{e.impact}</Pill>
                 <span className="flex-1" style={{ color: 'var(--textDim)' }}>{e.event}</span>
@@ -664,9 +804,10 @@ function IntelTab({ now }) {
           </div>
         </div>
         <div className="omni-panel p-4">
-          <SectionHeader icon={Newspaper} title="Headlines" sub="Finnhub" />
+          <SectionHeader icon={Newspaper} title="Headlines" sub={live ? 'Finnhub' : 'Finnhub · demo'} />
           <div className="space-y-1.5">
-            {NEWS_SEED.slice(0, 6).map((n, i) => (
+            {newsRows.length === 0 && <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No headlines returned.</div>}
+            {newsRows.map((n, i) => (
               <div key={i} className="font-mono text-[11px] py-1 border-b" style={{ color: 'var(--textDim)', borderColor: 'var(--border)' }}>{n}</div>
             ))}
           </div>
@@ -677,18 +818,32 @@ function IntelTab({ now }) {
 }
 
 /* ── MONITOR ────────────────────────────────────────────────────────── */
-function MonitorTab({ auditLog }) {
+function MonitorTab({ auditLog, feedHealth, uptimeSec, mode }) {
+  // In live mode, layer the real DataIntegrityMonitor report (name/connected
+  // from /api/health) over the known feed list; feeds it doesn't mention
+  // (e.g. OpenInsider, which is inert without a paid key) keep their static
+  // description rather than disappearing.
+  const liveByName = new Map((feedHealth || []).map(f => [f.name, f]));
+  const feeds = FEEDS.map(f => {
+    const live = liveByName.get(f.name);
+    if (mode !== 'live' || !live) return f;
+    return { ...f, status: live.connected ? 'live' : 'down' };
+  });
+  const uptimeLabel = mode === 'live' && uptimeSec != null
+    ? `${Math.floor(uptimeSec / 3600)}h ${Math.floor((uptimeSec % 3600) / 60)}m`
+    : `${Math.floor(rand(4, 72))}h ${Math.floor(rand(0, 59))}m`;
+
   return (
     <div className="p-4 space-y-4">
       <div className="omni-panel p-4">
-        <SectionHeader icon={Database} title="Feed Health" sub={`${FEEDS.filter(f => f.status === 'live').length}/${FEEDS.length} live`} />
+        <SectionHeader icon={Database} title="Feed Health" sub={`${feeds.filter(f => f.status === 'live').length}/${feeds.length} live${mode === 'live' ? '' : ' · demo'}`} />
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5">
-          {FEEDS.map(f => (
+          {feeds.map(f => (
             <div key={f.name} className="omni-panel2 p-3">
               <div className="flex items-center justify-between mb-1">
                 <span className="font-mono text-[11px]" style={{ color: 'var(--text)' }}>{f.name}</span>
                 <Circle size={8} fill="currentColor" style={{
-                  color: f.status === 'live' ? 'var(--emerald)' : f.status === 'degraded' ? 'var(--gold)' : 'var(--textFaint)',
+                  color: f.status === 'live' ? 'var(--emerald)' : f.status === 'degraded' ? 'var(--gold)' : f.status === 'down' ? 'var(--coral)' : 'var(--textFaint)',
                 }} className={f.status === 'live' ? 'omni-pulse' : ''} />
               </div>
               <div className="font-mono text-[9px] uppercase" style={{ color: 'var(--textFaint)' }}>{f.kind}</div>
@@ -744,7 +899,7 @@ function MonitorTab({ auditLog }) {
             </div>
             <div className="flex items-center justify-between font-mono text-[11px]">
               <span style={{ color: 'var(--textDim)' }}>Process uptime</span>
-              <span style={{ color: 'var(--text)' }}>{Math.floor(rand(4, 72))}h {Math.floor(rand(0, 59))}m</span>
+              <span style={{ color: 'var(--text)' }}>{uptimeLabel}</span>
             </div>
           </div>
         </div>
@@ -754,7 +909,21 @@ function MonitorTab({ auditLog }) {
 }
 
 /* ── HEAT ───────────────────────────────────────────────────────────── */
-function HeatTab() {
+function tileBiasSign(bias) {
+  if (bias === 'BUY' || bias === 'LONG_LEANING') return 1;
+  if (bias === 'SELL' || bias === 'SHORT_LEANING') return -1;
+  return 0;
+}
+
+function HeatTab({ heatmapTiles, mode }) {
+  const live = mode === 'live' && Array.isArray(heatmapTiles);
+
+  /* Demo-mode fallback — unchanged from the original preview. Note: the
+     real GET /api/heatmap (automation/market-heatmap.js) returns a flat,
+     ranked list of per-symbol heat tiles (score/bucket/bias/opportunity/
+     relative-strength), not a symbol×symbol correlation matrix — so the
+     live view below is shaped differently from this demo grid on purpose,
+     not as a simplification of it. */
   const corr = useMemo(() => {
     const m = {};
     SYMBOLS.forEach(a => { m[a] = {}; SYMBOLS.forEach(b => { m[a][b] = a === b ? 1 : +rand(-1, 1).toFixed(2); }); });
@@ -764,10 +933,50 @@ function HeatTab() {
     symbol: s, ...Object.fromEntries(TIMEFRAMES.map(tf => [tf, +rand(-1, 1).toFixed(2)])),
   })), []);
 
+  if (live) {
+    return (
+      <div className="p-4 space-y-4">
+        <div className="omni-panel p-4">
+          <SectionHeader icon={Flame} title="Market Heat Map" sub="live · opportunity + relative-strength blend, ranked" />
+          {heatmapTiles.length === 0 ? (
+            <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No tiles yet — waiting on the opportunity ranker to warm up.</div>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5">
+              {heatmapTiles.map(t => {
+                const sign = tileBiasSign(t.bias);
+                return (
+                  <div key={t.symbol} className="omni-panel2 p-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-mono text-[11px]" style={{ color: 'var(--text)' }}>{t.symbol}</span>
+                      <span className="font-mono text-[9px]" style={{ color: 'var(--textFaint)' }}>#{t.overallRank}</span>
+                    </div>
+                    <div className="rounded px-2 py-2 mb-2 flex items-center justify-between" style={{ background: heatColor(sign * (t.heatScore / 100)) }}>
+                      <span className="font-mono text-lg font-bold" style={{ color: 'var(--text)' }}>{Math.round(t.heatScore)}</span>
+                      <span className="font-mono text-[9px] uppercase" style={{ color: 'var(--textDim)' }}>{t.bucket}</span>
+                    </div>
+                    <div className="font-mono text-[10px] flex items-center justify-between" style={{ color: 'var(--textDim)' }}>
+                      <span>{t.bias}</span>
+                      {t.opportunity && <Pill tone={t.opportunity.fired ? 'up' : 'neutral'}>{t.opportunity.grade || '—'}</Pill>}
+                    </div>
+                    {t.relativeStrength && (
+                      <div className="font-mono text-[9px] mt-1" style={{ color: 'var(--textFaint)' }}>
+                        RS rank #{t.relativeStrength.rank} · {fmtPct(t.relativeStrength.changePct)}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="p-4 space-y-4">
       <div className="omni-panel p-4 overflow-x-auto omni-scroll">
-        <SectionHeader icon={Flame} title="Correlation Matrix" sub="rolling 50-bar, H1" />
+        <SectionHeader icon={Flame} title="Correlation Matrix" sub="rolling 50-bar, H1 · demo" />
         <div className="inline-block min-w-full">
           <div className="grid" style={{ gridTemplateColumns: `90px repeat(${SYMBOLS.length}, 68px)` }}>
             <div />
@@ -788,7 +997,7 @@ function HeatTab() {
       </div>
 
       <div className="omni-panel p-4 overflow-x-auto omni-scroll">
-        <SectionHeader icon={TrendingUp} title="Relative Strength Heat" sub="momentum by timeframe" />
+        <SectionHeader icon={TrendingUp} title="Relative Strength Heat" sub="momentum by timeframe · demo" />
         <div className="inline-block min-w-full">
           <div className="grid" style={{ gridTemplateColumns: `90px repeat(${TIMEFRAMES.length}, 90px)` }}>
             <div />
@@ -1032,19 +1241,19 @@ export default function OmniceeDashboard() {
   return (
     <div className="omni-root flex flex-col h-full min-h-[640px] w-full text-sm">
       <ThemeStyle />
-      <TopBar now={feed.now} connected={true} onCommand={handleCommand} />
+      <TopBar now={feed.now} mode={feed.mode} onCommand={handleCommand} />
       <TickerTape prices={feed.prices} changes={feed.changes} flash={feed.flash} />
       <div className="flex flex-1 min-h-0">
         <Sidebar active={activeTab} onSelect={setActiveTab} />
         <div className="flex-1 overflow-y-auto omni-scroll">
-          {activeTab === 'DASH' && <DashTab signals={feed.signals} equityCurve={feed.equityCurve} prices={feed.prices} changes={feed.changes} />}
+          {activeTab === 'DASH' && <DashTab signals={feed.signals} equityCurve={feed.equityCurve} prices={feed.prices} changes={feed.changes} stats={feed.stats} mode={feed.mode} />}
           {activeTab === 'SIGNALS' && <SignalsTab signals={feed.signals} />}
-          {activeTab === 'INTEL' && <IntelTab now={feed.now} />}
-          {activeTab === 'MONITOR' && <MonitorTab auditLog={feed.auditLog} />}
-          {activeTab === 'HEAT' && <HeatTab />}
+          {activeTab === 'INTEL' && <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} />}
+          {activeTab === 'MONITOR' && <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} />}
+          {activeTab === 'HEAT' && <HeatTab heatmapTiles={feed.heatmapTiles} mode={feed.mode} />}
           {activeTab === 'VALID' && <ValidTab />}
           {activeTab === 'TAPE' && <TapeTab signals={feed.signals} prices={feed.prices} />}
-          {activeTab === 'RISK' && <RiskTab prices={feed.prices} changes={feed.changes} />}
+          {activeTab === 'RISK' && <RiskTab prices={feed.prices} changes={feed.changes} stats={feed.stats} />}
         </div>
       </div>
     </div>
