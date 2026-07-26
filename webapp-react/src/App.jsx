@@ -215,6 +215,16 @@ function generateSignal(symbol, price) {
   };
   const failures = Object.entries(gateChecklist).filter(([, ok]) => !ok).map(([k]) => k);
   const status = score >= 75 && failures.length === 0 ? 'approved' : (failures.length > 1 ? 'rejected' : 'gated');
+  const mcWinProb = +rand(45, 88).toFixed(1);
+  const bayesPosterior = +rand(0.38, 0.87).toFixed(2);
+  const statPassed = Math.round(rand(4, 10));
+  const wfe = +rand(0.25, 0.92).toFixed(2);
+  const validation = {
+    monteCarlo: { approved: mcWinProb >= 55, winProbability: mcWinProb, expectedR: +rand(-0.3, 1.9).toFixed(2), simulations: 5000 },
+    bayesian: { approved: bayesPosterior >= 0.52, posterior: bayesPosterior },
+    statistical: { approved: statPassed >= 6, passed: statPassed, total: 10 },
+    walkForward: { sufficient: Math.random() > 0.3, wfe, robust: wfe >= 0.5 },
+  };
   const reasons = [
     `${agreeCount}/8 agents aligned ${dir}`,
     `Regime: ${pick(['trending', 'ranging', 'transitional'])} structure on ${pick(TIMEFRAMES)}`,
@@ -236,6 +246,7 @@ function generateSignal(symbol, price) {
     },
     gate: { status, confidence: Math.round(rand(50, 95)), failures, warnings: [], checklist: gateChecklist },
     risk: { approved: status === 'approved', effectiveRisk: +rand(0.5, 1.0).toFixed(2), maxLoss: Math.round(rand(40, 120)), note: status === 'approved' ? 'within daily loss budget' : 'held back by gate' },
+    validation,
     agents, reasons, agreeCount,
   };
 }
@@ -354,6 +365,10 @@ function useLiveFeed() {
   // whenever the socket below actually connects — this just tracks that so
   // the UI can show whether it's on tick-by-tick push or 5s-poll fallback.
   const [socketLive, setSocketLive] = useState(false);
+  const [news, setNews] = useState(null);
+  const [journalStats, setJournalStats] = useState(null);
+  const [learningProfiles, setLearningProfiles] = useState(null);
+  const [relativeStrength, setRelativeStrength] = useState(null);
   const priceRef = useRef(prices);
   priceRef.current = prices;
 
@@ -477,6 +492,10 @@ function useLiveFeed() {
           setEquityCurveLive(true);
         }
       } catch (_) {}
+      try { const r = await omniFetch('/api/news'); if (!cancelled && r.ok) setNews(Array.isArray(r.news) ? r.news : []); } catch (_) {}
+      try { const r = await omniFetch('/api/journal'); if (!cancelled && r.ok) setJournalStats(r.stats); } catch (_) {}
+      try { const r = await omniFetch('/api/learning?limit=20'); if (!cancelled && r.ok) setLearningProfiles(r.profiles); } catch (_) {}
+      try { const r = await omniFetch('/api/watchlist'); if (!cancelled && r.ok) setRelativeStrength(r.relativeStrength); } catch (_) {}
     };
 
     pullFast(); pullSlow();
@@ -545,6 +564,7 @@ function useLiveFeed() {
   return {
     now, prices, changes, flash, signals, auditLog, equityCurve, equityCurveLive,
     stats, outlook, heatmapTiles, feedHealth, uptimeSec, accountBalance, socketLive,
+    news, journalStats, learningProfiles, relativeStrength,
     mode, connected: mode === 'live',
   };
 }
@@ -554,11 +574,12 @@ const TABS = [
   { key: 'DASH', label: 'Dashboard', fkey: 'F1', icon: LayoutDashboard },
   { key: 'SIGNALS', label: 'Signals', fkey: 'F2', icon: Radio },
   { key: 'INTEL', label: 'Intel', fkey: 'F3', icon: Globe2 },
-  { key: 'MONITOR', label: 'Monitor', fkey: 'F4', icon: Activity },
-  { key: 'HEAT', label: 'Heat', fkey: 'F5', icon: Flame },
-  { key: 'VALID', label: 'Valid', fkey: 'F6', icon: FlaskConical },
-  { key: 'TAPE', label: 'Tape', fkey: 'F7', icon: ScrollText },
-  { key: 'RISK', label: 'Risk', fkey: 'F8', icon: ShieldAlert },
+  { key: 'NEWS', label: 'News', fkey: 'F4', icon: Newspaper },
+  { key: 'MONITOR', label: 'Monitor', fkey: 'F5', icon: Activity },
+  { key: 'HEAT', label: 'Heat', fkey: 'F6', icon: Flame },
+  { key: 'VALID', label: 'Valid', fkey: 'F7', icon: FlaskConical },
+  { key: 'TAPE', label: 'Tape', fkey: 'F8', icon: ScrollText },
+  { key: 'RISK', label: 'Risk', fkey: 'F9', icon: ShieldAlert },
 ];
 
 function TopBar({ now, mode, socketLive, onCommand }) {
@@ -775,7 +796,7 @@ function SignalsTab({ signals }) {
                 </span>
               </div>
               {expanded === s.id && (
-                <div className="px-4 py-3 border-b grid grid-cols-1 md:grid-cols-3 gap-4" style={{ borderColor: 'var(--border)', background: '#080a0d' }}>
+                <div className="px-4 py-3 border-b grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4" style={{ borderColor: 'var(--border)', background: '#080a0d' }}>
                   <div>
                     <div className="font-mono text-[9px] uppercase mb-2" style={{ color: 'var(--textFaint)' }}>Agent Breakdown ({s.agreeCount}/8 aligned)</div>
                     <div className="space-y-1">
@@ -803,6 +824,31 @@ function SignalsTab({ signals }) {
                     <div className="mt-2 font-mono text-[10px]" style={{ color: 'var(--textDim)' }}>
                       Risk: {s.risk.effectiveRisk}% · max loss ${s.risk.maxLoss} · {s.risk.note}
                     </div>
+                  </div>
+                  <div>
+                    <div className="font-mono text-[9px] uppercase mb-2" style={{ color: 'var(--textFaint)' }}>Validation Engines</div>
+                    {s.validation ? (
+                      <div className="space-y-1.5 font-mono text-[10px]">
+                        <div className="flex items-center justify-between">
+                          <span style={{ color: 'var(--textDim)' }}>Monte Carlo</span>
+                          <Pill tone={s.validation.monteCarlo?.approved ? 'up' : 'down'}>{s.validation.monteCarlo?.winProbability ?? '—'}% win</Pill>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span style={{ color: 'var(--textDim)' }}>Bayesian posterior</span>
+                          <Pill tone={s.validation.bayesian?.approved ? 'up' : 'down'}>{s.validation.bayesian?.posterior ?? '—'}</Pill>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span style={{ color: 'var(--textDim)' }}>Statistical tests</span>
+                          <Pill tone={s.validation.statistical?.approved ? 'up' : 'down'}>{s.validation.statistical?.passed ?? '—'}/{s.validation.statistical?.total ?? '—'}</Pill>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span style={{ color: 'var(--textDim)' }}>Walk-forward</span>
+                          <Pill tone={s.validation.walkForward?.robust ? 'up' : 'warn'}>wfe {s.validation.walkForward?.wfe ?? '—'}</Pill>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>No validation data on this signal.</div>
+                    )}
                   </div>
                   <div>
                     <div className="font-mono text-[9px] uppercase mb-2" style={{ color: 'var(--textFaint)' }}>Signal Explainer</div>
@@ -947,6 +993,58 @@ function IntelTab({ now, outlook, mode }) {
             ))}
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── NEWS ───────────────────────────────────────────────────────────── */
+function NewsTab({ news, mode }) {
+  const [symFilter, setSymFilter] = useState('ALL');
+  const live = mode === 'live' && Array.isArray(news);
+
+  const demoNews = useMemo(() => NEWS_SEED.map((headline, i) => ({
+    headline, source: pick(['Reuters', 'Bloomberg', 'DailyFX', 'ForexLive', 'CoinDesk']),
+    url: null, datetime: Date.now() - i * rand(400000, 3200000),
+    symbol: pick(SYMBOLS),
+  })), []);
+
+  const items = live ? news : demoNews;
+  const filtered = symFilter === 'ALL' ? items : items.filter(n => n.symbol === symFilter);
+
+  return (
+    <div className="p-4 space-y-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <SectionHeader icon={Newspaper} title="Headlines" sub={live ? 'live · Finnhub' : 'demo · Finnhub'} />
+        <div className="ml-auto flex gap-1 flex-wrap">
+          {['ALL', ...SYMBOLS].map(s => (
+            <button key={s} onClick={() => setSymFilter(s)}
+              className="font-mono text-[10px] px-2 py-1 rounded uppercase"
+              style={{ background: symFilter === s ? 'var(--emerald)' : 'var(--panel2)', color: symFilter === s ? '#05070a' : 'var(--textDim)' }}>
+              {s}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="omni-panel p-4">
+        {filtered.length === 0 ? (
+          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No headlines for this filter yet.</div>
+        ) : (
+          <div className="space-y-0.5 max-h-[560px] overflow-y-auto omni-scroll">
+            {filtered.map((n, i) => (
+              <a key={i} href={n.url || undefined} target={n.url ? '_blank' : undefined} rel="noreferrer"
+                className="omni-row flex items-start gap-3 px-2 py-2 rounded border-b" style={{ borderColor: 'var(--border)', textDecoration: 'none', cursor: n.url ? 'pointer' : 'default' }}>
+                <Clock size={12} style={{ color: 'var(--textFaint)', marginTop: 2, flexShrink: 0 }} />
+                <div className="flex-1">
+                  <div className="text-[12px]" style={{ color: 'var(--text)' }}>{n.headline}</div>
+                  <div className="font-mono text-[9px] uppercase mt-0.5" style={{ color: 'var(--textFaint)' }}>
+                    {n.source || 'Unknown'} · {timeAgo(n.datetime)} ago{n.symbol ? ` · ${n.symbol}` : ''}
+                  </div>
+                </div>
+              </a>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1156,55 +1254,153 @@ function HeatTab({ heatmapTiles, mode }) {
 }
 
 /* ── VALID ──────────────────────────────────────────────────────────── */
-function ValidTab() {
-  const monteCarlo = useMemo(() => {
+function ValidTab({ signals, journalStats, learningProfiles, mode }) {
+  const live = mode === 'live';
+
+  /* Demo-mode fallback — unchanged from the original preview. */
+  const demoMonteCarlo = useMemo(() => {
     const buckets = [];
     for (let i = -10; i <= 10; i++) {
-      const x = i;
-      const h = Math.round(60 * Math.exp(-(x * x) / 18) + rand(-3, 3));
-      buckets.push({ r: x, count: Math.max(0, h) });
+      const h = Math.round(60 * Math.exp(-(i * i) / 18) + rand(-3, 3));
+      buckets.push({ r: i, count: Math.max(0, h) });
     }
     return buckets;
   }, []);
-  const walkForward = 68, bayesian = 74, kellyPct = 2.3;
-  const backtest = { winRate: 58.4, profitFactor: 1.74, maxDD: 8.9, sharpe: 1.32, expectancy: 0.31, trades: 1284 };
+  const demoBacktest = { winRate: 58.4, profitFactor: 1.74, maxDD: 8.9, sharpe: 1.32, expectancy: 0.31, trades: 1284 };
+
+  if (!live) {
+    return (
+      <div className="p-4 space-y-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="omni-panel p-3 flex flex-col items-center"><Gauge value={68} label="Walk-Forward Eff. · demo" /></div>
+          <div className="omni-panel p-3 flex flex-col items-center"><Gauge value={74} label="Bayesian Confidence · demo" /></div>
+          <div className="omni-panel p-3 flex flex-col items-center"><Gauge value={demoBacktest.winRate} label="Backtest Win Rate · demo" /></div>
+          <div className="omni-panel p-3 flex flex-col items-center justify-center">
+            <span className="font-mono text-2xl font-bold" style={{ color: 'var(--gold)' }}>2.3%</span>
+            <span className="font-mono text-[9px] uppercase tracking-wider mt-1" style={{ color: 'var(--textFaint)' }}>Kelly Suggested Size · demo</span>
+          </div>
+        </div>
+        <div className="omni-panel p-4">
+          <SectionHeader icon={FlaskConical} title="Monte Carlo Return Distribution" sub="10,000 paths · R-multiple · demo" />
+          <ResponsiveContainer width="100%" height={180}>
+            <BarChart data={demoMonteCarlo}>
+              <CartesianGrid stroke="#1c232d" vertical={false} />
+              <XAxis dataKey="r" tick={{ fill: '#526078', fontSize: 10 }} />
+              <YAxis tick={{ fill: '#526078', fontSize: 10 }} width={30} />
+              <Tooltip contentStyle={{ background: '#10151c', border: '1px solid #1c232d', borderRadius: 8, fontSize: 11 }} />
+              <Bar dataKey="count" radius={[2, 2, 0, 0]}>
+                {demoMonteCarlo.map((b, i) => <Cell key={i} fill={b.r >= 0 ? '#1fe3a8' : '#ff5470'} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="omni-panel p-4">
+          <SectionHeader icon={CheckCircle2} title="Backtest Summary" sub={`${demoBacktest.trades.toLocaleString()} trades · demo`} />
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <StatCard label="Win Rate" value={`${demoBacktest.winRate}%`} />
+            <StatCard label="Profit Factor" value={demoBacktest.profitFactor} accent="var(--gold)" />
+            <StatCard label="Max Drawdown" value={`${demoBacktest.maxDD}%`} accent="var(--coral)" />
+            <StatCard label="Sharpe" value={demoBacktest.sharpe} accent="var(--blue)" />
+            <StatCard label="Expectancy (R)" value={demoBacktest.expectancy} accent="var(--violet)" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* Live mode — everything below is derived from real data: the
+     validation sub-object db.js now persists per signal (Monte Carlo /
+     Bayesian / Statistical / Walk-Forward, computed live in index.js),
+     GET /api/journal (SignalJournal.getStats — real closed-trade
+     outcomes), and GET /api/learning (per-pattern adaptive-learning
+     profiles from actual trade_outcomes). No invented numbers. */
+  const avg = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+  const validated = (signals || []).filter(s => s.validation);
+  const mcWinProbs = validated.map(s => s.validation.monteCarlo?.winProbability).filter(v => v != null);
+  const bayesPosteriors = validated.map(s => s.validation.bayesian?.posterior).filter(v => v != null);
+  const wfeVals = validated.map(s => s.validation.walkForward?.wfe).filter(v => v != null);
+  const statRates = validated.map(s => s.validation.statistical ? (s.validation.statistical.passed / s.validation.statistical.total) * 100 : null).filter(v => v != null);
+  const avgMc = avg(mcWinProbs), avgBayes = avg(bayesPosteriors), avgWfe = avg(wfeVals), avgStat = avg(statRates);
+
+  const hasJournal = journalStats && journalStats.total > 0;
+  const kellyPct = hasJournal && journalStats.avgLoss > 0 && journalStats.avgWin > 0
+    ? clamp((journalStats.winRate / 100) - ((1 - journalStats.winRate / 100) / (journalStats.avgWin / journalStats.avgLoss)), 0, 1) * 100
+    : null;
+
+  const mcChartData = validated.slice(0, 20).reverse().map((s, i) => ({ label: `${s.symbol}#${i + 1}`, prob: s.validation.monteCarlo?.winProbability ?? 0 }));
 
   return (
     <div className="p-4 space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="omni-panel p-3 flex flex-col items-center"><Gauge value={walkForward} label="Walk-Forward Eff." /></div>
-        <div className="omni-panel p-3 flex flex-col items-center"><Gauge value={bayesian} label="Bayesian Confidence" /></div>
-        <div className="omni-panel p-3 flex flex-col items-center"><Gauge value={backtest.winRate} label="Backtest Win Rate" /></div>
         <div className="omni-panel p-3 flex flex-col items-center justify-center">
-          <span className="font-mono text-2xl font-bold" style={{ color: 'var(--gold)' }}>{kellyPct}%</span>
-          <span className="font-mono text-[9px] uppercase tracking-wider mt-1" style={{ color: 'var(--textFaint)' }}>Kelly Suggested Size</span>
+          {avgWfe != null ? <Gauge value={avgWfe * 100} label="Avg Walk-Forward Eff." /> : <span className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>Walk-forward: no data yet</span>}
+        </div>
+        <div className="omni-panel p-3 flex flex-col items-center justify-center">
+          {avgBayes != null ? <Gauge value={avgBayes * 100} label="Avg Bayesian Posterior" /> : <span className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>Bayesian: no data yet</span>}
+        </div>
+        <div className="omni-panel p-3 flex flex-col items-center justify-center">
+          {avgMc != null ? <Gauge value={avgMc} label="Avg Monte Carlo Win %" /> : <span className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>Monte Carlo: no data yet</span>}
+        </div>
+        <div className="omni-panel p-3 flex flex-col items-center justify-center">
+          {kellyPct != null ? (
+            <>
+              <span className="font-mono text-2xl font-bold" style={{ color: 'var(--gold)' }}>{kellyPct.toFixed(1)}%</span>
+              <span className="font-mono text-[9px] uppercase tracking-wider mt-1" style={{ color: 'var(--textFaint)' }}>Kelly Size (from journal)</span>
+            </>
+          ) : <span className="font-mono text-[10px] text-center" style={{ color: 'var(--textFaint)' }}>Kelly: needs completed trades</span>}
         </div>
       </div>
 
       <div className="omni-panel p-4">
-        <SectionHeader icon={FlaskConical} title="Monte Carlo Return Distribution" sub="10,000 paths · R-multiple" />
-        <ResponsiveContainer width="100%" height={180}>
-          <BarChart data={monteCarlo}>
-            <CartesianGrid stroke="#1c232d" vertical={false} />
-            <XAxis dataKey="r" tick={{ fill: '#526078', fontSize: 10 }} />
-            <YAxis tick={{ fill: '#526078', fontSize: 10 }} width={30} />
-            <Tooltip contentStyle={{ background: '#10151c', border: '1px solid #1c232d', borderRadius: 8, fontSize: 11 }} />
-            <Bar dataKey="count" radius={[2, 2, 0, 0]}>
-              {monteCarlo.map((b, i) => <Cell key={i} fill={b.r >= 0 ? '#1fe3a8' : '#ff5470'} />)}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
+        <SectionHeader icon={FlaskConical} title="Monte Carlo Win Probability" sub="live · per recent validated signal" />
+        {mcChartData.length === 0 ? (
+          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No signals with validation data yet — this fills in as new signals are scored.</div>
+        ) : (
+          <ResponsiveContainer width="100%" height={180}>
+            <BarChart data={mcChartData}>
+              <CartesianGrid stroke="#1c232d" vertical={false} />
+              <XAxis dataKey="label" tick={{ fill: '#526078', fontSize: 9 }} interval={0} angle={-30} textAnchor="end" height={50} />
+              <YAxis tick={{ fill: '#526078', fontSize: 10 }} width={30} domain={[0, 100]} />
+              <Tooltip contentStyle={{ background: '#10151c', border: '1px solid #1c232d', borderRadius: 8, fontSize: 11 }} />
+              <Bar dataKey="prob" radius={[2, 2, 0, 0]}>
+                {mcChartData.map((b, i) => <Cell key={i} fill={b.prob >= 55 ? '#1fe3a8' : '#ff5470'} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        )}
       </div>
 
       <div className="omni-panel p-4">
-        <SectionHeader icon={CheckCircle2} title="Backtest Summary" sub={`${backtest.trades.toLocaleString()} trades`} />
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          <StatCard label="Win Rate" value={`${backtest.winRate}%`} />
-          <StatCard label="Profit Factor" value={backtest.profitFactor} accent="var(--gold)" />
-          <StatCard label="Max Drawdown" value={`${backtest.maxDD}%`} accent="var(--coral)" />
-          <StatCard label="Sharpe" value={backtest.sharpe} accent="var(--blue)" />
-          <StatCard label="Expectancy (R)" value={backtest.expectancy} accent="var(--violet)" />
-        </div>
+        <SectionHeader icon={CheckCircle2} title="Backtest Summary" sub={hasJournal ? `${journalStats.total} completed trades` : 'trading journal'} />
+        {hasJournal ? (
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <StatCard label="Win Rate" value={`${journalStats.winRate}%`} />
+            <StatCard label="Profit Factor" value={journalStats.pf} accent="var(--gold)" />
+            <StatCard label="Total P/L (R)" value={journalStats.totalPnlR} accent={journalStats.totalPnlR >= 0 ? 'var(--emerald)' : 'var(--coral)'} />
+            <StatCard label="Avg Win / Loss (R)" value={`${journalStats.avgWin} / -${journalStats.avgLoss}`} accent="var(--blue)" />
+            <StatCard label="Expectancy (R)" value={journalStats.expectancy} accent="var(--violet)" />
+          </div>
+        ) : (
+          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>{journalStats?.message || 'No completed trades recorded yet — this fills in once positions close via the MT5 EA bridge.'}</div>
+        )}
+      </div>
+
+      <div className="omni-panel p-4">
+        <SectionHeader icon={Layers} title="Learned Setups" sub="adaptive-learning-engine · per pattern, from real outcomes" />
+        {!learningProfiles || learningProfiles.length === 0 ? (
+          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No learned patterns yet — needs closed trades to build a profile.</div>
+        ) : (
+          <div className="max-h-64 overflow-y-auto omni-scroll space-y-1">
+            {learningProfiles.map(p => (
+              <div key={p.patternKey} className="omni-row flex items-center gap-3 px-2 py-1.5 rounded font-mono text-[10px]">
+                <span className="flex-1 truncate" style={{ color: 'var(--textDim)' }}>{p.patternKey}</span>
+                <span style={{ color: 'var(--textFaint)' }}>{p.samples} samples</span>
+                <span style={{ color: p.winRate >= 0.5 ? 'var(--emerald)' : 'var(--coral)' }}>{Math.round(p.winRate * 100)}% win</span>
+                <span style={{ color: p.expectancyR >= 0 ? 'var(--emerald)' : 'var(--coral)' }}>{p.expectancyR?.toFixed(2)}R exp</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1250,7 +1446,7 @@ function TapeTab({ signals, prices }) {
 }
 
 /* ── RISK ───────────────────────────────────────────────────────────── */
-function RiskTab({ prices, changes, accountBalance }) {
+function RiskTab({ prices, changes, accountBalance, relativeStrength, mode }) {
   const [balance, setBalance] = useState(10000);
   const [riskPct, setRiskPct] = useState(1.0);
   const [stopPips, setStopPips] = useState(20);
@@ -1279,7 +1475,8 @@ function RiskTab({ prices, changes, accountBalance }) {
   ];
   const hour = new Date().getUTCHours();
   const exposures = SYMBOLS.map(s => ({ symbol: s, exposure: +rand(-3, 3).toFixed(1) }));
-  const ranked = [...SYMBOLS].sort((a, b) => (changes[b] ?? 0) - (changes[a] ?? 0));
+  const liveRanked = mode === 'live' && relativeStrength?.all?.length ? relativeStrength.all.map(r => r.symbol) : null;
+  const ranked = liveRanked || [...SYMBOLS].sort((a, b) => (changes[b] ?? 0) - (changes[a] ?? 0));
 
   return (
     <div className="p-4 space-y-4">
@@ -1361,7 +1558,7 @@ function RiskTab({ prices, changes, accountBalance }) {
               );
             })}
           </div>
-          <div className="font-mono text-[9px] uppercase mb-2" style={{ color: 'var(--textFaint)' }}>Relative Strength Ranking</div>
+          <div className="font-mono text-[9px] uppercase mb-2" style={{ color: 'var(--textFaint)' }}>Relative Strength Ranking{liveRanked ? ' · risk-engine, live' : ' · demo'}</div>
           <div className="flex flex-wrap gap-1.5">
             {ranked.map((s, i) => (
               <span key={s} className="font-mono text-[10px] px-2 py-1 rounded" style={{ background: 'var(--panel2)', color: i < 2 ? 'var(--emerald)' : i >= ranked.length - 2 ? 'var(--coral)' : 'var(--textDim)' }}>{s}</span>
@@ -1392,15 +1589,21 @@ export default function OmniceeDashboard() {
       <TickerTape prices={feed.prices} changes={feed.changes} flash={feed.flash} />
       <div className="flex flex-1 min-h-0">
         <Sidebar active={activeTab} onSelect={setActiveTab} />
-        <div className="flex-1 overflow-y-auto omni-scroll">
-          {activeTab === 'DASH' && <DashTab signals={feed.signals} equityCurve={feed.equityCurve} equityCurveLive={feed.equityCurveLive} accountBalance={feed.accountBalance} prices={feed.prices} changes={feed.changes} stats={feed.stats} mode={feed.mode} />}
-          {activeTab === 'SIGNALS' && <SignalsTab signals={feed.signals} />}
-          {activeTab === 'INTEL' && <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} />}
-          {activeTab === 'MONITOR' && <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} />}
-          {activeTab === 'HEAT' && <HeatTab heatmapTiles={feed.heatmapTiles} mode={feed.mode} />}
-          {activeTab === 'VALID' && <ValidTab />}
-          {activeTab === 'TAPE' && <TapeTab signals={feed.signals} prices={feed.prices} />}
-          {activeTab === 'RISK' && <RiskTab prices={feed.prices} changes={feed.changes} stats={feed.stats} accountBalance={feed.accountBalance} />}
+        <div className="flex-1 flex flex-col min-h-0">
+          <div className="flex-1 overflow-y-auto omni-scroll">
+            {activeTab === 'DASH' && <DashTab signals={feed.signals} equityCurve={feed.equityCurve} equityCurveLive={feed.equityCurveLive} accountBalance={feed.accountBalance} prices={feed.prices} changes={feed.changes} stats={feed.stats} mode={feed.mode} />}
+            {activeTab === 'SIGNALS' && <SignalsTab signals={feed.signals} />}
+            {activeTab === 'INTEL' && <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} />}
+            {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}
+            {activeTab === 'MONITOR' && <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} />}
+            {activeTab === 'HEAT' && <HeatTab heatmapTiles={feed.heatmapTiles} mode={feed.mode} />}
+            {activeTab === 'VALID' && <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} />}
+            {activeTab === 'TAPE' && <TapeTab signals={feed.signals} prices={feed.prices} />}
+            {activeTab === 'RISK' && <RiskTab prices={feed.prices} changes={feed.changes} stats={feed.stats} accountBalance={feed.accountBalance} relativeStrength={feed.relativeStrength} mode={feed.mode} />}
+          </div>
+          <div className="flex items-center justify-center gap-2 py-1.5 border-t font-mono text-[9px] uppercase tracking-wider" style={{ borderColor: 'var(--border)', color: 'var(--textFaint)' }}>
+            <span>OMNICEE</span><span>·</span><span>Developed by James Yelbert</span>
+          </div>
         </div>
       </div>
     </div>

@@ -59,6 +59,20 @@ function compactSignal(signal = {}) {
       direction: a.direction,
       status: a.status,
     })),
+    // FIX: monteCarlo/bayesian/statistical/walkForward were all computed
+    // live per-signal (see index.js's runAnalysisCycle, which attaches them
+    // under signal.validation before dispatch) but this function — the
+    // only place that builds the document actually saved to Mongo and
+    // later served by GET /api/signals — never read that field. The
+    // validation engines ran on every signal and their results were
+    // thrown away before they ever reached the DB, the API, or the
+    // frontend. Now persisted alongside the rest of the signal.
+    validation: signal.validation ? {
+      monteCarlo: signal.validation.monteCarlo || null,
+      bayesian: signal.validation.bayesian || null,
+      statistical: signal.validation.statistical || null,
+      walkForward: signal.validation.walkForward || null,
+    } : null,
     reasons: (signal.allReasons || []).slice(0, 8),
     createdAt: new Date(),
     expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * Number(process.env.MONGODB_SIGNAL_TTL_DAYS || 14)),

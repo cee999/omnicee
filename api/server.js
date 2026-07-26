@@ -19,6 +19,7 @@ const { MarketOutlookBuilder } = require('../signal-pipeline/market-outlook');
 const { recordOutcomeEverywhere } = require('../signal-pipeline/outcome-recorder');
 const { MarketHeatMap } = require('../automation/market-heatmap');
 
+const fs = require('fs');
 const API_PORT = Number(process.env.PORT || process.env.WS_PORT || 3001);
 // FIX: was 'webapp' (the vanilla-JS single-file frontend) — that file has
 // been retired in favor of webapp-react (see its README: "A Bloomberg-
@@ -27,7 +28,14 @@ const API_PORT = Number(process.env.PORT || process.env.WS_PORT || 3001);
 // inside webapp-react/ before this ever starts, so dist/ exists in
 // production. Locally, run `npm run build --prefix webapp-react` once (or
 // `npm run dev` inside webapp-react/ for hot-reload against this backend).
+// No fallback to webapp/ — its index.html was removed in the same change
+// that retired it, so falling back there would just serve a folder with no
+// index.html (an ENOENT on every route) instead of a clear signal that the
+// build step didn't run.
 const STATIC_ROOT = path.join(__dirname, '..', 'webapp-react', 'dist');
+if (!fs.existsSync(path.join(STATIC_ROOT, 'index.html'))) {
+  console.warn(`[API] ${STATIC_ROOT} has no index.html — did the webapp-react build step run? (npm run build --prefix webapp-react)`);
+}
 const finnhub = new FinnhubFeed();
 const learningEngine = new AdaptiveLearningEngine({ store: db });
 
@@ -274,7 +282,11 @@ function createApp() {
       res.status(503).json({ ok: false, error: err.message });
       return null;
     });
-    if (profiles) res.json({ ok: true, profiles });
+    // FIX: learningEngine (AdaptiveLearningEngine) was instantiated at the
+    // top of this file but never called anywhere in the API layer — its
+    // Q-table size, blacklist size, and cache state were invisible outside
+    // a log line. Cheap to expose alongside the per-pattern profiles.
+    if (profiles) res.json({ ok: true, profiles, engine: learningEngine.getStats() });
   });
 
   app.post('/api/outcomes', telegramAuthMiddleware, async (req, res) => {
