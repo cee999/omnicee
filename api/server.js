@@ -20,11 +20,15 @@ const { recordOutcomeEverywhere } = require('../signal-pipeline/outcome-recorder
 const { MarketHeatMap } = require('../automation/market-heatmap');
 
 const API_PORT = Number(process.env.PORT || process.env.WS_PORT || 3001);
-// FIX: was serving the retired vanilla webapp/ — now serves the built React
-// dashboard (webapp-react/dist, produced by `npm run build` there; see the
-// updated buildCommand in render.yaml). webapp/ index.html/manifest/sw/icons
-// are gone; webapp/ws-server.js stays — it's a backend bridge module, not a
-// frontend asset (see require('./webapp/ws-server') above).
+// FIX: STATIC_ROOT only ever pointed at the vanilla-JS webapp/, and
+// render.yaml's buildCommand never actually built webapp-react/ — so the
+// new dashboard was never served in production no matter how it looked
+// locally; that's the real root cause behind "still showing demo data."
+// webapp/'s frontend files (index.html/manifest/sw/icons) are gone now
+// that webapp-react/ is the only frontend — webapp/ws-server.js stays,
+// it's a backend bridge module (see require('./webapp/ws-server') above),
+// not a frontend asset, and there's no meaningful fallback target left in
+// webapp/ anymore, so this points straight at the React build.
 const STATIC_ROOT = path.join(__dirname, '..', 'webapp-react', 'dist');
 const finnhub = new FinnhubFeed();
 const learningEngine = new AdaptiveLearningEngine({ store: db });
@@ -254,7 +258,11 @@ function createApp() {
       res.status(503).json({ ok: false, error: err.message });
       return null;
     });
-    if (profiles) res.json({ ok: true, profiles });
+    // FIX: learningEngine (AdaptiveLearningEngine) was instantiated at the
+    // top of this file but never called anywhere in the API layer — its
+    // Q-table size, blacklist size, and cache state were invisible outside
+    // a log line. Cheap to expose alongside the per-pattern profiles.
+    if (profiles) res.json({ ok: true, profiles, engine: learningEngine.getStats() });
   });
 
   app.post('/api/outcomes', telegramAuthMiddleware, async (req, res) => {
