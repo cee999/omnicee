@@ -1,0 +1,1052 @@
+import { useState, useEffect, useMemo, useRef, useCallback, Fragment } from 'react';
+import {
+  AreaChart, Area, BarChart, Bar, XAxis, YAxis,
+  Tooltip, ResponsiveContainer, CartesianGrid, Cell,
+} from 'recharts';
+import {
+  LayoutDashboard, Radio, Globe2, Activity, Flame, FlaskConical,
+  ScrollText, ShieldAlert, ChevronRight, ChevronDown,
+  TrendingUp, CheckCircle2, XCircle,
+  Circle, Clock, Zap, Database, Cpu, ArrowUpRight,
+  ArrowDownRight, Terminal, Newspaper, Gauge as GaugeIcon,
+  Layers, Target, DollarSign,
+} from 'lucide-react';
+
+/* ────────────────────────────────────────────────────────────────────────
+   OMNICEE // INSTITUTIONAL SIGNAL TERMINAL
+   A self-contained live-simulated preview of the OMNICEE trading dashboard.
+   Mirrors the real API surface (GET /api/signals, /api/outlook, /api/heatmap,
+   /api/audit-trail, /api/health, /api/stats, /api/journal, /api/news) and
+   socket.io channels (signal, market, risk, stats, regime, telemetry, intel)
+   so it can be wired to the live backend with a data-layer swap only.
+   ──────────────────────────────────────────────────────────────────────── */
+
+const SYMBOLS = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'BTCUSDT', 'ETHUSDT'];
+const TIMEFRAMES = ['M15', 'H1', 'H4', 'D1'];
+const AGENTS = ['SMC', 'MTF', 'Momentum', 'VolumeOI', 'Sentiment', 'Pattern', 'Fractal', 'Microstructure'];
+
+const BASE_PRICE = {
+  EURUSD: 1.0842, GBPUSD: 1.2694, USDJPY: 156.32,
+  XAUUSD: 2418.30, BTCUSDT: 67420.5, ETHUSDT: 3512.8,
+};
+const DECIMALS = { EURUSD: 4, GBPUSD: 4, USDJPY: 3, XAUUSD: 2, BTCUSDT: 1, ETHUSDT: 2 };
+const PIP = { EURUSD: 0.0001, GBPUSD: 0.0001, USDJPY: 0.01, XAUUSD: 0.1, BTCUSDT: 10, ETHUSDT: 1 };
+
+const FEEDS = [
+  { name: 'Binance',      kind: 'crypto ws',  status: 'live' },
+  { name: 'Bybit',        kind: 'crypto ws',  status: 'live' },
+  { name: 'TwelveData',   kind: 'fx/commod',  status: 'live' },
+  { name: 'Finnhub',      kind: 'news',       status: 'live' },
+  { name: 'Alpha Vantage',kind: 'macro sent', status: 'degraded' },
+  { name: 'FMP',          kind: 'fundamentals',status: 'live' },
+  { name: 'CFTC COT',     kind: 'positioning',status: 'live' },
+  { name: 'Myfxbook',     kind: 'calendar',   status: 'live' },
+  { name: 'OpenInsider',  kind: 'SEC Form 4', status: 'inert', note: 'needs paid Parse.bot key' },
+];
+
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function rand(a, b) { return a + Math.random() * (b - a); }
+function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+function fmtPrice(symbol, v) {
+  const d = DECIMALS[symbol] ?? 2;
+  return v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+function fmtPct(v, digits = 2) { return `${v >= 0 ? '+' : ''}${v.toFixed(digits)}%`; }
+function timeAgo(ts) {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  return `${Math.floor(s / 3600)}h`;
+}
+function gradeFor(score) {
+  if (score >= 90) return 'A+';
+  if (score >= 80) return 'A';
+  if (score >= 75) return 'B+';
+  if (score >= 65) return 'B';
+  return 'C';
+}
+
+/* Diverging color for heatmaps: v in [-1,1] -> coral..slate..emerald */
+function heatColor(v) {
+  const t = clamp(v, -1, 1);
+  if (t >= 0) {
+    const g = Math.round(20 + t * 100);
+    return `rgba(31,227,168,${0.12 + t * 0.55})`;
+  }
+  const a = Math.abs(t);
+  return `rgba(255,84,112,${0.12 + a * 0.55})`;
+}
+
+/* ── Theme: single embedded stylesheet, CSS custom properties carry the
+   exact brand palette (Tailwind's default palette doesn't have it), while
+   layout/spacing throughout the component tree uses plain Tailwind utilities. */
+function ThemeStyle() {
+  return (
+    <style>{`
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700;800&family=Orbitron:wght@600;800&display=swap');
+      .omni-root {
+        --void: #05070a; --panel: #0b0f14; --panel2: #10151c;
+        --border: #1c232d; --borderBright: #2a3340;
+        --emerald: #1fe3a8; --emeraldDim: #0f7a58;
+        --gold: #f0b429; --coral: #ff5470; --blue: #5ea8ff;
+        --cyan: #22d3ee; --violet: #a78bfa;
+        --text: #eef2f7; --textDim: #8b9bb0; --textFaint: #526078;
+        background: var(--void); color: var(--text);
+        font-family: 'Inter', system-ui, sans-serif;
+      }
+      .omni-root .font-display { font-family: 'Orbitron', sans-serif; }
+      .omni-root .font-mono { font-family: 'JetBrains Mono', monospace; }
+      .omni-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
+      .omni-panel2 { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; }
+      .omni-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+      .omni-scroll::-webkit-scrollbar-thumb { background: var(--borderBright); border-radius: 3px; }
+      .omni-scroll::-webkit-scrollbar-track { background: transparent; }
+      @keyframes omni-marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+      .omni-marquee { animation: omni-marquee 38s linear infinite; }
+      .omni-marquee:hover { animation-play-state: paused; }
+      @keyframes omni-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+      .omni-pulse { animation: omni-pulse 1.8s ease-in-out infinite; }
+      @keyframes omni-flash-up { 0% { background: rgba(31,227,168,0.35); } 100% { background: transparent; } }
+      @keyframes omni-flash-down { 0% { background: rgba(255,84,112,0.35); } 100% { background: transparent; } }
+      .omni-flash-up { animation: omni-flash-up 0.7s ease-out; }
+      .omni-flash-down { animation: omni-flash-down 0.7s ease-out; }
+      .omni-tab-active { box-shadow: inset 3px 0 0 var(--emerald); background: var(--panel2); }
+      .omni-cmd::placeholder { color: var(--textFaint); }
+      .omni-row:hover { background: rgba(255,255,255,0.02); }
+    `}</style>
+  );
+}
+
+/* ── Small shared atoms ─────────────────────────────────────────────── */
+function Pill({ children, tone = 'neutral' }) {
+  const map = {
+    neutral: { color: 'var(--textDim)', bg: 'rgba(139,155,176,0.12)' },
+    up: { color: 'var(--emerald)', bg: 'rgba(31,227,168,0.12)' },
+    down: { color: 'var(--coral)', bg: 'rgba(255,84,112,0.12)' },
+    warn: { color: 'var(--gold)', bg: 'rgba(240,180,41,0.12)' },
+    info: { color: 'var(--blue)', bg: 'rgba(94,168,255,0.12)' },
+  };
+  const s = map[tone] || map.neutral;
+  return (
+    <span className="font-mono text-[10px] px-2 py-0.5 rounded uppercase tracking-wider"
+      style={{ color: s.color, background: s.bg }}>
+      {children}
+    </span>
+  );
+}
+
+function SectionHeader({ icon: Icon, title, sub }) {
+  return (
+    <div className="flex items-center gap-2 mb-3">
+      <Icon size={15} style={{ color: 'var(--gold)' }} />
+      <h2 className="font-display text-[13px] tracking-widest uppercase" style={{ color: 'var(--text)' }}>{title}</h2>
+      {sub && <span className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>{sub}</span>}
+    </div>
+  );
+}
+
+function StatCard({ label, value, delta, icon: Icon, accent = 'var(--emerald)' }) {
+  return (
+    <div className="omni-panel p-3 flex-1 min-w-[130px]">
+      <div className="flex items-center justify-between mb-2">
+        <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>{label}</span>
+        {Icon && <Icon size={13} style={{ color: accent }} />}
+      </div>
+      <div className="font-mono text-xl font-semibold" style={{ color: 'var(--text)' }}>{value}</div>
+      {delta != null && (
+        <div className="font-mono text-[11px] mt-1" style={{ color: delta >= 0 ? 'var(--emerald)' : 'var(--coral)' }}>
+          {fmtPct(delta)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Semi-circular arc gauge, 0..100, colored by threshold zones */
+function Gauge({ value, label, zones = [[0, 40, '#ff5470'], [40, 70, '#f0b429'], [70, 101, '#1fe3a8']] }) {
+  const v = clamp(value, 0, 100);
+  const r = 46, cx = 60, cy = 58;
+  const angleFor = (pct) => Math.PI - (pct / 100) * Math.PI;
+  const point = (pct) => {
+    const a = angleFor(pct);
+    return [cx + r * Math.cos(a), cy - r * Math.sin(a)];
+  };
+  const [nx, ny] = point(v);
+  const color = (zones.find(z => v >= z[0] && v < z[1]) || zones[zones.length - 1])[2];
+  return (
+    <div className="flex flex-col items-center">
+      <svg width="120" height="70" viewBox="0 0 120 70">
+        <path d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`} fill="none" stroke="var(--border)" strokeWidth="8" strokeLinecap="round" />
+        <path d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${nx} ${ny}`} fill="none" stroke={color} strokeWidth="8" strokeLinecap="round" />
+        <circle cx={cx} cy={cy} r="3" fill={color} />
+      </svg>
+      <div className="font-mono text-lg font-bold -mt-3" style={{ color }}>{v.toFixed(0)}</div>
+      <div className="font-mono text-[9px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>{label}</div>
+    </div>
+  );
+}
+
+/* ── Mock signal generator — mirrors the real compactSignal() shape from
+   the OMNICEE backend (id/symbol/timeframe/action/score/entry/stopLoss/
+   targets/regime/gate/risk/agents/reasons). ────────────────────────────── */
+let _sigSeq = 1000;
+function generateSignal(symbol, price) {
+  const dir = pick(['BUY', 'SELL']);
+  const score = Math.round(rand(58, 97));
+  const pip = PIP[symbol];
+  const entry = price;
+  const stopLoss = dir === 'BUY' ? entry - pip * rand(8, 22) : entry + pip * rand(8, 22);
+  const risk = Math.abs(entry - stopLoss);
+  const targets = dir === 'BUY'
+    ? [entry + risk * 1.5, entry + risk * 2.6]
+    : [entry - risk * 1.5, entry - risk * 2.6];
+  const agents = AGENTS.map(a => {
+    const bullish = Math.random() > 0.35;
+    const conf = Math.round(rand(45, 96));
+    return { agent: a, score: conf, direction: (Math.random() > 0.22 ? dir : (dir === 'BUY' ? 'SELL' : 'BUY')), status: conf > 60 ? 'active' : 'weak' };
+  });
+  const agreeCount = agents.filter(a => a.direction === dir).length;
+  const gateChecklist = {
+    trap: Math.random() > 0.12,
+    compression: Math.random() > 0.15,
+    abnormalMarket: Math.random() > 0.08,
+    regimeFit: Math.random() > 0.2,
+    strategyFit: Math.random() > 0.18,
+  };
+  const failures = Object.entries(gateChecklist).filter(([, ok]) => !ok).map(([k]) => k);
+  const status = score >= 75 && failures.length === 0 ? 'approved' : (failures.length > 1 ? 'rejected' : 'gated');
+  const reasons = [
+    `${agreeCount}/8 agents aligned ${dir}`,
+    `Regime: ${pick(['trending', 'ranging', 'transitional'])} structure on ${pick(TIMEFRAMES)}`,
+    failures.length ? `Flagged: ${failures.join(', ')}` : 'All institutional gates cleared',
+    `Volatility ${pick(['compressed', 'expanding', 'normal'])}, tradeability ${pick(['high', 'medium', 'low'])}`,
+  ];
+  return {
+    id: `sig_${_sigSeq++}`,
+    symbol, timeframe: pick(TIMEFRAMES), action: dir,
+    timestamp: Date.now(), currentPrice: price,
+    score, entry, stopLoss, targets,
+    regime: {
+      regime: pick(['trend-up', 'trend-down', 'range', 'transition']),
+      trend: pick(['bullish', 'bearish', 'neutral']),
+      structure: pick(['HH-HL', 'LH-LL', 'consolidation']),
+      volatility: pick(['low', 'normal', 'elevated']),
+      tradeability: pick(['high', 'medium', 'low']),
+      confidence: Math.round(rand(55, 95)),
+    },
+    gate: { status, confidence: Math.round(rand(50, 95)), failures, warnings: [], checklist: gateChecklist },
+    risk: { approved: status === 'approved', effectiveRisk: +rand(0.5, 1.0).toFixed(2), maxLoss: Math.round(rand(40, 120)), note: status === 'approved' ? 'within daily loss budget' : 'held back by gate' },
+    agents, reasons, agreeCount,
+  };
+}
+
+function generateAuditEntry(symbol) {
+  const fired = Math.random() > 0.55;
+  const reasons = fired
+    ? ['score above threshold', 'gates cleared', 'regime fit confirmed']
+    : pick([['score below 75 threshold'], ['compression detected — held'], ['regime mismatch for strategy'], ['abnormal market — spread spike'], ['trap pattern suspected']]);
+  return { id: `aud_${Math.random().toString(36).slice(2, 9)}`, symbol, timeframe: pick(TIMEFRAMES), fired, reasons, timestamp: Date.now() };
+}
+
+const NEWS_SEED = [
+  'Fed officials signal patience on next rate move',
+  'Gold holds near highs as real yields soften',
+  'BTC funding rates cool after weekend liquidation cascade',
+  'ECB commentary keeps EUR crosses rangebound',
+  'DXY steadies as traders await CPI print',
+  'CFTC data shows large specs trimming USD longs',
+  'Risk sentiment firms on softer inflation expectations',
+  'Asia session liquidity thin ahead of London open',
+];
+
+/* ── Live-feed simulation hook — the seam where this swaps for real
+   fetch()/socket.io-client calls against the documented API. ─────────── */
+function useLiveFeed() {
+  const [now, setNow] = useState(Date.now());
+  const [prices, setPrices] = useState(() => ({ ...BASE_PRICE }));
+  const [changes, setChanges] = useState(() => Object.fromEntries(SYMBOLS.map(s => [s, 0])));
+  const [flash, setFlash] = useState({});
+  const [signals, setSignals] = useState(() => {
+    const seed = [];
+    for (let i = 0; i < 14; i++) seed.push(generateSignal(pick(SYMBOLS), BASE_PRICE[pick(SYMBOLS)]));
+    return seed.sort((a, b) => b.timestamp - a.timestamp);
+  });
+  const [auditLog, setAuditLog] = useState(() => {
+    const seed = [];
+    for (let i = 0; i < 18; i++) seed.push(generateAuditEntry(pick(SYMBOLS)));
+    return seed;
+  });
+  const [equityCurve, setEquityCurve] = useState(() => {
+    let eq = 10000;
+    const pts = [];
+    for (let i = 60; i >= 0; i--) {
+      eq += rand(-60, 90);
+      pts.push({ t: i, equity: Math.round(eq) });
+    }
+    return pts;
+  });
+  const priceRef = useRef(prices);
+  priceRef.current = prices;
+
+  useEffect(() => {
+    const clock = setInterval(() => setNow(Date.now()), 1000);
+    const tick = setInterval(() => {
+      setPrices(prev => {
+        const next = { ...prev };
+        const flashNext = {};
+        SYMBOLS.forEach(sym => {
+          const drift = prev[sym] * rand(-0.0006, 0.0006);
+          next[sym] = +(prev[sym] + drift).toFixed(DECIMALS[sym] + 1);
+          flashNext[sym] = drift >= 0 ? 'up' : 'down';
+        });
+        setFlash(flashNext);
+        setChanges(c => {
+          const nc = { ...c };
+          SYMBOLS.forEach(sym => { nc[sym] = ((next[sym] - BASE_PRICE[sym]) / BASE_PRICE[sym]) * 100; });
+          return nc;
+        });
+        return next;
+      });
+    }, 1600);
+    const signalTimer = setInterval(() => {
+      const sym = pick(SYMBOLS);
+      setSignals(prev => [generateSignal(sym, priceRef.current[sym]), ...prev].slice(0, 40));
+    }, 9000);
+    const auditTimer = setInterval(() => {
+      setAuditLog(prev => [generateAuditEntry(pick(SYMBOLS)), ...prev].slice(0, 30));
+    }, 3500);
+    const eqTimer = setInterval(() => {
+      setEquityCurve(prev => {
+        const last = prev[prev.length - 1]?.equity ?? 10000;
+        const next = Math.round(last + rand(-60, 90));
+        return [...prev.slice(1), { t: prev[prev.length - 1].t + 1, equity: next }];
+      });
+    }, 4000);
+    return () => { clearInterval(clock); clearInterval(tick); clearInterval(signalTimer); clearInterval(auditTimer); clearInterval(eqTimer); };
+  }, []);
+
+  return { now, prices, changes, flash, signals, auditLog, equityCurve };
+}
+
+/* ── Navigation model ───────────────────────────────────────────────── */
+const TABS = [
+  { key: 'DASH', label: 'Dashboard', fkey: 'F1', icon: LayoutDashboard },
+  { key: 'SIGNALS', label: 'Signals', fkey: 'F2', icon: Radio },
+  { key: 'INTEL', label: 'Intel', fkey: 'F3', icon: Globe2 },
+  { key: 'MONITOR', label: 'Monitor', fkey: 'F4', icon: Activity },
+  { key: 'HEAT', label: 'Heat', fkey: 'F5', icon: Flame },
+  { key: 'VALID', label: 'Valid', fkey: 'F6', icon: FlaskConical },
+  { key: 'TAPE', label: 'Tape', fkey: 'F7', icon: ScrollText },
+  { key: 'RISK', label: 'Risk', fkey: 'F8', icon: ShieldAlert },
+];
+
+function TopBar({ now, connected, onCommand }) {
+  const [cmd, setCmd] = useState('');
+  const time = new Date(now).toISOString().slice(11, 19);
+  const date = new Date(now).toISOString().slice(0, 10);
+  return (
+    <div className="flex items-center gap-4 px-4 py-2.5 border-b" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
+      <div className="flex items-center gap-2">
+        <div className="w-6 h-6 rounded flex items-center justify-center font-display text-[11px] font-bold"
+          style={{ background: 'var(--emerald)', color: '#05070a' }}>Ω</div>
+        <span className="font-display text-sm tracking-[0.15em]" style={{ color: 'var(--text)' }}>OMNICEE</span>
+      </div>
+      <span className="font-mono text-[10px] uppercase tracking-widest hidden sm:inline" style={{ color: 'var(--textFaint)' }}>
+        Institutional Signal Terminal
+      </span>
+      <div className="flex-1 flex items-center gap-2 max-w-md">
+        <Terminal size={13} style={{ color: 'var(--gold)' }} />
+        <input
+          value={cmd}
+          onChange={e => setCmd(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && cmd.trim()) { onCommand(cmd.trim()); setCmd(''); } }}
+          placeholder="TAB OR SYMBOL, THEN ⏎"
+          className="omni-cmd font-mono text-[11px] w-full bg-transparent outline-none tracking-wider uppercase"
+          style={{ color: 'var(--gold)', borderBottom: '1px solid var(--border)' }}
+        />
+      </div>
+      <div className="flex items-center gap-3 ml-auto">
+        <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase" style={{ color: connected ? 'var(--emerald)' : 'var(--coral)' }}>
+          <Circle size={7} fill="currentColor" className={connected ? 'omni-pulse' : ''} />
+          {connected ? 'Live' : 'Offline'}
+        </span>
+        <span className="font-mono text-[11px] hidden md:inline" style={{ color: 'var(--textDim)' }}>{date}</span>
+        <span className="font-mono text-[12px] font-semibold" style={{ color: 'var(--text)' }}>{time} UTC</span>
+      </div>
+    </div>
+  );
+}
+
+function TickerTape({ prices, changes, flash }) {
+  const row = SYMBOLS.map(sym => (
+    <span key={sym} className={`inline-flex items-center gap-1.5 px-4 font-mono text-[11px] ${flash[sym] === 'up' ? 'omni-flash-up' : flash[sym] === 'down' ? 'omni-flash-down' : ''}`}>
+      <span style={{ color: 'var(--textDim)' }}>{sym}</span>
+      <span style={{ color: 'var(--text)' }}>{fmtPrice(sym, prices[sym])}</span>
+      <span style={{ color: (changes[sym] ?? 0) >= 0 ? 'var(--emerald)' : 'var(--coral)' }}>{fmtPct(changes[sym] ?? 0)}</span>
+    </span>
+  ));
+  return (
+    <div className="overflow-hidden border-b py-1.5" style={{ borderColor: 'var(--border)', background: '#080a0d' }}>
+      <div className="flex omni-marquee whitespace-nowrap w-max">
+        <div className="flex">{row}</div>
+        <div className="flex">{row}</div>
+      </div>
+    </div>
+  );
+}
+
+function Sidebar({ active, onSelect }) {
+  return (
+    <div className="flex flex-col border-r shrink-0" style={{ borderColor: 'var(--border)', background: 'var(--panel)', width: 88 }}>
+      {TABS.map(t => (
+        <button
+          key={t.key}
+          onClick={() => onSelect(t.key)}
+          className={`flex flex-col items-center gap-1 py-3 border-b transition-colors ${active === t.key ? 'omni-tab-active' : ''}`}
+          style={{ borderColor: 'var(--border)', color: active === t.key ? 'var(--emerald)' : 'var(--textDim)' }}
+        >
+          <t.icon size={16} />
+          <span className="font-mono text-[9px]">{t.fkey}</span>
+          <span className="font-mono text-[8px] uppercase tracking-wider">{t.label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/* ── DASH ───────────────────────────────────────────────────────────── */
+function DashTab({ signals, equityCurve, prices, changes }) {
+  const approved = signals.filter(s => s.gate.status === 'approved');
+  const winRate = 61 + Math.round((signals.reduce((a, s) => a + (s.score > 75 ? 1 : -1), 0)) % 8);
+  const avgScore = signals.length ? Math.round(signals.reduce((a, s) => a + s.score, 0) / signals.length) : 0;
+  const consensus = AGENTS.map(agent => {
+    const votes = signals.slice(0, 12).flatMap(s => s.agents.filter(a => a.agent === agent));
+    const bull = votes.filter(v => v.direction === 'BUY').length;
+    const total = votes.length || 1;
+    return { agent, bullPct: Math.round((bull / total) * 100) };
+  });
+  return (
+    <div className="p-4 space-y-4">
+      <div className="flex flex-wrap gap-3">
+        <StatCard label="Active Signals" value={approved.length} icon={Radio} />
+        <StatCard label="Win Rate (30d)" value={`${winRate}%`} icon={Target} accent="var(--gold)" />
+        <StatCard label="Avg Score" value={avgScore} icon={GaugeIcon} accent="var(--blue)" />
+        <StatCard label="Signals Today" value={signals.length} icon={Zap} accent="var(--violet)" />
+        <StatCard label="Account Bal." value={`$${(equityCurve[equityCurve.length - 1]?.equity ?? 10000).toLocaleString()}`} icon={DollarSign} accent="var(--emerald)" />
+        <StatCard label="Max DD Limit" value="10.0%" icon={ShieldAlert} accent="var(--coral)" />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="omni-panel p-4 lg:col-span-2">
+          <SectionHeader icon={LayoutDashboard} title="Equity Curve" sub="simulated · 60-cycle window" />
+          <ResponsiveContainer width="100%" height={220}>
+            <AreaChart data={equityCurve}>
+              <defs>
+                <linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#1fe3a8" stopOpacity={0.35} />
+                  <stop offset="100%" stopColor="#1fe3a8" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke="#1c232d" vertical={false} />
+              <XAxis dataKey="t" hide />
+              <YAxis domain={['dataMin - 100', 'dataMax + 100']} tick={{ fill: '#526078', fontSize: 10 }} width={50} />
+              <Tooltip contentStyle={{ background: '#10151c', border: '1px solid #1c232d', borderRadius: 8, fontSize: 11 }} labelFormatter={() => ''} />
+              <Area type="monotone" dataKey="equity" stroke="#1fe3a8" fill="url(#eqGrad)" strokeWidth={1.5} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div className="omni-panel p-4">
+          <SectionHeader icon={Layers} title="Agent Consensus" sub="last 12 signals" />
+          <div className="space-y-2.5">
+            {consensus.map(c => (
+              <div key={c.agent}>
+                <div className="flex justify-between font-mono text-[10px] mb-1" style={{ color: 'var(--textDim)' }}>
+                  <span>{c.agent}</span><span>{c.bullPct}% bull</span>
+                </div>
+                <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
+                  <div className="h-full rounded-full" style={{ width: `${c.bullPct}%`, background: c.bullPct >= 50 ? 'var(--emerald)' : 'var(--coral)' }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="omni-panel p-4">
+        <SectionHeader icon={Radio} title="Recent Signal Feed" />
+        <div className="space-y-1 max-h-64 overflow-y-auto omni-scroll">
+          {signals.slice(0, 8).map(s => (
+            <div key={s.id} className="omni-row flex items-center gap-3 px-2 py-1.5 rounded font-mono text-[11px]">
+              <span style={{ color: 'var(--textFaint)' }} className="w-10">{timeAgo(s.timestamp)}</span>
+              <span style={{ color: 'var(--text)' }} className="w-16">{s.symbol}</span>
+              <span className="w-10" style={{ color: s.action === 'BUY' ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
+              <span className="w-10" style={{ color: 'var(--gold)' }}>{gradeFor(s.score)}</span>
+              <span className="flex-1" style={{ color: 'var(--textDim)' }}>{s.regime.regime}</span>
+              <Pill tone={s.gate.status === 'approved' ? 'up' : s.gate.status === 'gated' ? 'warn' : 'down'}>{s.gate.status}</Pill>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── SIGNALS ────────────────────────────────────────────────────────── */
+function SignalsTab({ signals }) {
+  const [expanded, setExpanded] = useState(null);
+  const [symFilter, setSymFilter] = useState('ALL');
+  const filtered = symFilter === 'ALL' ? signals : signals.filter(s => s.symbol === symFilter);
+
+  return (
+    <div className="p-4 space-y-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <SectionHeader icon={Radio} title="Live Signals" sub={`${filtered.length} shown`} />
+        <div className="ml-auto flex gap-1 flex-wrap">
+          {['ALL', ...SYMBOLS].map(s => (
+            <button key={s} onClick={() => setSymFilter(s)}
+              className="font-mono text-[10px] px-2 py-1 rounded uppercase"
+              style={{ background: symFilter === s ? 'var(--emerald)' : 'var(--panel2)', color: symFilter === s ? '#05070a' : 'var(--textDim)' }}>
+              {s}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="omni-panel overflow-hidden">
+        <div className="grid grid-cols-[70px_46px_44px_44px_1fr_1fr_1fr_70px_50px] gap-2 px-3 py-2 font-mono text-[9px] uppercase tracking-wider border-b" style={{ color: 'var(--textFaint)', borderColor: 'var(--border)' }}>
+          <span>Symbol</span><span>TF</span><span>Dir</span><span>Grade</span><span>Entry</span><span>Stop</span><span>Targets</span><span>Gate</span><span>Age</span>
+        </div>
+        <div className="max-h-[520px] overflow-y-auto omni-scroll">
+          {filtered.map(s => (
+            <div key={s.id}>
+              <div onClick={() => setExpanded(expanded === s.id ? null : s.id)}
+                className="omni-row grid grid-cols-[70px_46px_44px_44px_1fr_1fr_1fr_70px_50px] gap-2 px-3 py-2 font-mono text-[11px] cursor-pointer border-b items-center"
+                style={{ borderColor: 'var(--border)' }}>
+                <span style={{ color: 'var(--text)' }}>{s.symbol}</span>
+                <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
+                <span style={{ color: s.action === 'BUY' ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
+                <span style={{ color: 'var(--gold)' }}>{gradeFor(s.score)}</span>
+                <span style={{ color: 'var(--textDim)' }}>{fmtPrice(s.symbol, s.entry)}</span>
+                <span style={{ color: 'var(--coral)' }}>{fmtPrice(s.symbol, s.stopLoss)}</span>
+                <span style={{ color: 'var(--emerald)' }}>{fmtPrice(s.symbol, s.targets[0])} / {fmtPrice(s.symbol, s.targets[1])}</span>
+                <Pill tone={s.gate.status === 'approved' ? 'up' : s.gate.status === 'gated' ? 'warn' : 'down'}>{s.gate.status}</Pill>
+                <span className="flex items-center gap-1" style={{ color: 'var(--textFaint)' }}>
+                  {timeAgo(s.timestamp)}<ChevronDown size={11} style={{ transform: expanded === s.id ? 'rotate(180deg)' : 'none' }} />
+                </span>
+              </div>
+              {expanded === s.id && (
+                <div className="px-4 py-3 border-b grid grid-cols-1 md:grid-cols-3 gap-4" style={{ borderColor: 'var(--border)', background: '#080a0d' }}>
+                  <div>
+                    <div className="font-mono text-[9px] uppercase mb-2" style={{ color: 'var(--textFaint)' }}>Agent Breakdown ({s.agreeCount}/8 aligned)</div>
+                    <div className="space-y-1">
+                      {s.agents.map(a => (
+                        <div key={a.agent} className="flex items-center gap-2 font-mono text-[10px]">
+                          <span className="w-24" style={{ color: 'var(--textDim)' }}>{a.agent}</span>
+                          <div className="flex-1 h-1 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
+                            <div className="h-full" style={{ width: `${a.score}%`, background: a.direction === s.action ? 'var(--emerald)' : 'var(--coral)' }} />
+                          </div>
+                          <span style={{ color: a.direction === s.action ? 'var(--emerald)' : 'var(--coral)' }}>{a.direction}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="font-mono text-[9px] uppercase mb-2" style={{ color: 'var(--textFaint)' }}>Institutional Gates</div>
+                    <div className="space-y-1.5">
+                      {Object.entries(s.gate.checklist).map(([k, ok]) => (
+                        <div key={k} className="flex items-center gap-2 font-mono text-[10px]" style={{ color: ok ? 'var(--textDim)' : 'var(--coral)' }}>
+                          {ok ? <CheckCircle2 size={12} style={{ color: 'var(--emerald)' }} /> : <XCircle size={12} style={{ color: 'var(--coral)' }} />}
+                          {k}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-2 font-mono text-[10px]" style={{ color: 'var(--textDim)' }}>
+                      Risk: {s.risk.effectiveRisk}% · max loss ${s.risk.maxLoss} · {s.risk.note}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="font-mono text-[9px] uppercase mb-2" style={{ color: 'var(--textFaint)' }}>Signal Explainer</div>
+                    <ul className="space-y-1">
+                      {s.reasons.map((r, i) => (
+                        <li key={i} className="font-mono text-[10px] flex gap-1.5" style={{ color: 'var(--textDim)' }}>
+                          <ChevronRight size={11} style={{ color: 'var(--violet)', flexShrink: 0, marginTop: 1 }} />{r}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── INTEL ──────────────────────────────────────────────────────────── */
+function IntelTab({ now }) {
+  const sentiment = useMemo(() => SYMBOLS.map(s => ({ symbol: s, score: Math.round(rand(-80, 80)) })), []);
+  const cot = useMemo(() => ['EUR', 'GBP', 'JPY', 'XAU'].map(c => ({
+    currency: c, nonComm: Math.round(rand(-60000, 60000)), comm: Math.round(rand(-40000, 40000)),
+  })), []);
+  const calendar = useMemo(() => ([
+    { event: 'US CPI y/y', impact: 'high', mins: 42 },
+    { event: 'ECB Rate Decision', impact: 'high', mins: 185 },
+    { event: 'US Initial Jobless Claims', impact: 'medium', mins: 340 },
+    { event: 'UK Retail Sales m/m', impact: 'low', mins: 610 },
+  ]), []);
+  const outlook = useMemo(() => pick([
+    'Majors are consolidating inside prior-week ranges; institutional positioning shows specs trimming dollar longs while gold holds a bid on softer real yields. Crypto remains correlated to macro liquidity signals rather than trading on-chain fundamentals this session.',
+    'Trend structure favors continuation on XAUUSD and BTCUSDT while EURUSD chops inside a well-defined range ahead of the ECB. Session filters currently favor the London/NY overlap for entries.',
+    'Volatility is compressing across forex majors — the pipeline is flagging this as a pre-breakout regime and tightening entry criteria accordingly until a directional resolution confirms.',
+  ]), [Math.floor(now / 45000)]);
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="omni-panel p-4">
+        <SectionHeader icon={Globe2} title="Market Outlook" sub="plain-English · signal-explainer" />
+        <p className="text-[12px] leading-relaxed" style={{ color: 'var(--textDim)' }}>{outlook}</p>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="omni-panel p-4">
+          <SectionHeader icon={Activity} title="Macro Sentiment" sub="Alpha Vantage" />
+          <div className="space-y-2">
+            {sentiment.map(s => (
+              <div key={s.symbol} className="flex items-center gap-2 font-mono text-[11px]">
+                <span className="w-16" style={{ color: 'var(--textDim)' }}>{s.symbol}</span>
+                <div className="flex-1 h-2 rounded-full relative" style={{ background: 'var(--border)' }}>
+                  <div className="absolute top-0 bottom-0 left-1/2" style={{ width: 1, background: 'var(--borderBright)' }} />
+                  <div className="absolute top-0 bottom-0 rounded-full" style={{
+                    left: s.score >= 0 ? '50%' : `${50 + s.score / 2}%`,
+                    width: `${Math.abs(s.score) / 2}%`,
+                    background: s.score >= 0 ? 'var(--emerald)' : 'var(--coral)',
+                  }} />
+                </div>
+                <span className="w-10 text-right" style={{ color: s.score >= 0 ? 'var(--emerald)' : 'var(--coral)' }}>{s.score}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="omni-panel p-4">
+          <SectionHeader icon={ShieldAlert} title="CFTC COT Positioning" sub="non-comm vs comm, contracts" />
+          <div className="space-y-3">
+            {cot.map(c => (
+              <div key={c.currency} className="font-mono text-[11px]">
+                <div className="flex justify-between mb-1"><span style={{ color: 'var(--text)' }}>{c.currency}</span></div>
+                <div className="flex items-center gap-2">
+                  <span className="w-16" style={{ color: 'var(--textFaint)' }}>Non-comm</span>
+                  <div className="flex-1 h-1.5 rounded-full" style={{ background: 'var(--border)' }}>
+                    <div className="h-full rounded-full" style={{ width: `${Math.min(100, Math.abs(c.nonComm) / 600)}%`, background: c.nonComm >= 0 ? 'var(--emerald)' : 'var(--coral)' }} />
+                  </div>
+                  <span className="w-14 text-right" style={{ color: 'var(--textDim)' }}>{c.nonComm.toLocaleString()}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="omni-panel p-4">
+          <SectionHeader icon={Clock} title="Economic Calendar" sub="Myfxbook" />
+          <div className="space-y-1.5">
+            {calendar.map((e, i) => (
+              <div key={i} className="flex items-center gap-2 font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
+                <Pill tone={e.impact === 'high' ? 'down' : e.impact === 'medium' ? 'warn' : 'neutral'}>{e.impact}</Pill>
+                <span className="flex-1" style={{ color: 'var(--textDim)' }}>{e.event}</span>
+                <span style={{ color: 'var(--textFaint)' }}>in {Math.floor(e.mins / 60)}h{e.mins % 60}m</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="omni-panel p-4">
+          <SectionHeader icon={Newspaper} title="Headlines" sub="Finnhub" />
+          <div className="space-y-1.5">
+            {NEWS_SEED.slice(0, 6).map((n, i) => (
+              <div key={i} className="font-mono text-[11px] py-1 border-b" style={{ color: 'var(--textDim)', borderColor: 'var(--border)' }}>{n}</div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── MONITOR ────────────────────────────────────────────────────────── */
+function MonitorTab({ auditLog }) {
+  return (
+    <div className="p-4 space-y-4">
+      <div className="omni-panel p-4">
+        <SectionHeader icon={Database} title="Feed Health" sub={`${FEEDS.filter(f => f.status === 'live').length}/${FEEDS.length} live`} />
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5">
+          {FEEDS.map(f => (
+            <div key={f.name} className="omni-panel2 p-3">
+              <div className="flex items-center justify-between mb-1">
+                <span className="font-mono text-[11px]" style={{ color: 'var(--text)' }}>{f.name}</span>
+                <Circle size={8} fill="currentColor" style={{
+                  color: f.status === 'live' ? 'var(--emerald)' : f.status === 'degraded' ? 'var(--gold)' : 'var(--textFaint)',
+                }} className={f.status === 'live' ? 'omni-pulse' : ''} />
+              </div>
+              <div className="font-mono text-[9px] uppercase" style={{ color: 'var(--textFaint)' }}>{f.kind}</div>
+              {f.note && <div className="font-mono text-[9px] mt-1" style={{ color: 'var(--gold)' }}>{f.note}</div>}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="omni-panel p-4">
+          <SectionHeader icon={ScrollText} title="Audit Trail" sub="every cycle, fired or not" />
+          <div className="space-y-1 max-h-72 overflow-y-auto omni-scroll">
+            {auditLog.map(e => (
+              <div key={e.id} className="flex items-start gap-2 font-mono text-[10px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
+                <span style={{ color: 'var(--textFaint)' }} className="w-10 shrink-0">{timeAgo(e.timestamp)}</span>
+                <span style={{ color: 'var(--text)' }} className="w-16 shrink-0">{e.symbol}</span>
+                {e.fired
+                  ? <CheckCircle2 size={11} style={{ color: 'var(--emerald)', marginTop: 1, flexShrink: 0 }} />
+                  : <XCircle size={11} style={{ color: 'var(--textFaint)', marginTop: 1, flexShrink: 0 }} />}
+                <span style={{ color: 'var(--textDim)' }}>{e.reasons.join(', ')}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="omni-panel p-4">
+          <SectionHeader icon={Cpu} title="Orchestrator" sub="conflict resolution · cache" />
+          <div className="space-y-3">
+            <div className="flex items-center justify-between font-mono text-[11px]">
+              <span style={{ color: 'var(--textDim)' }}>Agent conflicts resolved (1h)</span>
+              <span style={{ color: 'var(--text)' }}>{Math.round(rand(4, 22))}</span>
+            </div>
+            <div className="flex items-center justify-between font-mono text-[11px]">
+              <span style={{ color: 'var(--textDim)' }}>Market-hours gate</span>
+              <Pill tone="up">open</Pill>
+            </div>
+            <div className="flex items-center justify-between font-mono text-[11px]">
+              <span style={{ color: 'var(--textDim)' }}>Symbol blacklist</span>
+              <span style={{ color: 'var(--textFaint)' }}>none active</span>
+            </div>
+            <div className="flex items-center justify-between font-mono text-[11px]">
+              <span style={{ color: 'var(--textDim)' }}>Redis cache</span>
+              <Pill tone="neutral">not configured (free tier)</Pill>
+            </div>
+            <div className="flex items-center justify-between font-mono text-[11px]">
+              <span style={{ color: 'var(--textDim)' }}>Pinecone memory</span>
+              <Pill tone="neutral">not configured (free tier)</Pill>
+            </div>
+            <div className="flex items-center justify-between font-mono text-[11px]">
+              <span style={{ color: 'var(--textDim)' }}>MongoDB Atlas (M0)</span>
+              <Pill tone="up">connected</Pill>
+            </div>
+            <div className="flex items-center justify-between font-mono text-[11px]">
+              <span style={{ color: 'var(--textDim)' }}>Process uptime</span>
+              <span style={{ color: 'var(--text)' }}>{Math.floor(rand(4, 72))}h {Math.floor(rand(0, 59))}m</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── HEAT ───────────────────────────────────────────────────────────── */
+function HeatTab() {
+  const corr = useMemo(() => {
+    const m = {};
+    SYMBOLS.forEach(a => { m[a] = {}; SYMBOLS.forEach(b => { m[a][b] = a === b ? 1 : +rand(-1, 1).toFixed(2); }); });
+    return m;
+  }, []);
+  const rs = useMemo(() => SYMBOLS.map(s => ({
+    symbol: s, ...Object.fromEntries(TIMEFRAMES.map(tf => [tf, +rand(-1, 1).toFixed(2)])),
+  })), []);
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="omni-panel p-4 overflow-x-auto omni-scroll">
+        <SectionHeader icon={Flame} title="Correlation Matrix" sub="rolling 50-bar, H1" />
+        <div className="inline-block min-w-full">
+          <div className="grid" style={{ gridTemplateColumns: `90px repeat(${SYMBOLS.length}, 68px)` }}>
+            <div />
+            {SYMBOLS.map(s => <div key={s} className="font-mono text-[9px] text-center py-1" style={{ color: 'var(--textFaint)' }}>{s}</div>)}
+            {SYMBOLS.map(rowSym => (
+              <Fragment key={rowSym}>
+                <div className="font-mono text-[10px] py-1 pr-2" style={{ color: 'var(--textDim)' }}>{rowSym}</div>
+                {SYMBOLS.map(colSym => (
+                  <div key={rowSym + colSym} className="font-mono text-[10px] text-center py-2 m-0.5 rounded"
+                    style={{ background: heatColor(corr[rowSym][colSym]), color: 'var(--text)' }}>
+                    {corr[rowSym][colSym].toFixed(2)}
+                  </div>
+                ))}
+              </Fragment>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="omni-panel p-4 overflow-x-auto omni-scroll">
+        <SectionHeader icon={TrendingUp} title="Relative Strength Heat" sub="momentum by timeframe" />
+        <div className="inline-block min-w-full">
+          <div className="grid" style={{ gridTemplateColumns: `90px repeat(${TIMEFRAMES.length}, 90px)` }}>
+            <div />
+            {TIMEFRAMES.map(tf => <div key={tf} className="font-mono text-[9px] text-center py-1" style={{ color: 'var(--textFaint)' }}>{tf}</div>)}
+            {rs.map(row => (
+              <Fragment key={row.symbol}>
+                <div className="font-mono text-[10px] py-1 pr-2" style={{ color: 'var(--textDim)' }}>{row.symbol}</div>
+                {TIMEFRAMES.map(tf => (
+                  <div key={row.symbol + tf} className="font-mono text-[10px] text-center py-2 m-0.5 rounded flex items-center justify-center gap-1"
+                    style={{ background: heatColor(row[tf]), color: 'var(--text)' }}>
+                    {row[tf] >= 0 ? <ArrowUpRight size={10} /> : <ArrowDownRight size={10} />}{Math.abs(row[tf]).toFixed(2)}
+                  </div>
+                ))}
+              </Fragment>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── VALID ──────────────────────────────────────────────────────────── */
+function ValidTab() {
+  const monteCarlo = useMemo(() => {
+    const buckets = [];
+    for (let i = -10; i <= 10; i++) {
+      const x = i;
+      const h = Math.round(60 * Math.exp(-(x * x) / 18) + rand(-3, 3));
+      buckets.push({ r: x, count: Math.max(0, h) });
+    }
+    return buckets;
+  }, []);
+  const walkForward = 68, bayesian = 74, kellyPct = 2.3;
+  const backtest = { winRate: 58.4, profitFactor: 1.74, maxDD: 8.9, sharpe: 1.32, expectancy: 0.31, trades: 1284 };
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="omni-panel p-3 flex flex-col items-center"><Gauge value={walkForward} label="Walk-Forward Eff." /></div>
+        <div className="omni-panel p-3 flex flex-col items-center"><Gauge value={bayesian} label="Bayesian Confidence" /></div>
+        <div className="omni-panel p-3 flex flex-col items-center"><Gauge value={backtest.winRate} label="Backtest Win Rate" /></div>
+        <div className="omni-panel p-3 flex flex-col items-center justify-center">
+          <span className="font-mono text-2xl font-bold" style={{ color: 'var(--gold)' }}>{kellyPct}%</span>
+          <span className="font-mono text-[9px] uppercase tracking-wider mt-1" style={{ color: 'var(--textFaint)' }}>Kelly Suggested Size</span>
+        </div>
+      </div>
+
+      <div className="omni-panel p-4">
+        <SectionHeader icon={FlaskConical} title="Monte Carlo Return Distribution" sub="10,000 paths · R-multiple" />
+        <ResponsiveContainer width="100%" height={180}>
+          <BarChart data={monteCarlo}>
+            <CartesianGrid stroke="#1c232d" vertical={false} />
+            <XAxis dataKey="r" tick={{ fill: '#526078', fontSize: 10 }} />
+            <YAxis tick={{ fill: '#526078', fontSize: 10 }} width={30} />
+            <Tooltip contentStyle={{ background: '#10151c', border: '1px solid #1c232d', borderRadius: 8, fontSize: 11 }} />
+            <Bar dataKey="count" radius={[2, 2, 0, 0]}>
+              {monteCarlo.map((b, i) => <Cell key={i} fill={b.r >= 0 ? '#1fe3a8' : '#ff5470'} />)}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="omni-panel p-4">
+        <SectionHeader icon={CheckCircle2} title="Backtest Summary" sub={`${backtest.trades.toLocaleString()} trades`} />
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <StatCard label="Win Rate" value={`${backtest.winRate}%`} />
+          <StatCard label="Profit Factor" value={backtest.profitFactor} accent="var(--gold)" />
+          <StatCard label="Max Drawdown" value={`${backtest.maxDD}%`} accent="var(--coral)" />
+          <StatCard label="Sharpe" value={backtest.sharpe} accent="var(--blue)" />
+          <StatCard label="Expectancy (R)" value={backtest.expectancy} accent="var(--violet)" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── TAPE ───────────────────────────────────────────────────────────── */
+function TapeTab({ signals, prices }) {
+  const executions = useMemo(() => signals.filter(s => s.gate.status === 'approved').slice(0, 20).map(s => {
+    const closed = Math.random() > 0.4;
+    const pnlR = closed ? +rand(-1.2, 2.8).toFixed(2) : null;
+    return { ...s, fillPrice: s.entry * (1 + rand(-0.0003, 0.0003)), closed, pnlR };
+  }), [signals]);
+  const runningPnL = executions.filter(e => e.closed).reduce((a, e) => a + e.pnlR, 0);
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="flex items-center gap-4">
+        <StatCard label="Open Positions" value={executions.filter(e => !e.closed).length} icon={Activity} />
+        <StatCard label="Closed Today" value={executions.filter(e => e.closed).length} icon={CheckCircle2} accent="var(--blue)" />
+        <StatCard label="Running P/L (R)" value={runningPnL.toFixed(2)} delta={runningPnL} icon={DollarSign} accent={runningPnL >= 0 ? 'var(--emerald)' : 'var(--coral)'} />
+      </div>
+      <div className="omni-panel overflow-hidden">
+        <SectionHeader icon={ScrollText} title="Execution Tape" sub="via MT5 EA bridge (OmniceeEA.mq5)" />
+        <div className="grid grid-cols-[70px_46px_44px_1fr_1fr_60px_60px] gap-2 px-3 py-2 font-mono text-[9px] uppercase tracking-wider border-b border-t" style={{ color: 'var(--textFaint)', borderColor: 'var(--border)' }}>
+          <span>Symbol</span><span>TF</span><span>Dir</span><span>Fill</span><span>Signal</span><span>P/L (R)</span><span>Status</span>
+        </div>
+        <div className="max-h-96 overflow-y-auto omni-scroll">
+          {executions.map(e => (
+            <div key={e.id} className="omni-row grid grid-cols-[70px_46px_44px_1fr_1fr_60px_60px] gap-2 px-3 py-2 font-mono text-[11px] border-b items-center" style={{ borderColor: 'var(--border)' }}>
+              <span style={{ color: 'var(--text)' }}>{e.symbol}</span>
+              <span style={{ color: 'var(--textDim)' }}>{e.timeframe}</span>
+              <span style={{ color: e.action === 'BUY' ? 'var(--emerald)' : 'var(--coral)' }}>{e.action}</span>
+              <span style={{ color: 'var(--textDim)' }}>{fmtPrice(e.symbol, e.fillPrice)}</span>
+              <span style={{ color: 'var(--textFaint)' }}>{e.id}</span>
+              <span style={{ color: e.pnlR == null ? 'var(--textFaint)' : e.pnlR >= 0 ? 'var(--emerald)' : 'var(--coral)' }}>{e.pnlR == null ? '—' : e.pnlR}</span>
+              <Pill tone={e.closed ? (e.pnlR >= 0 ? 'up' : 'down') : 'info'}>{e.closed ? 'closed' : 'open'}</Pill>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── RISK ───────────────────────────────────────────────────────────── */
+function RiskTab({ prices, changes }) {
+  const [balance, setBalance] = useState(10000);
+  const [riskPct, setRiskPct] = useState(1.0);
+  const [stopPips, setStopPips] = useState(20);
+  const [symbol, setSymbol] = useState('EURUSD');
+
+  const riskAmount = balance * (riskPct / 100);
+  const pipValue = PIP[symbol];
+  const units = stopPips > 0 ? Math.round(riskAmount / (stopPips * pipValue)) : 0;
+  const lots = (units / 100000).toFixed(2);
+
+  const drawdown = 4.2;
+  const sessions = [
+    { name: 'Asia', start: 0, end: 8 }, { name: 'London', start: 8, end: 16 }, { name: 'New York', start: 13, end: 21 },
+  ];
+  const hour = new Date().getUTCHours();
+  const exposures = SYMBOLS.map(s => ({ symbol: s, exposure: +rand(-3, 3).toFixed(1) }));
+  const ranked = [...SYMBOLS].sort((a, b) => (changes[b] ?? 0) - (changes[a] ?? 0));
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="omni-panel p-4">
+          <SectionHeader icon={GaugeIcon} title="Position Size Calculator" />
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <label className="text-[10px] font-mono uppercase" style={{ color: 'var(--textFaint)' }}>
+              Account Balance ($)
+              <input type="number" value={balance} onChange={e => setBalance(+e.target.value)}
+                className="w-full mt-1 px-2 py-1.5 rounded font-mono text-[12px] outline-none"
+                style={{ background: 'var(--panel2)', border: '1px solid var(--border)', color: 'var(--text)' }} />
+            </label>
+            <label className="text-[10px] font-mono uppercase" style={{ color: 'var(--textFaint)' }}>
+              Risk Per Trade (%)
+              <input type="number" step="0.1" value={riskPct} onChange={e => setRiskPct(+e.target.value)}
+                className="w-full mt-1 px-2 py-1.5 rounded font-mono text-[12px] outline-none"
+                style={{ background: 'var(--panel2)', border: '1px solid var(--border)', color: 'var(--text)' }} />
+            </label>
+            <label className="text-[10px] font-mono uppercase" style={{ color: 'var(--textFaint)' }}>
+              Symbol
+              <select value={symbol} onChange={e => setSymbol(e.target.value)}
+                className="w-full mt-1 px-2 py-1.5 rounded font-mono text-[12px] outline-none"
+                style={{ background: 'var(--panel2)', border: '1px solid var(--border)', color: 'var(--text)' }}>
+                {SYMBOLS.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </label>
+            <label className="text-[10px] font-mono uppercase" style={{ color: 'var(--textFaint)' }}>
+              Stop Distance (pips)
+              <input type="number" value={stopPips} onChange={e => setStopPips(+e.target.value)}
+                className="w-full mt-1 px-2 py-1.5 rounded font-mono text-[12px] outline-none"
+                style={{ background: 'var(--panel2)', border: '1px solid var(--border)', color: 'var(--text)' }} />
+            </label>
+          </div>
+          <div className="omni-panel2 p-3 flex justify-around text-center">
+            <div><div className="font-mono text-lg font-bold" style={{ color: 'var(--emerald)' }}>{lots}</div><div className="font-mono text-[9px] uppercase" style={{ color: 'var(--textFaint)' }}>Lots</div></div>
+            <div><div className="font-mono text-lg font-bold" style={{ color: 'var(--gold)' }}>{units.toLocaleString()}</div><div className="font-mono text-[9px] uppercase" style={{ color: 'var(--textFaint)' }}>Units</div></div>
+            <div><div className="font-mono text-lg font-bold" style={{ color: 'var(--coral)' }}>${riskAmount.toFixed(0)}</div><div className="font-mono text-[9px] uppercase" style={{ color: 'var(--textFaint)' }}>Max Loss</div></div>
+          </div>
+        </div>
+
+        <div className="omni-panel p-4">
+          <SectionHeader icon={ShieldAlert} title="Drawdown Circuit Breaker" />
+          <div className="flex justify-center"><Gauge value={(drawdown / 10) * 100} label={`${drawdown}% of 10% limit`} zones={[[0, 50, '#1fe3a8'], [50, 80, '#f0b429'], [80, 101, '#ff5470']]} /></div>
+          <div className="font-mono text-[11px] text-center mt-2" style={{ color: 'var(--textDim)' }}>
+            Daily loss budget: <span style={{ color: 'var(--text)' }}>3.0%</span> · Used today: <span style={{ color: 'var(--gold)' }}>1.1%</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="omni-panel p-4">
+          <SectionHeader icon={Layers} title="Portfolio Exposure" />
+          <div className="space-y-2">
+            {exposures.map(e => (
+              <div key={e.symbol} className="flex items-center gap-2 font-mono text-[11px]">
+                <span className="w-16" style={{ color: 'var(--textDim)' }}>{e.symbol}</span>
+                <div className="flex-1 h-2 rounded-full relative" style={{ background: 'var(--border)' }}>
+                  <div className="absolute top-0 bottom-0 left-1/2" style={{ width: 1, background: 'var(--borderBright)' }} />
+                  <div className="absolute top-0 bottom-0 rounded-full" style={{ left: e.exposure >= 0 ? '50%' : `${50 + e.exposure * 12}%`, width: `${Math.abs(e.exposure) * 12}%`, background: e.exposure >= 0 ? 'var(--emerald)' : 'var(--coral)' }} />
+                </div>
+                <span className="w-12 text-right" style={{ color: 'var(--textDim)' }}>{e.exposure}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="omni-panel p-4">
+          <SectionHeader icon={Clock} title="Session / Blackout Windows" sub={`current hour ${hour}:00 UTC`} />
+          <div className="space-y-2 mb-3">
+            {sessions.map(s => {
+              const active = hour >= s.start && hour < s.end;
+              return (
+                <div key={s.name} className="flex items-center justify-between font-mono text-[11px]">
+                  <span style={{ color: active ? 'var(--emerald)' : 'var(--textDim)' }}>{s.name}</span>
+                  <span style={{ color: 'var(--textFaint)' }}>{s.start}:00–{s.end}:00 UTC</span>
+                  {active && <Pill tone="up">active</Pill>}
+                </div>
+              );
+            })}
+          </div>
+          <div className="font-mono text-[9px] uppercase mb-2" style={{ color: 'var(--textFaint)' }}>Relative Strength Ranking</div>
+          <div className="flex flex-wrap gap-1.5">
+            {ranked.map((s, i) => (
+              <span key={s} className="font-mono text-[10px] px-2 py-1 rounded" style={{ background: 'var(--panel2)', color: i < 2 ? 'var(--emerald)' : i >= ranked.length - 2 ? 'var(--coral)' : 'var(--textDim)' }}>{s}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── App shell ──────────────────────────────────────────────────────── */
+export default function OmniceeDashboard() {
+  const [activeTab, setActiveTab] = useState('DASH');
+  const feed = useLiveFeed();
+
+  const handleCommand = useCallback((raw) => {
+    const val = raw.toUpperCase();
+    const tab = TABS.find(t => t.key === val || t.label.toUpperCase() === val);
+    if (tab) { setActiveTab(tab.key); return; }
+    if (SYMBOLS.includes(val)) { setActiveTab('SIGNALS'); return; }
+  }, []);
+
+  return (
+    <div className="omni-root flex flex-col h-full min-h-[640px] w-full text-sm">
+      <ThemeStyle />
+      <TopBar now={feed.now} connected={true} onCommand={handleCommand} />
+      <TickerTape prices={feed.prices} changes={feed.changes} flash={feed.flash} />
+      <div className="flex flex-1 min-h-0">
+        <Sidebar active={activeTab} onSelect={setActiveTab} />
+        <div className="flex-1 overflow-y-auto omni-scroll">
+          {activeTab === 'DASH' && <DashTab signals={feed.signals} equityCurve={feed.equityCurve} prices={feed.prices} changes={feed.changes} />}
+          {activeTab === 'SIGNALS' && <SignalsTab signals={feed.signals} />}
+          {activeTab === 'INTEL' && <IntelTab now={feed.now} />}
+          {activeTab === 'MONITOR' && <MonitorTab auditLog={feed.auditLog} />}
+          {activeTab === 'HEAT' && <HeatTab />}
+          {activeTab === 'VALID' && <ValidTab />}
+          {activeTab === 'TAPE' && <TapeTab signals={feed.signals} prices={feed.prices} />}
+          {activeTab === 'RISK' && <RiskTab prices={feed.prices} changes={feed.changes} />}
+        </div>
+      </div>
+    </div>
+  );
+}
