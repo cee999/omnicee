@@ -140,7 +140,19 @@ services:
     # webapp-react's own deps (vite, tailwind, etc.) are devDependencies it
     # needs at build time, so that install can't use --omit=dev the way the
     # root one does — only the root server bundle skips dev deps.
-    buildCommand: npm ci --omit=dev && npm --prefix webapp-react ci && npm --prefix webapp-react run build
+    # FIX: this service's NODE_ENV=production env var (below) gets injected
+    # into the BUILD environment too, not just runtime — so a plain `npm ci`
+    # for webapp-react silently omits its devDependencies (vite, tailwind,
+    # postcss, autoprefixer — everything the build itself needs), even
+    # though nothing here passes --omit=dev for that install. Confirmed by
+    # reproducing the actual failure: `NODE_ENV=production npm ci` inside
+    # webapp-react installs 54 packages instead of 176 and vite is simply
+    # absent, so `vite build` then fails with "sh: 1: vite: not found" —
+    # exactly the error from the first deploy after this became the
+    # frontend. --include=dev overrides the ambient NODE_ENV for just that
+    # install; the root install's explicit --omit=dev is deliberate and
+    # unaffected (the server bundle genuinely doesn't need dev tooling).
+    buildCommand: npm ci --omit=dev && npm --prefix webapp-react ci --include=dev && npm --prefix webapp-react run build
     startCommand: node start-all.js
     healthCheckPath: /health
     autoDeployTrigger: commit
