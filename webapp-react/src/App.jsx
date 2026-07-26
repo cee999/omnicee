@@ -110,7 +110,7 @@ function ThemeStyle() {
       @keyframes omni-flash-down { 0% { background: rgba(255,84,112,0.35); } 100% { background: transparent; } }
       .omni-flash-up { animation: omni-flash-up 0.7s ease-out; }
       .omni-flash-down { animation: omni-flash-down 0.7s ease-out; }
-      .omni-tab-active { box-shadow: inset 3px 0 0 var(--emerald); background: var(--panel2); }
+      .omni-tab-active { box-shadow: inset 0 3px 0 var(--emerald); background: var(--panel2); }
       .omni-cmd::placeholder { color: var(--textFaint); }
       .omni-row:hover { background: rgba(255,255,255,0.02); }
     `}</style>
@@ -341,13 +341,25 @@ function useLiveFeed() {
   const priceRef = useRef(prices);
   priceRef.current = prices;
 
-  /* One-time reachability probe against the unauthenticated /health route. */
+  /* Reachability probe against the unauthenticated /health route. Retries
+     every 4s in the background rather than giving up after one attempt —
+     Render free-tier instances cold-start in 30-60s+, so a single
+     short-timeout check would otherwise lock the page into demo mode for
+     the rest of the session even once the backend actually wakes up. */
   useEffect(() => {
     let cancelled = false;
-    omniFetch('/health', 2500)
-      .then(() => { if (!cancelled) setMode('live'); })
-      .catch(() => { if (!cancelled) setMode('demo'); });
-    return () => { cancelled = true; };
+    let timer = null;
+    const tryProbe = () => {
+      omniFetch('/health', 4000)
+        .then(() => { if (!cancelled) setMode('live'); })
+        .catch(() => {
+          if (cancelled) return;
+          setMode(prev => (prev === 'live' ? prev : 'demo'));
+          timer = setTimeout(tryProbe, 4000);
+        });
+    };
+    tryProbe();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, []);
 
   /* Clock runs regardless of mode. */
@@ -520,21 +532,24 @@ function TickerTape({ prices, changes, flash }) {
   );
 }
 
-function Sidebar({ active, onSelect }) {
+function BottomNav({ active, onSelect }) {
   return (
-    <div className="flex flex-col border-r shrink-0" style={{ borderColor: 'var(--border)', background: 'var(--panel)', width: 88 }}>
+    <div className="flex items-center border-t shrink-0 overflow-x-auto omni-scroll" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
       {TABS.map(t => (
         <button
           key={t.key}
           onClick={() => onSelect(t.key)}
-          className={`flex flex-col items-center gap-1 py-3 border-b transition-colors ${active === t.key ? 'omni-tab-active' : ''}`}
+          className={`flex items-center gap-1.5 px-3 py-2 border-r shrink-0 transition-colors ${active === t.key ? 'omni-tab-active' : ''}`}
           style={{ borderColor: 'var(--border)', color: active === t.key ? 'var(--emerald)' : 'var(--textDim)' }}
         >
-          <t.icon size={16} />
+          <t.icon size={14} />
           <span className="font-mono text-[9px]">{t.fkey}</span>
-          <span className="font-mono text-[8px] uppercase tracking-wider">{t.label}</span>
+          <span className="font-mono text-[9px] uppercase tracking-wider hidden sm:inline">{t.label}</span>
         </button>
       ))}
+      <span className="ml-auto px-3 font-mono text-[9px] uppercase tracking-wider hidden md:inline whitespace-nowrap" style={{ color: 'var(--textFaint)' }}>
+        OMNICEE · Developed by James Yelbert
+      </span>
     </div>
   );
 }
@@ -1440,25 +1455,18 @@ export default function OmniceeDashboard() {
       <ThemeStyle />
       <TopBar now={feed.now} mode={feed.mode} onCommand={handleCommand} />
       <TickerTape prices={feed.prices} changes={feed.changes} flash={feed.flash} />
-      <div className="flex flex-1 min-h-0">
-        <Sidebar active={activeTab} onSelect={setActiveTab} />
-        <div className="flex-1 flex flex-col min-h-0">
-          <div className="flex-1 overflow-y-auto omni-scroll">
-            {activeTab === 'DASH' && <DashTab signals={feed.signals} equityCurve={feed.equityCurve} prices={feed.prices} changes={feed.changes} stats={feed.stats} mode={feed.mode} />}
-            {activeTab === 'SIGNALS' && <SignalsTab signals={feed.signals} />}
-            {activeTab === 'INTEL' && <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} />}
-            {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}
-            {activeTab === 'MONITOR' && <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} />}
-            {activeTab === 'HEAT' && <HeatTab heatmapTiles={feed.heatmapTiles} mode={feed.mode} />}
-            {activeTab === 'VALID' && <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} />}
-            {activeTab === 'TAPE' && <TapeTab signals={feed.signals} prices={feed.prices} />}
-            {activeTab === 'RISK' && <RiskTab prices={feed.prices} changes={feed.changes} stats={feed.stats} relativeStrength={feed.relativeStrength} mode={feed.mode} />}
-          </div>
-          <div className="flex items-center justify-center gap-2 py-1.5 border-t font-mono text-[9px] uppercase tracking-wider" style={{ borderColor: 'var(--border)', color: 'var(--textFaint)' }}>
-            <span>OMNICEE</span><span>·</span><span>Developed by James Yelbert</span>
-          </div>
-        </div>
+      <div className="flex-1 overflow-y-auto omni-scroll min-h-0">
+        {activeTab === 'DASH' && <DashTab signals={feed.signals} equityCurve={feed.equityCurve} prices={feed.prices} changes={feed.changes} stats={feed.stats} mode={feed.mode} />}
+        {activeTab === 'SIGNALS' && <SignalsTab signals={feed.signals} />}
+        {activeTab === 'INTEL' && <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} />}
+        {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}
+        {activeTab === 'MONITOR' && <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} />}
+        {activeTab === 'HEAT' && <HeatTab heatmapTiles={feed.heatmapTiles} mode={feed.mode} />}
+        {activeTab === 'VALID' && <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} />}
+        {activeTab === 'TAPE' && <TapeTab signals={feed.signals} prices={feed.prices} />}
+        {activeTab === 'RISK' && <RiskTab prices={feed.prices} changes={feed.changes} stats={feed.stats} relativeStrength={feed.relativeStrength} mode={feed.mode} />}
       </div>
+      <BottomNav active={activeTab} onSelect={setActiveTab} />
     </div>
   );
 }
