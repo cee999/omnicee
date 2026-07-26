@@ -12,10 +12,11 @@
  *  Modules inside this file:
  *
  *  1. QuotaManager
- *     - Twelve Data free/paid tiers have hard rate limits
- *       (e.g. 8 req/min on free tier). This tracks usage and
- *       throttles requests BEFORE hitting a 429, with a queue
- *       so nothing silently fails — slow is better than blocked.
+ *     - Tracks BOTH the per-minute rate limit (free tier: 8/min)
+ *       AND the per-day cap (free tier: 800/day). The per-minute
+ *       throttle alone is not enough — a live poll loop running
+ *       24/7 can stay perfectly within 8/min and still blow past
+ *       800/day in a couple of hours. See the daily-cap fix below.
  *
  *  2. TDCandleStore
  *     - Multi-symbol, multi-timeframe OHLCV store identical
@@ -51,6 +52,16 @@
  *  8. TwelveDataFeed (main class)
  *     - Same EventEmitter API shape as BinanceFeed/BybitFeed:
  *       'candle', 'candle_update', 'price', 'connected', etc.
+ *     - NEW: every configured timeframe now gets its own live
+ *       refresh cycle (previously only the single lowest
+ *       timeframe was ever re-checked after boot — H1/H4/D1
+ *       candles loaded once at preload and then silently went
+ *       stale for the life of the process).
+ *     - NEW: optional config.fallbackFeed (e.g. a FinnhubFeed
+ *       instance) is used for live candle data once the daily
+ *       Twelve Data quota is exhausted, instead of immediately
+ *       falling all the way back to a potentially many-hours-old
+ *       Mongo cache entry.
  * ============================================================
  */
 
@@ -75,22 +86,25 @@ const TIMEFRAMES = {
   D1: '1day', W1: '1week', MN: '1month',
 };
 
+// Minutes-per-candle for each timeframe — used to pace live polling to the
+// timeframe's own candle-close interval instead of a single fixed cadence.
+const TF_MINUTES = {
+  M1: 1, M5: 5, M15: 15, M30: 30,
+  H1: 60, H2: 120, H4: 240, H6: 360, H8: 480, H12: 720,
+  D1: 1440, W1: 10080,
+};
+
 const MAX_CANDLE_HISTORY = 500;
-// FIX: TwelveData's free tier caps at 8 API credits/minute. Each history
-// request costs 1 credit, and _preloadHistory() below was firing one
-// request per symbol/timeframe combo back-to-back with no pacing at all —
-// the "respecting quota" log message was aspirational, not actually
-// implemented. With 5+ symbols x 4 timeframes, that's 20+ requests fired
-// within seconds, blowing through the 8/minute cap almost immediately
-// (confirmed in production logs: "9 API credits were used... current
-// limit being 8" on request #9, seconds after boot). 8000ms between
-// requests keeps this safely under 8/minute (7.5/min) with margin.
 const HISTORY_LOAD_DELAY_MS = 8000;
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Free tier default — override via config.requestsPerMinute for paid tiers
+// Free tier defaults — override via config.requestsPerMinute /
+// config.requestsPerDay for paid tiers (paid tiers effectively have no
+// daily cap; pass a very large number, e.g. Infinity, to disable it).
 const DEFAULT_REQUESTS_PER_MINUTE = 8;
-const QUOTA_SAFETY_MARGIN = 0.85; // use only 85% of stated quota to leave headroom
+const DEFAULT_REQUESTS_PER_DAY = 800;
+const QUOTA_SAFETY_MARGIN = 0.85;       // per-minute: use 85% of stated quota
+const DAILY_SAFETY_MARGIN = 0.9;        // per-day: use 90%, leaving headroom for /quote calls etc.
 
 const RECONNECT_BASE_DELAY = 2000;
 const MAX_RECONNECT_ATTEMPTS = 20;
@@ -121,23 +135,30 @@ function httpGetJSON(url) {
 
 class QuotaManager {
   /**
-   * Tracks API call usage against a per-minute rate limit and queues
-   * requests so the feed degrades gracefully (slower updates) instead
-   * of throwing 429 errors and losing data entirely.
+   * Tracks API call usage against BOTH a per-minute rate limit and a
+   * per-day cap, and queues requests so the feed degrades gracefully
+   * instead of throwing 429s or (worse) silently exceeding a daily quota
+   * that doesn't reset for hours.
    */
-  constructor(requestsPerMinute = DEFAULT_REQUESTS_PER_MINUTE) {
+  constructor(requestsPerMinute = DEFAULT_REQUESTS_PER_MINUTE, requestsPerDay = DEFAULT_REQUESTS_PER_DAY) {
     this.limit = Math.floor(requestsPerMinute * QUOTA_SAFETY_MARGIN);
-    this._callLog = []; // timestamps of recent calls
+    this.dailyLimit = Number.isFinite(requestsPerDay)
+      ? Math.floor(requestsPerDay * DAILY_SAFETY_MARGIN)
+      : Infinity;
+    this._callLog = [];      // timestamps, last 60s
+    this._dailyCallLog = []; // timestamps, last 24h
     this._queue = [];
     this._processing = false;
   }
 
-  /**
-   * Returns true if a call can be made right now without exceeding quota.
-   */
   canCall() {
     this._prune();
-    return this._callLog.length < this.limit;
+    return this._callLog.length < this.limit && this._canCallToday();
+  }
+
+  _canCallToday() {
+    this._pruneDaily();
+    return this._dailyCallLog.length < this.dailyLimit;
   }
 
   _prune() {
@@ -145,12 +166,26 @@ class QuotaManager {
     this._callLog = this._callLog.filter(t => t > cutoff);
   }
 
+  _pruneDaily() {
+    const cutoff = Date.now() - 86400000;
+    this._dailyCallLog = this._dailyCallLog.filter(t => t > cutoff);
+  }
+
   /**
    * Schedule a function to run respecting quota. Returns a Promise that
-   * resolves with the function's result whenever quota allows execution.
+   * resolves with the function's result whenever quota allows execution,
+   * or rejects immediately (no queueing) if the DAILY quota is already
+   * exhausted — waiting for a reset that could be many hours away isn't
+   * useful for a live-polling loop, so callers get a fast, typed failure
+   * (err.tdCode === 'DAILY_QUOTA_EXCEEDED') and can fall back immediately.
    */
   schedule(fn) {
     return new Promise((resolve, reject) => {
+      if (!this._canCallToday()) {
+        const err = new Error('Twelve Data daily quota exhausted — request skipped');
+        err.tdCode = 'DAILY_QUOTA_EXCEEDED';
+        return reject(err);
+      }
       this._queue.push({ fn, resolve, reject });
       this._processQueue();
     });
@@ -161,8 +196,20 @@ class QuotaManager {
     this._processing = true;
 
     while (this._queue.length > 0) {
+      if (!this._canCallToday()) {
+        // Daily budget ran out while jobs were queued (e.g. several
+        // symbols queued back-to-back near the boundary) — fail the rest
+        // fast rather than hold them until tomorrow.
+        while (this._queue.length > 0) {
+          const job = this._queue.shift();
+          const err = new Error('Twelve Data daily quota exhausted — request skipped');
+          err.tdCode = 'DAILY_QUOTA_EXCEEDED';
+          job.reject(err);
+        }
+        break;
+      }
+
       if (!this.canCall()) {
-        // Wait until the oldest call ages out of the window
         const oldestCall = this._callLog[0];
         const waitMs = Math.max(0, 60000 - (Date.now() - oldestCall)) + 100;
         await new Promise(r => setTimeout(r, waitMs));
@@ -171,6 +218,7 @@ class QuotaManager {
 
       const job = this._queue.shift();
       this._callLog.push(Date.now());
+      this._dailyCallLog.push(Date.now());
 
       try {
         const result = await job.fn();
@@ -188,11 +236,15 @@ class QuotaManager {
 
   getStats() {
     this._prune();
+    this._pruneDaily();
     return {
       limit: this.limit,
       used: this._callLog.length,
       remaining: Math.max(0, this.limit - this._callLog.length),
       queueDepth: this._queue.length,
+      dailyLimit: this.dailyLimit,
+      dailyUsed: this._dailyCallLog.length,
+      dailyRemaining: Number.isFinite(this.dailyLimit) ? Math.max(0, this.dailyLimit - this._dailyCallLog.length) : Infinity,
     };
   }
 }
@@ -238,19 +290,10 @@ class TDCandleStore {
 // ─────────────────────────────────────────────
 
 class TDSymbolResolver {
-  /**
-   * Normalizes symbol formats. Twelve Data expects 'EUR/USD' for forex,
-   * 'AAPL' for stocks, 'SPX' style for indices. Our internal convention
-   * (matching binance-ws.js / bybit-ws.js) is 'EURUSD' (no slash).
-   */
   static toCanonical(symbol) {
     return symbol.replace('/', '').toUpperCase();
   }
 
-  /**
-   * Converts our canonical 'EURUSD' → Twelve Data's 'EUR/USD' for forex pairs.
-   * Stocks/indices pass through unchanged (no slash needed).
-   */
   static toTwelveDataFormat(symbol, assetType = null) {
     const type = assetType || this.inferType(symbol);
 
@@ -270,7 +313,7 @@ class TDSymbolResolver {
       return map[symbol] || symbol;
     }
 
-    return symbol; // stocks, indices pass through
+    return symbol;
   }
 
   static inferType(symbol) {
@@ -290,10 +333,6 @@ class TDSymbolResolver {
 // ─────────────────────────────────────────────
 
 class TDMarketStateEngine {
-  /**
-   * Knows when each market type is open so a "stale" quote can be
-   * correctly interpreted as "market closed" rather than "feed broken".
-   */
   static isOpen(symbol, timestamp) {
     const type = TDSymbolResolver.inferType(symbol);
     const d = new Date(timestamp || Date.now());
@@ -301,7 +340,6 @@ class TDMarketStateEngine {
     const utcHour = d.getUTCHours() + d.getUTCMinutes() / 60;
 
     if (type === 'forex' || type === 'commodity') {
-      // Forex: Sunday 21:00 UTC → Friday 21:00 UTC, 24h between
       const isFridayAfterClose = utcDay === 5 && utcHour >= 21;
       const isSaturday = utcDay === 6;
       const isSundayBeforeOpen = utcDay === 0 && utcHour < 21;
@@ -309,7 +347,6 @@ class TDMarketStateEngine {
     }
 
     if (type === 'stock' || type === 'index') {
-      // Approximate US market hours: 13:30-20:00 UTC, Mon-Fri (ignores holidays)
       const isWeekday = utcDay >= 1 && utcDay <= 5;
       const inHours = utcHour >= 13.5 && utcHour < 20;
       return {
@@ -327,13 +364,8 @@ class TDMarketStateEngine {
 // ─────────────────────────────────────────────
 
 class TDEarningsCalendar {
-  /**
-   * Company-specific earnings dates — distinct from session-filter.js's
-   * macro economic calendar. A single stock can gap 10%+ around earnings
-   * regardless of broader market conditions.
-   */
   constructor() {
-    this._earnings = new Map(); // symbol → { date, time: 'BMO'|'AMC', estimate, actual }
+    this._earnings = new Map();
   }
 
   set(symbol, earningsData) {
@@ -344,9 +376,6 @@ class TDEarningsCalendar {
     return this._earnings.get(symbol.toUpperCase()) || null;
   }
 
-  /**
-   * Is this symbol within N days of its next earnings date?
-   */
   isNearEarnings(symbol, daysWindow = 2) {
     const data = this.get(symbol);
     if (!data?.date) return { near: false };
@@ -388,18 +417,11 @@ class TDEarningsCalendar {
 // ─────────────────────────────────────────────
 
 class TDRESTPoller {
-  /**
-   * @param {string} apiKey
-   * @param {QuotaManager} quotaManager
-   */
   constructor(apiKey, quotaManager) {
     this.apiKey = apiKey;
     this.quota = quotaManager;
   }
 
-  /**
-   * Fetch historical time series. Respects quota via scheduling.
-   */
   async fetchTimeSeries(symbol, interval, outputsize = 500) {
     return this.quota.schedule(async () => {
       const tdSymbol = TDSymbolResolver.toTwelveDataFormat(symbol);
@@ -408,7 +430,7 @@ class TDRESTPoller {
 
       if (result.status === 'error') {
         const err = new Error(`Twelve Data error for ${symbol}: ${result.message}`);
-        err.tdCode = result.code; // 429 = rate limit exceeded — let callers detect this reliably
+        err.tdCode = result.code; // 429 = rate limit exceeded
         throw err;
       }
 
@@ -423,9 +445,6 @@ class TDRESTPoller {
     });
   }
 
-  /**
-   * Fetch a real-time quote (used for polling fallback when WS unavailable)
-   */
   async fetchQuote(symbol) {
     return this.quota.schedule(async () => {
       const tdSymbol = TDSymbolResolver.toTwelveDataFormat(symbol);
@@ -446,17 +465,12 @@ class TDRESTPoller {
     });
   }
 
-  /**
-   * Batch multiple symbols in a single request where Twelve Data supports it
-   * (comma-separated symbol param) — saves quota vs N individual calls.
-   */
   async fetchBatchQuotes(symbols) {
     return this.quota.schedule(async () => {
       const tdSymbols = symbols.map(s => TDSymbolResolver.toTwelveDataFormat(s));
       const url = `${TD_REST_BASE}/quote?symbol=${encodeURIComponent(tdSymbols.join(','))}&apikey=${this.apiKey}`;
       const result = await httpGetJSON(url);
 
-      // Single symbol returns object directly; multi returns keyed by symbol
       if (symbols.length === 1) {
         return { [symbols[0]]: result };
       }
@@ -470,11 +484,6 @@ class TDRESTPoller {
 // ─────────────────────────────────────────────
 
 class TDWebSocketEngine extends EventEmitter {
-  /**
-   * Real-time price WebSocket — available on paid Twelve Data plans.
-   * If WS connection fails repeatedly (e.g. free-tier account), the
-   * parent TwelveDataFeed automatically falls back to REST polling.
-   */
   constructor(apiKey, symbols) {
     super();
     this.apiKey = apiKey;
@@ -517,7 +526,6 @@ class TDWebSocketEngine extends EventEmitter {
       this._stopHeartbeat();
       this.emit('close', { code });
 
-      // If we get a paid-tier-required style close, signal fallback
       if (code === 1008 || code === 4001) {
         this.emit('unavailable', { reason: 'WebSocket requires paid plan or invalid auth' });
         return;
@@ -584,12 +592,6 @@ class TDWebSocketEngine extends EventEmitter {
 //  8. MAIN TWELVE DATA FEED CLASS
 // ─────────────────────────────────────────────
 
-// How fresh Mongo-stored candle history needs to be, per timeframe, to
-// skip re-fetching from the API entirely on boot. Roughly 2x each
-// timeframe's own candle-close interval — stale enough data still gets a
-// normal fetch (and gets persisted fresh afterward), but data from a
-// recent restart (the common case on a Render free-tier instance cycling
-// through spin-down/wake-up) is reused directly.
 const CANDLE_FRESHNESS_MS = {
   M1: 2 * 60000, M5: 10 * 60000, M15: 30 * 60000, M30: 60 * 60000,
   H1: 2 * 3600000, H2: 4 * 3600000, H4: 8 * 3600000, H6: 12 * 3600000,
@@ -602,10 +604,15 @@ class TwelveDataFeed extends EventEmitter {
    * @param {string}   config.apiKey            - Twelve Data API key (required)
    * @param {string[]} config.symbols           - e.g. ['EURUSD','GBPUSD','AAPL','XAUUSD']
    * @param {string[]} config.timeframes        - e.g. ['M15','H1','H4','D1']
-   * @param {number}   config.requestsPerMinute - your plan's rate limit (default 8 = free tier)
+   * @param {number}   config.requestsPerMinute - your plan's per-minute limit (default 8 = free tier)
+   * @param {number}   config.requestsPerDay    - your plan's daily cap (default 800 = free tier; pass Infinity for paid/uncapped)
    * @param {boolean}  config.useWebSocket      - attempt WS first (default true, auto-falls back)
    * @param {number}   config.pollIntervalMs    - REST poll interval when WS unavailable (default 15000)
    * @param {boolean}  config.trackEarnings     - fetch earnings calendar for stock symbols
+   * @param {Object}   config.fallbackFeed      - optional secondary feed (e.g. FinnhubFeed instance)
+   *                                               exposing getLatestCandles(symbol, tf, count) — used
+   *                                               for live candle data once the daily quota is exhausted,
+   *                                               before falling back to a stale Mongo cache entry.
    */
   constructor(config = {}) {
     super();
@@ -621,37 +628,28 @@ class TwelveDataFeed extends EventEmitter {
     this.pollIntervalMs = config.pollIntervalMs || 15000;
     this.trackEarnings = config.trackEarnings ?? false;
 
-    this.quota       = new QuotaManager(config.requestsPerMinute || DEFAULT_REQUESTS_PER_MINUTE);
+    this.quota       = new QuotaManager(
+      config.requestsPerMinute || DEFAULT_REQUESTS_PER_MINUTE,
+      config.requestsPerDay !== undefined ? config.requestsPerDay : DEFAULT_REQUESTS_PER_DAY,
+    );
     this.candleStore = new TDCandleStore();
     this.poller      = new TDRESTPoller(this.apiKey, this.quota);
     this.earnings    = new TDEarningsCalendar();
-    // Optional — enables persisting/restoring candle history across
-    // restarts so boot doesn't need to re-fetch everything from this
-    // rate-limited feed every single time. No-ops safely if not provided
-    // or if MONGODB_URI isn't configured (db.js's own functions already
-    // handle that).
     this.db = config.db || null;
+    this.fallbackFeed = config.fallbackFeed || null;
 
     this._prices = new Map();
     this._prevPrices = new Map();
     this._wsEngine = null;
     this._pollTimer = null;
-    this._candlePollTimer = null;
+    this._candlePollTimers = {}; // one per timeframe now, keyed by tf
     this._usingWS = false;
+    this._dailyExhaustedNotified = false;
+    this._quotaResetDay = null;
 
-    this._stats = { quotesReceived: 0, candlesEmitted: 0, errorsCount: 0, startTime: null, mode: 'UNINITIALIZED' };
+    this._stats = { quotesReceived: 0, candlesEmitted: 0, errorsCount: 0, fallbackCandlesUsed: 0, startTime: null, mode: 'UNINITIALIZED' };
   }
 
-  // FIX: DataIntegrityMonitor.check() (feeds/data-integrity-monitor.js) calls
-  // instance.isConnected() on whatever it was registered with — but the
-  // registered instance is TwelveDataFeed, and the only isConnected() in
-  // this file lived on the internal TDWebSocketEngine class instead, never
-  // exposed here. `typeof instance.isConnected === 'function'` was false,
-  // so every check silently fell through to connected: null, which the
-  // frontend renders as literally "UNKNOWN" — regardless of whether the
-  // feed was actually connected, disconnected, or never even started.
-  // Reflects whichever live mode is actually active: real WebSocket
-  // (paid tier) or the REST-poll fallback (free tier, this.pollIntervalMs).
   isConnected() {
     if (this._wsEngine) return this._wsEngine.isConnected();
     return Boolean(this._pollTimer);
@@ -683,41 +681,9 @@ class TwelveDataFeed extends EventEmitter {
 
   async _preloadHistory() {
     console.log(`[TwelveDataFeed] Preloading historical candles (respecting free-tier quota — ~${HISTORY_LOAD_DELAY_MS / 1000}s between requests, this will take a few minutes)...`);
-    // Two complementary fixes here, found independently from the same
-    // production rate-limit errors:
-    //
-    // 1. THROTTLE (below, via sleep(HISTORY_LOAD_DELAY_MS)): nothing here
-    //    used to pace requests at all — with 5+ symbols x 4 timeframes,
-    //    20+ requests fired within seconds of boot, blowing through the
-    //    free tier's 8-credits/minute cap almost immediately (confirmed in
-    //    production logs: request #9 already over the limit).
-    //
-    // 2. RETRY-AFTER-RESET (_retryAfterQuotaReset below): rapid redeploys
-    //    are common during active development (this app's own render.yaml
-    //    auto-deploys on every commit), and QuotaManager's per-minute call
-    //    log is in-memory only — a fresh process starts with an empty log
-    //    even though Twelve Data's own server-side per-minute counter for
-    //    this API key does NOT reset on restart. A new process can
-    //    therefore believe it has full budget while the account is
-    //    actually already near/over the real limit from calls the
-    //    previous process just made. The throttle above prevents most of
-    //    this, but can't know about quota consumed by a different,
-    //    already-exited process — so anything that still fails on a 429
-    //    gets one background retry ~65s later, once the real per-minute
-    //    window has actually rolled over, rather than being abandoned
-    //    permanently.
     let isFirst = true;
     for (const symbol of this.symbols) {
       for (const tf of this.timeframes) {
-        // FIX: check Mongo BEFORE touching the API at all. If we have
-        // fresh-enough persisted history from a previous run (very common
-        // on a Render free-tier instance that just cycled through a
-        // spin-down/wake-up), use it directly — zero API credits spent,
-        // zero throttle delay needed. This is the actual fix for "always
-        // running out of TwelveData/AlphaVantage keys": the API usage
-        // itself was already correctly throttled (see below), but every
-        // restart still needed a FULL re-fetch of everything because
-        // nothing persisted history across restarts at all.
         if (this.db) {
           try {
             const stored = await this.db.loadCandleHistory('twelvedata', symbol, tf);
@@ -733,9 +699,6 @@ class TwelveDataFeed extends EventEmitter {
           } catch (_) { /* Mongo read failed — fall through to normal API fetch */ }
         }
 
-        // FIX: this delay is the actual fix — previously nothing here
-        // paced requests at all, so the free tier's 8-credits/minute cap
-        // was blown through in the first ~10 seconds of boot.
         if (!isFirst) await sleep(HISTORY_LOAD_DELAY_MS);
         isFirst = false;
 
@@ -748,6 +711,12 @@ class TwelveDataFeed extends EventEmitter {
         } catch (err) {
           console.error(`[TwelveDataFeed] History load failed ${symbol} ${tf}: ${err.message}`);
           this._stats.errorsCount++;
+          if (err.tdCode === 'DAILY_QUOTA_EXCEEDED') {
+            // Budget's gone for the day — whatever's already in the candle
+            // store (Mongo-restored or from an earlier symbol/tf this same
+            // boot) stands until reset. Retrying won't help.
+            continue;
+          }
           if (err.tdCode === 429 || /run out of API credits/i.test(err.message)) {
             this._retryAfterQuotaReset(symbol, tf, interval);
           }
@@ -757,12 +726,6 @@ class TwelveDataFeed extends EventEmitter {
     console.log(`[TwelveDataFeed] Preload complete. Total candles: ${this.candleStore.size()}`);
   }
 
-  // Fire-and-forget: not awaited by _preloadHistory(), so it never delays
-  // connect() or anything sequenced after it. One retry only — if the
-  // real per-minute window is still exhausted 65s later (e.g. something
-  // else is also actively consuming this same account's quota), give up
-  // for that symbol/timeframe rather than retrying indefinitely; it will
-  // still pick up live data going forward.
   _retryAfterQuotaReset(symbol, tf, interval) {
     setTimeout(async () => {
       try {
@@ -806,7 +769,7 @@ class TwelveDataFeed extends EventEmitter {
   }
 
   _startRESTPolling() {
-    if (this._pollTimer) return; // already polling
+    if (this._pollTimer) return;
     this._stats.mode = 'REST_POLL';
     console.log(`[TwelveDataFeed] Starting REST polling every ${this.pollIntervalMs}ms`);
 
@@ -829,71 +792,110 @@ class TwelveDataFeed extends EventEmitter {
     this._pollTimer = setInterval(poll, this.pollIntervalMs);
   }
 
+  // FIX: previously only ever scheduled a poll cycle for the single
+  // LOWEST configured timeframe — H1/H4/D1 candles were loaded once at
+  // _preloadHistory() and then never updated again for the life of the
+  // process, regardless of how long it ran. Every configured timeframe
+  // now gets its own self-rescheduling cycle, each paced to roughly 1/3
+  // of ITS OWN candle-close interval (frequent enough to catch a close
+  // promptly, without re-checking a candle that can't possibly have
+  // changed yet — the previous fixed 60s cadence checked a 15-minute
+  // candle ~15x more often than necessary, and never checked H1/H4/D1
+  // at all after boot).
   _startCandlePolling() {
-    // Poll for new candle closes every minute, checking only the lowest
-    // (fastest-updating) configured timeframe — higher timeframes close far
-    // less often (an H4 candle only closes every 4 hours) so re-checking
-    // them every 60s is both wasteful and, on a rate-limited free tier,
-    // actively harmful.
-    // FIX: the comment above already said "checks the lowest configured
-    // TF", but the code below looped over ALL of this.timeframes — a real
-    // mismatch between stated intent and implementation. Combined with zero
-    // throttling between requests, this meant every single 60-second cycle
-    // fired one request per symbol PER timeframe, back-to-back — with 5+
-    // symbols x 4 timeframes, ~20 requests every minute, permanently
-    // blowing through TwelveData's free-tier 8-credits/minute cap on every
-    // cycle for as long as the app runs (not just once at boot, unlike
-    // _preloadHistory() above). Now: only the fastest timeframe is checked,
-    // and remaining per-symbol requests are paced.
-    const TF_ORDER = ['M1','M5','M15','M30','H1','H2','H4','H6','H8','H12','D1','W1'];
-    const lowestTf = [...this.timeframes].sort((a, b) => TF_ORDER.indexOf(a) - TF_ORDER.indexOf(b))[0];
-    if (!lowestTf) return;
+    for (const tf of this.timeframes) {
+      this._scheduleTimeframePoll(tf);
+    }
+  }
 
-    const checkIntervalMs = 60000;
+  _checkDailyReset() {
+    const today = new Date().toISOString().slice(0, 10);
+    if (this._quotaResetDay !== today) {
+      this._quotaResetDay = today;
+      this._dailyExhaustedNotified = false;
+    }
+  }
+
+  _scheduleTimeframePoll(tf) {
+    const tfMinutes = TF_MINUTES[tf] || 15;
+    // Floor of 60s so we never poll faster than once/minute even for M1.
+    const checkIntervalMs = Math.max(60000, Math.round((tfMinutes * 60000) / 3));
+
     const runCycle = async () => {
+      this._checkDailyReset();
       let isFirst = true;
       for (const symbol of this.symbols) {
         if (!isFirst) await sleep(HISTORY_LOAD_DELAY_MS);
         isFirst = false;
 
         try {
-          const interval = TIMEFRAMES[lowestTf] || lowestTf;
+          const interval = TIMEFRAMES[tf] || tf;
           const recent = await this.poller.fetchTimeSeries(symbol, interval, 2);
-          if (recent.length === 0) continue;
-
-          const latest = recent[recent.length - 1];
-          const existing = this.candleStore.get(symbol, lowestTf);
-          const lastStored = existing[existing.length - 1];
-
-          const isNew = !lastStored || latest.timestamp > lastStored.timestamp;
-          const candles = this.candleStore.upsert(symbol, lowestTf, latest);
-
-          this.emit('candle_update', { symbol, timeframe: lowestTf, candle: latest, candles, isClosed: true });
-
-          if (isNew) {
-            this._stats.candlesEmitted++;
-            if (this.db) this.db.saveCandleHistory('twelvedata', symbol, lowestTf, candles).catch(() => {});
-            this.emit('candle', {
-              symbol, timeframe: lowestTf, candle: latest, candles: [...candles],
-              marketState: TDMarketStateEngine.isOpen(symbol, Date.now()),
-              earningsProximity: this.trackEarnings ? this.earnings.isNearEarnings(symbol) : null,
-              timestamp: Date.now(),
-            });
-          }
+          this._applyLiveCandle(symbol, tf, recent, 'twelvedata');
         } catch (err) {
           this._stats.errorsCount++;
-          // Don't spam errors for every symbol — log once per cycle is enough context
+
+          if (err.tdCode === 'DAILY_QUOTA_EXCEEDED') {
+            if (!this._dailyExhaustedNotified) {
+              console.warn(`[TwelveDataFeed] Daily quota exhausted — ${this.fallbackFeed ? 'using fallback feed for live candles where possible, ' : ''}serving last-known candles otherwise until reset.`);
+              this._dailyExhaustedNotified = true;
+              this.emit('quota_exhausted', { provider: 'twelvedata', timestamp: Date.now() });
+            }
+            await this._tryFallbackCandle(symbol, tf);
+          }
+          // Non-daily errors (429 per-minute, network blip, etc.) — the
+          // next cycle will simply try again; no need to spam logs per
+          // symbol per cycle for a transient issue.
         }
       }
-      // Self-rescheduling rather than setInterval: guarantees the next
-      // cycle only starts checkIntervalMs after THIS one (including all its
-      // internal per-symbol delays) fully finishes, regardless of symbol
-      // count — setInterval would fire on a fixed clock and could overlap
-      // with a still-running previous cycle once there are enough symbols
-      // for the throttled loop to exceed 60s on its own.
-      this._candlePollTimer = setTimeout(runCycle, checkIntervalMs);
+      this._candlePollTimers[tf] = setTimeout(runCycle, checkIntervalMs);
     };
-    this._candlePollTimer = setTimeout(runCycle, checkIntervalMs);
+
+    this._candlePollTimers[tf] = setTimeout(runCycle, checkIntervalMs);
+  }
+
+  async _tryFallbackCandle(symbol, tf) {
+    if (!this.fallbackFeed || typeof this.fallbackFeed.getLatestCandles !== 'function') return;
+    try {
+      const recent = await this.fallbackFeed.getLatestCandles(symbol, tf, 2);
+      if (recent && recent.length) {
+        this._stats.fallbackCandlesUsed++;
+        this._applyLiveCandle(symbol, tf, recent, 'finnhub_fallback');
+      }
+    } catch (_) {
+      // Fallback is best-effort — failure here just means we keep
+      // whatever's already in the candle store (Mongo/last-known).
+    }
+  }
+
+  // Shared by both the primary Twelve Data poll and the fallback path so
+  // candle-store update / event-emit logic isn't duplicated between them.
+  // `source` is tagged onto the emitted event so downstream consumers can
+  // tell the difference between a primary-feed candle and a fallback one
+  // if data-source confidence matters to them.
+  _applyLiveCandle(symbol, tf, recentCandles, source) {
+    if (!recentCandles || recentCandles.length === 0) return;
+
+    const latest = recentCandles[recentCandles.length - 1];
+    const existing = this.candleStore.get(symbol, tf);
+    const lastStored = existing[existing.length - 1];
+
+    const isNew = !lastStored || latest.timestamp > lastStored.timestamp;
+    const candles = this.candleStore.upsert(symbol, tf, latest);
+
+    this.emit('candle_update', { symbol, timeframe: tf, candle: latest, candles, isClosed: true, source });
+
+    if (isNew) {
+      this._stats.candlesEmitted++;
+      if (this.db) this.db.saveCandleHistory('twelvedata', symbol, tf, candles).catch(() => {});
+      this.emit('candle', {
+        symbol, timeframe: tf, candle: latest, candles: [...candles],
+        marketState: TDMarketStateEngine.isOpen(symbol, Date.now()),
+        earningsProximity: this.trackEarnings ? this.earnings.isNearEarnings(symbol) : null,
+        timestamp: Date.now(),
+        source, // 'twelvedata' | 'finnhub_fallback'
+      });
+    }
   }
 
   _handlePrice(data) {
@@ -933,7 +935,10 @@ class TwelveDataFeed extends EventEmitter {
     console.log('[TwelveDataFeed] Disconnecting...');
     if (this._wsEngine) this._wsEngine.close();
     if (this._pollTimer) clearInterval(this._pollTimer);
-    if (this._candlePollTimer) clearInterval(this._candlePollTimer);
+    for (const timer of Object.values(this._candlePollTimers)) {
+      clearTimeout(timer);
+    }
+    this._candlePollTimers = {};
     this.emit('closed');
   }
 }
@@ -945,7 +950,7 @@ class TwelveDataFeed extends EventEmitter {
 module.exports = {
   TwelveDataFeed, QuotaManager, TDCandleStore, TDSymbolResolver,
   TDMarketStateEngine, TDEarningsCalendar, TDRESTPoller, TDWebSocketEngine,
-  TIMEFRAMES,
+  TIMEFRAMES, TF_MINUTES,
 };
 
 /**
@@ -954,28 +959,40 @@ module.exports = {
  * ─────────────────────────────────────────────
  *
  *  const { TwelveDataFeed } = require('./feeds/twelve-data');
+ *  const { FinnhubFeed } = require('./feeds/finnhub-feed');
+ *
+ *  const finnhub = new FinnhubFeed({ apiKey: process.env.FINNHUB_API_KEY });
  *
  *  const feed = new TwelveDataFeed({
  *    apiKey: process.env.TWELVE_DATA_API_KEY,
  *    symbols: ['EURUSD', 'GBPUSD', 'XAUUSD', 'AAPL'],
- *    timeframes: ['M15', 'H1', 'H4'],
- *    requestsPerMinute: 8,     // free tier — raise if you upgrade
- *    useWebSocket: true,       // auto-falls back to REST if not on a paid plan
- *    trackEarnings: true,      // fetches earnings dates for AAPL
+ *    timeframes: ['M15', 'H1', 'H4', 'D1'],
+ *    requestsPerMinute: 8,       // free tier — raise if you upgrade
+ *    requestsPerDay: 800,        // free tier — pass Infinity on a paid/uncapped plan
+ *    useWebSocket: true,         // auto-falls back to REST if not on a paid plan
+ *    trackEarnings: true,        // fetches earnings dates for AAPL
+ *    fallbackFeed: finnhub,      // used for live candles once daily quota is hit
  *  });
  *
- *  feed.on('candle', ({ symbol, timeframe, candles, earningsProximity }) => {
+ *  feed.on('candle', ({ symbol, timeframe, candles, source, earningsProximity }) => {
  *    if (earningsProximity?.near) console.log(earningsProximity.note);
+ *    if (source === 'finnhub_fallback') console.log(`${symbol} ${timeframe}: served from fallback feed`);
  *    // → pass candles to smc-agent.js / mtf-agent.js
  *  });
  *
+ *  feed.on('quota_exhausted', ({ provider }) => {
+ *    // e.g. surface a banner in the dashboard — see api/server.js's
+ *    // existing feed_health / abnormal_market forward() pattern for how
+ *    // to relay this over the socket if you want it visible live.
+ *  });
+ *
  *  feed.on('price', ({ symbol, price, marketState }) => {
- *    if (!marketState.open) return; // expected — market closed, not a feed error
+ *    if (!marketState.open) return;
  *    console.log(`${symbol}: ${price}`);
  *  });
  *
  *  await feed.connect();
  *
- *  console.log(feed.getStats().quota); // { limit, used, remaining, queueDepth }
+ *  console.log(feed.getStats().quota); // { limit, used, remaining, dailyLimit, dailyUsed, dailyRemaining, queueDepth }
  * ─────────────────────────────────────────────
  */
