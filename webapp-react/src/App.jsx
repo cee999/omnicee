@@ -482,17 +482,17 @@ function TopBar({ now, mode, onCommand }) {
     demo: { label: 'Demo Data', color: 'var(--textDim)', pulse: false },
   }[mode] || { label: 'Offline', color: 'var(--coral)', pulse: false };
   return (
-    <div className="flex items-center gap-4 px-4 py-2.5 border-b" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
+    <div className="flex flex-wrap items-center gap-2 sm:gap-4 px-3 sm:px-4 py-2 sm:py-2.5 border-b" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
       <div className="flex items-center gap-2">
-        <div className="w-6 h-6 rounded flex items-center justify-center font-display text-[11px] font-bold"
+        <div className="w-6 h-6 rounded flex items-center justify-center font-display text-[11px] font-bold shrink-0"
           style={{ background: 'var(--emerald)', color: '#05070a' }}>Ω</div>
         <span className="font-display text-sm tracking-[0.15em]" style={{ color: 'var(--text)' }}>OMNICEE</span>
       </div>
-      <span className="font-mono text-[10px] uppercase tracking-widest hidden sm:inline" style={{ color: 'var(--textFaint)' }}>
+      <span className="font-mono text-[10px] uppercase tracking-widest hidden lg:inline" style={{ color: 'var(--textFaint)' }}>
         Institutional Signal Terminal
       </span>
-      <div className="flex-1 flex items-center gap-2 max-w-md">
-        <Terminal size={13} style={{ color: 'var(--gold)' }} />
+      <div className="order-3 sm:order-none w-full sm:w-auto flex items-center gap-2 sm:flex-1 sm:max-w-md">
+        <Terminal size={13} style={{ color: 'var(--gold)', flexShrink: 0 }} />
         <input
           value={cmd}
           onChange={e => setCmd(e.target.value)}
@@ -502,13 +502,13 @@ function TopBar({ now, mode, onCommand }) {
           style={{ color: 'var(--gold)', borderBottom: '1px solid var(--border)' }}
         />
       </div>
-      <div className="flex items-center gap-3 ml-auto">
-        <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase" style={{ color: status.color }}>
+      <div className="flex items-center gap-2 sm:gap-3 ml-auto shrink-0">
+        <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase whitespace-nowrap" style={{ color: status.color }}>
           <Circle size={7} fill="currentColor" className={status.pulse ? 'omni-pulse' : ''} />
           {status.label}
         </span>
         <span className="font-mono text-[11px] hidden md:inline" style={{ color: 'var(--textDim)' }}>{date}</span>
-        <span className="font-mono text-[12px] font-semibold" style={{ color: 'var(--text)' }}>{time} UTC</span>
+        <span className="font-mono text-[12px] font-semibold whitespace-nowrap" style={{ color: 'var(--text)' }}>{time} UTC</span>
       </div>
     </div>
   );
@@ -539,15 +539,15 @@ function BottomNav({ active, onSelect }) {
         <button
           key={t.key}
           onClick={() => onSelect(t.key)}
-          className={`flex items-center gap-1.5 px-3 py-2 border-r shrink-0 transition-colors ${active === t.key ? 'omni-tab-active' : ''}`}
-          style={{ borderColor: 'var(--border)', color: active === t.key ? 'var(--emerald)' : 'var(--textDim)' }}
+          className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-2.5 sm:py-2 border-r shrink-0 transition-colors ${active === t.key ? 'omni-tab-active' : ''}`}
+          style={{ borderColor: 'var(--border)', color: active === t.key ? 'var(--emerald)' : 'var(--textDim)', minWidth: 44 }}
         >
-          <t.icon size={14} />
-          <span className="font-mono text-[9px]">{t.fkey}</span>
-          <span className="font-mono text-[9px] uppercase tracking-wider hidden sm:inline">{t.label}</span>
+          <t.icon size={16} />
+          <span className="font-mono text-[9px] hidden sm:inline">{t.fkey}</span>
+          <span className="font-mono text-[9px] uppercase tracking-wider hidden md:inline">{t.label}</span>
         </button>
       ))}
-      <span className="ml-auto px-3 font-mono text-[9px] uppercase tracking-wider hidden md:inline whitespace-nowrap" style={{ color: 'var(--textFaint)' }}>
+      <span className="ml-auto px-3 font-mono text-[9px] uppercase tracking-wider hidden lg:inline whitespace-nowrap" style={{ color: 'var(--textFaint)' }}>
         OMNICEE · Developed by James Yelbert
       </span>
     </div>
@@ -653,18 +653,19 @@ function SignalsTab({ signals }) {
         </div>
       </div>
 
-      <div className="omni-panel overflow-hidden">
-        <div className="grid grid-cols-[70px_46px_44px_44px_1fr_1fr_1fr_70px_50px] gap-2 px-3 py-2 font-mono text-[9px] uppercase tracking-wider border-b" style={{ color: 'var(--textFaint)', borderColor: 'var(--border)' }}>
-          <span>Symbol</span><span>TF</span><span>Dir</span><span>Grade</span><span>Entry</span><span>Stop</span><span>Targets</span><span>Gate</span><span>Age</span>
-        </div>
-        <div className="max-h-[520px] overflow-y-auto omni-scroll">
-          {filtered.map(s => (
-            <div key={s.id}>
-              <div onClick={() => setExpanded(expanded === s.id ? null : s.id)}
-                className="omni-row grid grid-cols-[70px_46px_44px_44px_1fr_1fr_1fr_70px_50px] gap-2 px-3 py-2 font-mono text-[11px] cursor-pointer border-b items-center"
-                style={{ borderColor: 'var(--border)' }}>
-                <span style={{ color: 'var(--text)' }}>{s.symbol}</span>
-                <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
+      <div className="omni-panel overflow-x-auto omni-scroll">
+        <div className="min-w-[640px]">
+          <div className="grid grid-cols-[70px_46px_44px_44px_1fr_1fr_1fr_70px_50px] gap-2 px-3 py-2 font-mono text-[9px] uppercase tracking-wider border-b" style={{ color: 'var(--textFaint)', borderColor: 'var(--border)' }}>
+            <span>Symbol</span><span>TF</span><span>Dir</span><span>Grade</span><span>Entry</span><span>Stop</span><span>Targets</span><span>Gate</span><span>Age</span>
+          </div>
+          <div className="max-h-[520px] overflow-y-auto omni-scroll">
+            {filtered.map(s => (
+              <div key={s.id}>
+                <div onClick={() => setExpanded(expanded === s.id ? null : s.id)}
+                  className="omni-row grid grid-cols-[70px_46px_44px_44px_1fr_1fr_1fr_70px_50px] gap-2 px-3 py-2 font-mono text-[11px] cursor-pointer border-b items-center"
+                  style={{ borderColor: 'var(--border)' }}>
+                  <span style={{ color: 'var(--text)' }}>{s.symbol}</span>
+                  <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
                 <span style={{ color: s.action === 'BUY' ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
                 <span style={{ color: 'var(--gold)' }}>{gradeFor(s.score)}</span>
                 <span style={{ color: 'var(--textDim)' }}>{fmtPrice(s.symbol, s.entry)}</span>
@@ -744,6 +745,7 @@ function SignalsTab({ signals }) {
               )}
             </div>
           ))}
+          </div>
         </div>
       </div>
     </div>
@@ -1304,21 +1306,25 @@ function TapeTab({ signals, prices }) {
       </div>
       <div className="omni-panel overflow-hidden">
         <SectionHeader icon={ScrollText} title="Execution Tape" sub="via MT5 EA bridge (OmniceeEA.mq5)" />
-        <div className="grid grid-cols-[70px_46px_44px_1fr_1fr_60px_60px] gap-2 px-3 py-2 font-mono text-[9px] uppercase tracking-wider border-b border-t" style={{ color: 'var(--textFaint)', borderColor: 'var(--border)' }}>
-          <span>Symbol</span><span>TF</span><span>Dir</span><span>Fill</span><span>Signal</span><span>P/L (R)</span><span>Status</span>
-        </div>
-        <div className="max-h-96 overflow-y-auto omni-scroll">
-          {executions.map(e => (
-            <div key={e.id} className="omni-row grid grid-cols-[70px_46px_44px_1fr_1fr_60px_60px] gap-2 px-3 py-2 font-mono text-[11px] border-b items-center" style={{ borderColor: 'var(--border)' }}>
-              <span style={{ color: 'var(--text)' }}>{e.symbol}</span>
-              <span style={{ color: 'var(--textDim)' }}>{e.timeframe}</span>
-              <span style={{ color: e.action === 'BUY' ? 'var(--emerald)' : 'var(--coral)' }}>{e.action}</span>
-              <span style={{ color: 'var(--textDim)' }}>{fmtPrice(e.symbol, e.fillPrice)}</span>
-              <span style={{ color: 'var(--textFaint)' }}>{e.id}</span>
-              <span style={{ color: e.pnlR == null ? 'var(--textFaint)' : e.pnlR >= 0 ? 'var(--emerald)' : 'var(--coral)' }}>{e.pnlR == null ? '—' : e.pnlR}</span>
-              <Pill tone={e.closed ? (e.pnlR >= 0 ? 'up' : 'down') : 'info'}>{e.closed ? 'closed' : 'open'}</Pill>
+        <div className="overflow-x-auto omni-scroll">
+          <div className="min-w-[560px]">
+            <div className="grid grid-cols-[70px_46px_44px_1fr_1fr_60px_60px] gap-2 px-3 py-2 font-mono text-[9px] uppercase tracking-wider border-b border-t" style={{ color: 'var(--textFaint)', borderColor: 'var(--border)' }}>
+              <span>Symbol</span><span>TF</span><span>Dir</span><span>Fill</span><span>Signal</span><span>P/L (R)</span><span>Status</span>
             </div>
-          ))}
+            <div className="max-h-96 overflow-y-auto omni-scroll">
+              {executions.map(e => (
+                <div key={e.id} className="omni-row grid grid-cols-[70px_46px_44px_1fr_1fr_60px_60px] gap-2 px-3 py-2 font-mono text-[11px] border-b items-center" style={{ borderColor: 'var(--border)' }}>
+                  <span style={{ color: 'var(--text)' }}>{e.symbol}</span>
+                  <span style={{ color: 'var(--textDim)' }}>{e.timeframe}</span>
+                  <span style={{ color: e.action === 'BUY' ? 'var(--emerald)' : 'var(--coral)' }}>{e.action}</span>
+                  <span style={{ color: 'var(--textDim)' }}>{fmtPrice(e.symbol, e.fillPrice)}</span>
+                  <span style={{ color: 'var(--textFaint)' }}>{e.id}</span>
+                  <span style={{ color: e.pnlR == null ? 'var(--textFaint)' : e.pnlR >= 0 ? 'var(--emerald)' : 'var(--coral)' }}>{e.pnlR == null ? '—' : e.pnlR}</span>
+                  <Pill tone={e.closed ? (e.pnlR >= 0 ? 'up' : 'down') : 'info'}>{e.closed ? 'closed' : 'open'}</Pill>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     </div>
