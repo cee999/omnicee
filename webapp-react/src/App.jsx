@@ -9,8 +9,9 @@ import {
   TrendingUp, CheckCircle2, XCircle,
   Circle, Clock, Zap, Database, Cpu, ArrowUpRight,
   ArrowDownRight, Terminal, Newspaper, Gauge as GaugeIcon,
-  Layers, Target, DollarSign,
+  Layers, Target, DollarSign, Wifi, X,
 } from 'lucide-react';
+import { connectOmniceeSocket } from './lib/api';
 
 /* ────────────────────────────────────────────────────────────────────────
    OMNICEE // INSTITUTIONAL SIGNAL TERMINAL
@@ -113,6 +114,13 @@ function ThemeStyle() {
       .omni-tab-active { box-shadow: inset 3px 0 0 var(--emerald); background: var(--panel2); }
       .omni-cmd::placeholder { color: var(--textFaint); }
       .omni-row:hover { background: rgba(255,255,255,0.02); }
+      @keyframes omni-boot { 0% { opacity: 0; transform: translateY(4px); } 100% { opacity: 1; transform: translateY(0); } }
+      .omni-boot { animation: omni-boot 0.5s ease-out; }
+      @keyframes omni-toast-in { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: translateX(0); } }
+      .omni-toast { animation: omni-toast-in 0.25s ease-out; }
+      @media (prefers-reduced-motion: reduce) {
+        .omni-boot, .omni-toast, .omni-marquee, .omni-pulse, .omni-flash-up, .omni-flash-down { animation: none !important; }
+      }
     `}</style>
   );
 }
@@ -323,16 +331,39 @@ function useLiveFeed() {
   const [heatmapTiles, setHeatmapTiles] = useState(null);
   const [feedHealth, setFeedHealth] = useState(null);
   const [uptimeSec, setUptimeSec] = useState(null);
+  const [journal, setJournal] = useState(null);
+  const [learning, setLearning] = useState(null);
+  const [accountBalance, setAccountBalance] = useState(null);
+  const [accountEquity, setAccountEquity] = useState(null);
+  const [realtime, setRealtime] = useState(false);
+  const [toasts, setToasts] = useState([]);
   const priceRef = useRef(prices);
   priceRef.current = prices;
+  const lastTopSignalId = useRef(null);
 
-  /* One-time reachability probe against the unauthenticated /health route. */
+  /* Reachability probe against the unauthenticated /health route. Render's
+     free tier can take 30-60s+ to wake a cold instance, so a single
+     2.5s-timeout attempt was permanently latching mode='demo' for the rest
+     of the session even when the backend was fine — just asleep. Now: show
+     demo immediately (never a blank/stuck "Connecting" screen) but keep
+     retrying every 4s in the background, and flip to live the instant the
+     backend answers — no manual refresh required. */
+  const [wakingBackend, setWakingBackend] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    omniFetch('/health', 2500)
-      .then(() => { if (!cancelled) setMode('live'); })
-      .catch(() => { if (!cancelled) setMode('demo'); });
-    return () => { cancelled = true; };
+    let timer = null;
+    const tryProbe = () => {
+      omniFetch('/health', 4000)
+        .then(() => { if (!cancelled) { setMode('live'); setWakingBackend(false); } })
+        .catch(() => {
+          if (cancelled) return;
+          setMode(m => (m === 'live' ? m : 'demo'));
+          setWakingBackend(true);
+          timer = setTimeout(tryProbe, 4000);
+        });
+    };
+    tryProbe();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, []);
 
   /* Clock runs regardless of mode. */
@@ -403,13 +434,18 @@ function useLiveFeed() {
       } catch (_) { /* keep last-known signals on a transient failure */ }
       try {
         const r = await omniFetch('/api/stats');
-        if (!cancelled && r.ok) setStats(r.stats);
+        if (!cancelled && r.ok) {
+          setStats(r.stats);
+          if (r.accountBalance != null) setAccountBalance(r.accountBalance);
+        }
       } catch (_) { /* stats optional */ }
     };
     const pullSlow = async () => {
       try { const r = await omniFetch('/api/outlook'); if (!cancelled && r.ok) setOutlook(r.outlook); } catch (_) {}
       try { const r = await omniFetch('/api/heatmap'); if (!cancelled && r.ok) setHeatmapTiles(r.tiles); } catch (_) {}
       try { const r = await omniFetch('/api/audit-trail?limit=30'); if (!cancelled && r.ok) setAuditLog(r.entries); } catch (_) {}
+      try { const r = await omniFetch('/api/journal'); if (!cancelled && r.ok) setJournal(r.stats); } catch (_) { /* execution engine may not be warm yet */ }
+      try { const r = await omniFetch('/api/learning?limit=50'); if (!cancelled && r.ok) setLearning(r.profiles); } catch (_) {}
       try { const r = await omniFetch('/api/health'); if (!cancelled && r.ok) setFeedHealth(r.feeds); } catch (_) {}
       try { const r = await omniFetch('/health'); if (!cancelled && r.ok) setUptimeSec(r.uptime); } catch (_) {}
     };
@@ -420,10 +456,58 @@ function useLiveFeed() {
     return () => { cancelled = true; clearInterval(fastTimer); clearInterval(slowTimer); };
   }, [mode]);
 
+  /* True real-time push on top of the polling above — subscribes to the
+     live Socket.IO channels the backend actually forwards (see the
+     forward() calls in api/server.js: market_update→market, balance_update
+     →balance, etc). Ticks and balance updates land immediately instead of
+     waiting for the next 5s poll; polling keeps running underneath as a
+     fallback if the socket drops mid-session. */
+  useEffect(() => {
+    if (mode !== 'live') return;
+    const socket = connectOmniceeSocket({
+      connected: () => setRealtime(true),
+      market: (payload) => {
+        if (!payload?.symbol || payload.price == null) return;
+        const { symbol, price, change } = payload;
+        setPrices(prev => {
+          if (prev[symbol] === price) return prev;
+          setFlash(f => ({ ...f, [symbol]: price >= prev[symbol] ? 'up' : 'down' }));
+          return { ...prev, [symbol]: price };
+        });
+        if (change != null) setChanges(c => ({ ...c, [symbol]: change }));
+      },
+      signal: (payload) => {
+        if (payload?.id) setSignals(prev => [payload, ...prev].slice(0, 40));
+      },
+      balance: (payload) => {
+        if (payload?.balance != null) setAccountBalance(payload.balance);
+        if (payload?.equity != null) setAccountEquity(payload.equity);
+      },
+    });
+    socket.on('disconnect', () => setRealtime(false));
+    return () => { setRealtime(false); socket.close(); };
+  }, [mode]);
+
+  /* Toast the highest-conviction signals (A+, score ≥ 90) as they land,
+     live or demo, rather than requiring the user to be watching the feed. */
+  useEffect(() => {
+    const top = signals[0];
+    if (!top || top.id === lastTopSignalId.current) return;
+    lastTopSignalId.current = top.id;
+    if (top.score >= 90) {
+      const toastId = `toast_${top.id}`;
+      setToasts(t => [...t.slice(-2), { id: toastId, symbol: top.symbol, action: top.action, score: top.score }]);
+      setTimeout(() => setToasts(t => t.filter(x => x.id !== toastId)), 6000);
+    }
+  }, [signals]);
+
+  const dismissToast = useCallback((id) => setToasts(t => t.filter(x => x.id !== id)), []);
+
   return {
     now, prices, changes, flash, signals, auditLog, equityCurve,
-    stats, outlook, heatmapTiles, feedHealth, uptimeSec,
-    mode, connected: mode === 'live',
+    stats, outlook, heatmapTiles, feedHealth, uptimeSec, journal, learning,
+    accountBalance, accountEquity, realtime, toasts, dismissToast,
+    mode, connected: mode === 'live', wakingBackend,
   };
 }
 
@@ -439,14 +523,18 @@ const TABS = [
   { key: 'RISK', label: 'Risk', fkey: 'F8', icon: ShieldAlert },
 ];
 
-function TopBar({ now, mode, onCommand }) {
+function TopBar({ now, mode, realtime, wakingBackend, onCommand }) {
   const [cmd, setCmd] = useState('');
   const time = new Date(now).toISOString().slice(11, 19);
   const date = new Date(now).toISOString().slice(0, 10);
   const status = {
     checking: { label: 'Connecting', color: 'var(--gold)', pulse: true },
-    live: { label: 'Live', color: 'var(--emerald)', pulse: true },
-    demo: { label: 'Demo Data', color: 'var(--textDim)', pulse: false },
+    live: realtime
+      ? { label: 'Live · RT', color: 'var(--emerald)', pulse: true }
+      : { label: 'Live · Poll', color: 'var(--emerald)', pulse: true },
+    demo: wakingBackend
+      ? { label: 'Demo · Waking Backend', color: 'var(--gold)', pulse: true }
+      : { label: 'Demo Data', color: 'var(--textDim)', pulse: false },
   }[mode] || { label: 'Offline', color: 'var(--coral)', pulse: false };
   return (
     <div className="flex items-center gap-4 px-4 py-2.5 border-b" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
@@ -471,7 +559,9 @@ function TopBar({ now, mode, onCommand }) {
       </div>
       <div className="flex items-center gap-3 ml-auto">
         <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase" style={{ color: status.color }}>
-          <Circle size={7} fill="currentColor" className={status.pulse ? 'omni-pulse' : ''} />
+          {mode === 'live' && realtime
+            ? <Wifi size={11} className="omni-pulse" />
+            : <Circle size={7} fill="currentColor" className={status.pulse ? 'omni-pulse' : ''} />}
           {status.label}
         </span>
         <span className="font-mono text-[11px] hidden md:inline" style={{ color: 'var(--textDim)' }}>{date}</span>
@@ -499,30 +589,39 @@ function TickerTape({ prices, changes, flash }) {
   );
 }
 
-function Sidebar({ active, onSelect }) {
+function NavBar({ active, onSelect }) {
   return (
-    <div className="flex flex-col border-r shrink-0" style={{ borderColor: 'var(--border)', background: 'var(--panel)', width: 88 }}>
+    <div className="flex border-t shrink-0 overflow-x-auto omni-scroll" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
       {TABS.map(t => (
         <button
           key={t.key}
           onClick={() => onSelect(t.key)}
-          className={`flex flex-col items-center gap-1 py-3 border-b transition-colors ${active === t.key ? 'omni-tab-active' : ''}`}
-          style={{ borderColor: 'var(--border)', color: active === t.key ? 'var(--emerald)' : 'var(--textDim)' }}
+          className="flex-1 min-w-[58px] flex flex-col items-center gap-0.5 py-2 transition-colors"
+          style={{
+            color: active === t.key ? 'var(--emerald)' : 'var(--textDim)',
+            background: active === t.key ? 'var(--panel2)' : 'transparent',
+            borderTop: active === t.key ? '2px solid var(--emerald)' : '2px solid transparent',
+          }}
         >
           <t.icon size={16} />
-          <span className="font-mono text-[9px]">{t.fkey}</span>
           <span className="font-mono text-[8px] uppercase tracking-wider">{t.label}</span>
         </button>
       ))}
+      <div className="flex items-center justify-center px-3 shrink-0 border-l" style={{ borderColor: 'var(--border)' }} title="Developed by James Yelbert">
+        <div className="w-5 h-5 rounded flex items-center justify-center font-display text-[9px] font-bold"
+          style={{ background: 'var(--panel2)', color: 'var(--textFaint)', border: '1px solid var(--border)' }}>JY</div>
+      </div>
     </div>
   );
 }
 
 /* ── DASH ───────────────────────────────────────────────────────────── */
-function DashTab({ signals, equityCurve, prices, changes }) {
+function DashTab({ signals, equityCurve, prices, changes, accountBalance, journal }) {
   const approved = signals.filter(s => s.gate.status === 'approved');
-  const winRate = 61 + Math.round((signals.reduce((a, s) => a + (s.score > 75 ? 1 : -1), 0)) % 8);
+  const hasJournal = journal && journal.total > 0;
+  const winRate = hasJournal ? journal.winRate : 61 + Math.round((signals.reduce((a, s) => a + (s.score > 75 ? 1 : -1), 0)) % 8);
   const avgScore = signals.length ? Math.round(signals.reduce((a, s) => a + s.score, 0) / signals.length) : 0;
+  const balanceValue = accountBalance ?? (equityCurve[equityCurve.length - 1]?.equity ?? 10000);
   const consensus = AGENTS.map(agent => {
     const votes = signals.slice(0, 12).flatMap(s => s.agents.filter(a => a.agent === agent));
     const bull = votes.filter(v => v.direction === 'BUY').length;
@@ -533,10 +632,10 @@ function DashTab({ signals, equityCurve, prices, changes }) {
     <div className="p-4 space-y-4">
       <div className="flex flex-wrap gap-3">
         <StatCard label="Active Signals" value={approved.length} icon={Radio} />
-        <StatCard label="Win Rate (30d)" value={`${winRate}%`} icon={Target} accent="var(--gold)" />
+        <StatCard label={hasJournal ? 'Win Rate (Journal)' : 'Win Rate (est.)'} value={`${winRate}%`} icon={Target} accent="var(--gold)" />
         <StatCard label="Avg Score" value={avgScore} icon={GaugeIcon} accent="var(--blue)" />
         <StatCard label="Signals Today" value={signals.length} icon={Zap} accent="var(--violet)" />
-        <StatCard label="Account Bal." value={`$${(equityCurve[equityCurve.length - 1]?.equity ?? 10000).toLocaleString()}`} icon={DollarSign} accent="var(--emerald)" />
+        <StatCard label={accountBalance != null ? 'Account Bal. (live)' : 'Account Bal.'} value={`$${balanceValue.toLocaleString()}`} icon={DollarSign} accent="var(--emerald)" />
         <StatCard label="Max DD Limit" value="10.0%" icon={ShieldAlert} accent="var(--coral)" />
       </div>
 
@@ -1021,7 +1120,13 @@ function HeatTab({ heatmapTiles, mode }) {
 }
 
 /* ── VALID ──────────────────────────────────────────────────────────── */
-function ValidTab() {
+function ValidTab({ journal, learning, signals, mode }) {
+  const hasJournal = journal && journal.total > 0;
+  const kellyAvg = useMemo(() => {
+    const recent = signals.filter(s => s.risk?.approved && s.risk?.effectiveRisk != null).slice(0, 20);
+    if (!recent.length) return null;
+    return +(recent.reduce((a, s) => a + s.risk.effectiveRisk, 0) / recent.length).toFixed(2);
+  }, [signals]);
   const monteCarlo = useMemo(() => {
     const buckets = [];
     for (let i = -10; i <= 10; i++) {
@@ -1031,23 +1136,69 @@ function ValidTab() {
     }
     return buckets;
   }, []);
-  const walkForward = 68, bayesian = 74, kellyPct = 2.3;
-  const backtest = { winRate: 58.4, profitFactor: 1.74, maxDD: 8.9, sharpe: 1.32, expectancy: 0.31, trades: 1284 };
+  const grades = journal?.byGrade ? Object.entries(journal.byGrade) : [];
+  const topLearning = learning ? [...learning].sort((a, b) => b.expectancyR - a.expectancyR).slice(0, 8) : null;
 
   return (
     <div className="p-4 space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="omni-panel p-3 flex flex-col items-center"><Gauge value={walkForward} label="Walk-Forward Eff." /></div>
-        <div className="omni-panel p-3 flex flex-col items-center"><Gauge value={bayesian} label="Bayesian Confidence" /></div>
-        <div className="omni-panel p-3 flex flex-col items-center"><Gauge value={backtest.winRate} label="Backtest Win Rate" /></div>
-        <div className="omni-panel p-3 flex flex-col items-center justify-center">
-          <span className="font-mono text-2xl font-bold" style={{ color: 'var(--gold)' }}>{kellyPct}%</span>
-          <span className="font-mono text-[9px] uppercase tracking-wider mt-1" style={{ color: 'var(--textFaint)' }}>Kelly Suggested Size</span>
+        <StatCard label="Journal Win Rate" value={hasJournal ? `${journal.winRate}%` : '—'} icon={CheckCircle2} />
+        <StatCard label="Profit Factor" value={hasJournal ? (journal.pf === 999 ? '∞' : journal.pf) : '—'} accent="var(--gold)" icon={TrendingUp} />
+        <StatCard label="Expectancy (R)" value={hasJournal ? journal.expectancy : '—'} accent="var(--blue)" icon={GaugeIcon} />
+        <StatCard label="Avg Kelly Risk" value={kellyAvg != null ? `${kellyAvg}%` : '—'} accent="var(--violet)" icon={ShieldAlert} />
+      </div>
+
+      {!hasJournal && (
+        <div className="omni-panel p-3 text-center font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>
+          {journal?.message || (mode === 'live' ? 'Journal loading…' : 'Journal demo — connect a live backend for real /win /loss /be history')} · stats fill in as outcomes are recorded
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="omni-panel p-4">
+          <SectionHeader icon={CheckCircle2} title="Performance by Grade" sub={hasJournal ? `${journal.total.toLocaleString()} trades` : undefined} />
+          {grades.length ? (
+            <div className="space-y-2.5">
+              {grades.map(([grade, g]) => (
+                <div key={grade} className="flex items-center gap-3 font-mono text-[11px]">
+                  <Pill tone={grade === 'A' ? 'up' : grade === 'D' ? 'down' : 'neutral'}>{grade}</Pill>
+                  <span className="w-16" style={{ color: 'var(--textDim)' }}>{g.total} trades</span>
+                  <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
+                    <div className="h-full rounded-full" style={{ width: `${g.winRate}%`, background: g.winRate >= 50 ? 'var(--emerald)' : 'var(--coral)' }} />
+                  </div>
+                  <span className="w-14 text-right" style={{ color: 'var(--text)' }}>{g.winRate}%</span>
+                  <span className="w-16 text-right" style={{ color: g.avgPnl >= 0 ? 'var(--emerald)' : 'var(--coral)' }}>{g.avgPnl >= 0 ? '+' : ''}{g.avgPnl}R</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No graded outcomes yet.</div>
+          )}
+        </div>
+
+        <div className="omni-panel p-4">
+          <SectionHeader icon={Layers} title="Adaptive Learning — Top Setups" sub="by expectancy · live from recorded outcomes" />
+          {topLearning === null ? (
+            <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>Loading…</div>
+          ) : topLearning.length === 0 ? (
+            <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No pattern history yet — profiles build as outcomes are recorded.</div>
+          ) : (
+            <div className="space-y-1.5 max-h-56 overflow-y-auto omni-scroll">
+              {topLearning.map(p => (
+                <div key={p.patternKey} className="omni-row flex items-center gap-2 px-2 py-1 rounded font-mono text-[10px]">
+                  <span className="flex-1 truncate" style={{ color: 'var(--textDim)' }} title={p.patternKey}>{p.patternKey}</span>
+                  <span style={{ color: 'var(--textFaint)' }}>{p.samples}x</span>
+                  <span style={{ color: p.winRate >= 0.5 ? 'var(--emerald)' : 'var(--coral)' }}>{(p.winRate * 100).toFixed(0)}%</span>
+                  <span style={{ color: p.expectancyR >= 0 ? 'var(--emerald)' : 'var(--coral)' }}>{p.expectancyR >= 0 ? '+' : ''}{p.expectancyR.toFixed(2)}R</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
       <div className="omni-panel p-4">
-        <SectionHeader icon={FlaskConical} title="Monte Carlo Return Distribution" sub="10,000 paths · R-multiple" />
+        <SectionHeader icon={FlaskConical} title="Monte Carlo Return Distribution" sub="10,000 paths · illustrative — no live path-simulation endpoint yet" />
         <ResponsiveContainer width="100%" height={180}>
           <BarChart data={monteCarlo}>
             <CartesianGrid stroke="#1c232d" vertical={false} />
@@ -1059,17 +1210,6 @@ function ValidTab() {
             </Bar>
           </BarChart>
         </ResponsiveContainer>
-      </div>
-
-      <div className="omni-panel p-4">
-        <SectionHeader icon={CheckCircle2} title="Backtest Summary" sub={`${backtest.trades.toLocaleString()} trades`} />
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          <StatCard label="Win Rate" value={`${backtest.winRate}%`} />
-          <StatCard label="Profit Factor" value={backtest.profitFactor} accent="var(--gold)" />
-          <StatCard label="Max Drawdown" value={`${backtest.maxDD}%`} accent="var(--coral)" />
-          <StatCard label="Sharpe" value={backtest.sharpe} accent="var(--blue)" />
-          <StatCard label="Expectancy (R)" value={backtest.expectancy} accent="var(--violet)" />
-        </div>
       </div>
     </div>
   );
@@ -1115,11 +1255,16 @@ function TapeTab({ signals, prices }) {
 }
 
 /* ── RISK ───────────────────────────────────────────────────────────── */
-function RiskTab({ prices, changes }) {
-  const [balance, setBalance] = useState(10000);
+function RiskTab({ prices, changes, accountBalance }) {
+  const [balance, setBalance] = useState(accountBalance ?? 10000);
+  const [balanceTouched, setBalanceTouched] = useState(false);
   const [riskPct, setRiskPct] = useState(1.0);
   const [stopPips, setStopPips] = useState(20);
   const [symbol, setSymbol] = useState('EURUSD');
+
+  useEffect(() => {
+    if (!balanceTouched && accountBalance != null) setBalance(accountBalance);
+  }, [accountBalance, balanceTouched]);
 
   const riskAmount = balance * (riskPct / 100);
   const pipValue = PIP[symbol];
@@ -1142,7 +1287,7 @@ function RiskTab({ prices, changes }) {
           <div className="grid grid-cols-2 gap-3 mb-3">
             <label className="text-[10px] font-mono uppercase" style={{ color: 'var(--textFaint)' }}>
               Account Balance ($)
-              <input type="number" value={balance} onChange={e => setBalance(+e.target.value)}
+              <input type="number" value={balance} onChange={e => { setBalance(+e.target.value); setBalanceTouched(true); }}
                 className="w-full mt-1 px-2 py-1.5 rounded font-mono text-[12px] outline-none"
                 style={{ background: 'var(--panel2)', border: '1px solid var(--border)', color: 'var(--text)' }} />
             </label>
@@ -1227,6 +1372,25 @@ function RiskTab({ prices, changes }) {
 }
 
 /* ── App shell ──────────────────────────────────────────────────────── */
+function ToastStack({ toasts, onDismiss }) {
+  if (!toasts.length) return null;
+  return (
+    <div className="fixed top-16 right-4 z-50 flex flex-col gap-2 w-64">
+      {toasts.map(t => (
+        <div key={t.id} className="omni-toast omni-panel p-3 flex items-center gap-2" style={{ borderColor: 'var(--borderBright)', boxShadow: '0 8px 24px rgba(0,0,0,0.4)' }}>
+          <Zap size={14} style={{ color: 'var(--gold)' }} />
+          <div className="flex-1 font-mono text-[11px]">
+            <span style={{ color: t.action === 'BUY' ? 'var(--emerald)' : 'var(--coral)' }}>{t.action}</span>{' '}
+            <span style={{ color: 'var(--text)' }}>{t.symbol}</span>{' '}
+            <span style={{ color: 'var(--gold)' }}>A+ · {t.score}</span>
+          </div>
+          <button onClick={() => onDismiss(t.id)} aria-label="Dismiss" style={{ color: 'var(--textFaint)' }}><X size={12} /></button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function OmniceeDashboard() {
   const [activeTab, setActiveTab] = useState('DASH');
   const feed = useLiveFeed();
@@ -1239,22 +1403,23 @@ export default function OmniceeDashboard() {
   }, []);
 
   return (
-    <div className="omni-root flex flex-col h-full min-h-[640px] w-full text-sm">
+    <div className="omni-root omni-boot flex flex-col h-full min-h-[640px] w-full text-sm">
       <ThemeStyle />
-      <TopBar now={feed.now} mode={feed.mode} onCommand={handleCommand} />
+      <ToastStack toasts={feed.toasts} onDismiss={feed.dismissToast} />
+      <TopBar now={feed.now} mode={feed.mode} realtime={feed.realtime} wakingBackend={feed.wakingBackend} onCommand={handleCommand} />
       <TickerTape prices={feed.prices} changes={feed.changes} flash={feed.flash} />
-      <div className="flex flex-1 min-h-0">
-        <Sidebar active={activeTab} onSelect={setActiveTab} />
+      <div className="flex flex-col flex-1 min-h-0">
         <div className="flex-1 overflow-y-auto omni-scroll">
-          {activeTab === 'DASH' && <DashTab signals={feed.signals} equityCurve={feed.equityCurve} prices={feed.prices} changes={feed.changes} stats={feed.stats} mode={feed.mode} />}
+          {activeTab === 'DASH' && <DashTab signals={feed.signals} equityCurve={feed.equityCurve} prices={feed.prices} changes={feed.changes} accountBalance={feed.accountBalance} journal={feed.journal} />}
           {activeTab === 'SIGNALS' && <SignalsTab signals={feed.signals} />}
           {activeTab === 'INTEL' && <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} />}
           {activeTab === 'MONITOR' && <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} />}
           {activeTab === 'HEAT' && <HeatTab heatmapTiles={feed.heatmapTiles} mode={feed.mode} />}
-          {activeTab === 'VALID' && <ValidTab />}
+          {activeTab === 'VALID' && <ValidTab journal={feed.journal} learning={feed.learning} signals={feed.signals} mode={feed.mode} />}
           {activeTab === 'TAPE' && <TapeTab signals={feed.signals} prices={feed.prices} />}
-          {activeTab === 'RISK' && <RiskTab prices={feed.prices} changes={feed.changes} stats={feed.stats} />}
+          {activeTab === 'RISK' && <RiskTab prices={feed.prices} changes={feed.changes} accountBalance={feed.accountBalance} />}
         </div>
+        <NavBar active={activeTab} onSelect={setActiveTab} />
       </div>
     </div>
   );

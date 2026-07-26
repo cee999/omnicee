@@ -69,7 +69,7 @@ export function connectOmniceeSocket(handlers = {}) {
     transports: ['websocket', 'polling'],
   });
 
-  const channels = ['connected', 'signal', 'market', 'risk', 'stats', 'regime', 'telemetry', 'intel', 'outcome_saved', 'outcome_error'];
+  const channels = ['connected', 'signal', 'market', 'risk', 'stats', 'balance', 'regime', 'telemetry', 'intel', 'outcome_saved', 'outcome_error'];
   channels.forEach(ch => {
     if (handlers[ch]) socket.on(ch, handlers[ch]);
   });

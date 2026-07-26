@@ -20,7 +20,12 @@ const { recordOutcomeEverywhere } = require('../signal-pipeline/outcome-recorder
 const { MarketHeatMap } = require('../automation/market-heatmap');
 
 const API_PORT = Number(process.env.PORT || process.env.WS_PORT || 3001);
-const STATIC_ROOT = path.join(__dirname, '..', 'webapp');
+// FIX: was serving the retired vanilla webapp/ — now serves the built React
+// dashboard (webapp-react/dist, produced by `npm run build` there; see the
+// updated buildCommand in render.yaml). webapp/ index.html/manifest/sw/icons
+// are gone; webapp/ws-server.js stays — it's a backend bridge module, not a
+// frontend asset (see require('./webapp/ws-server') above).
+const STATIC_ROOT = path.join(__dirname, '..', 'webapp-react', 'dist');
 const finnhub = new FinnhubFeed();
 const learningEngine = new AdaptiveLearningEngine({ store: db });
 
