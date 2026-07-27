@@ -861,10 +861,18 @@ class RiskEnforcer {
       }
     }
 
-    // ── 5. Same symbol ──
+    // ── 5. Same symbol — same-direction duplicates are blocked outright
+    // (piling into more of the same bias on one symbol is the actual risk;
+    // an opposite-direction position on the same symbol is comparatively
+    // benign — could be a deliberate reversal — so that stays a warning).
     const sameSymbol = activeSymbols.filter(a => a.symbol === signal.symbol);
-    if (sameSymbol.length > 0) {
-      warnings.push(`Already have ${sameSymbol.length} open position(s) on ${signal.symbol}`);
+    const sameSymbolSameDirection = sameSymbol.filter(a => a.direction === signal.action);
+    const sameSymbolOppositeDirection = sameSymbol.filter(a => a.direction !== signal.action);
+    if (sameSymbolSameDirection.length > 0) {
+      blockers.push(`Already have ${sameSymbolSameDirection.length} open ${signal.action} position(s) on ${signal.symbol} — blocking duplicate same-direction entry`);
+    }
+    if (sameSymbolOppositeDirection.length > 0) {
+      warnings.push(`Already have ${sameSymbolOppositeDirection.length} opposite-direction position(s) open on ${signal.symbol}`);
     }
 
     // ── 6. Session quality ──
