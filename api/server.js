@@ -402,6 +402,32 @@ function createApp() {
     res.json({ ok: true, balance });
   });
 
+  // FIX: crypto has a genuinely real-time price ticker (Binance WS) but
+  // forex only had TwelveData's rate-limited polling (8/min free tier) plus
+  // whatever Finnhub's WS stream adds (see finnhub-feed.js's
+  // connectPriceStream — a second independent source, added this session).
+  // The MT5 EA (mt5/OmniceeEA.mq5) already sits on James's own broker's
+  // live tick feed for free, for signal execution and balance sync — this
+  // is a third independent source, using data he already has, feeding the
+  // identical market_update event both of the above use. Same eaAuth as
+  // every other /api/ea/* route; same {bid, ask} shape the EA already reads
+  // via SymbolInfoDouble() for its own position-sizing math.
+  app.post('/api/ea/prices', eaAuth, (req, res) => {
+    const { prices } = req.body || {};
+    if (!Array.isArray(prices) || !prices.length) {
+      return res.status(400).json({ ok: false, error: 'prices array required' });
+    }
+    let accepted = 0;
+    for (const p of prices) {
+      if (!p?.symbol || p.bid == null) continue;
+      const mid = p.ask != null ? (Number(p.bid) + Number(p.ask)) / 2 : Number(p.bid);
+      if (!Number.isFinite(mid)) continue;
+      bus.emit('market_update', { symbol: p.symbol, price: mid, change: null, bias: null, source: 'mt5_ea' });
+      accepted++;
+    }
+    res.json({ ok: true, accepted });
+  });
+
   app.get('/api/ea/config', eaAuth, (_req, res) => {
     res.json({
       ok: true,

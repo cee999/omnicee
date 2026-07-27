@@ -2013,6 +2013,28 @@ function buildFeeds() {
     log.warn(`Forex symbols ${fxSymbols.join(',')} configured but TWELVE_DATA_API_KEY is missing`);
   }
 
+  // FIX: forex's live price ticker was entirely dependent on onCandle()'s
+  // throttled emission, itself gated behind TwelveData's own candle-close
+  // cadence (see lastMarketEmit above) — never genuinely tick-by-tick the
+  // way crypto's Binance WS already is. finnhub-feed.js's connectPriceStream
+  // (added this session — see its own comment for why this is confirmed
+  // free-tier) is a second, independent real-time source for exactly the
+  // symbols TwelveData already covers, feeding the identical market_update
+  // event onCandle() already uses. This doesn't touch TwelveData's request
+  // budget at all — it's a completely separate connection — and doesn't
+  // replace it either: TwelveData/Binance remain the only sources feeding
+  // candleStores (the OHLC data the agents actually run technical analysis
+  // against). This only makes the live price ticker itself more real-time.
+  if (finnhubFeed?.enabled() && fxSymbols.length) {
+    finnhubFeed.on('price', ({ symbol, price }) => {
+      if (!SYMBOLS.includes(symbol)) return;
+      wsBus.emit('market_update', { symbol, price, change: null, bias: null, source: 'finnhub' });
+    });
+    finnhubFeed.on('connected', () => log.info(`FinnhubFeed price stream connected for: ${fxSymbols.join(', ')}`));
+    finnhubFeed.on('error', (err) => log.warn(`FinnhubFeed price stream error: ${feedErrorMessage(err)}`));
+    finnhubFeed.connectPriceStream(fxSymbols);
+  }
+
   return feeds;
 }
 

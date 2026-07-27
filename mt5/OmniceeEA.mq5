@@ -18,6 +18,7 @@ input string   InpServerURL   = "https://omnicee.onrender.com"; // OMNICEE Serve
 input string   InpEASecret    = "";                              // EA Secret (leave blank if none)
 input int      InpPollSeconds = 5;                               // Poll interval (seconds)
 input int      InpBalanceSync = 60;                              // Balance sync interval (seconds)
+input int      InpPriceSync   = 2;                                // Live price sync interval (seconds)
 input int      InpSlippage    = 10;                              // Max slippage (points)
 input int      InpMagicNumber = 777888;                          // EA Magic Number
 input bool     InpShowAlerts  = true;                            // Show alerts on execution
@@ -28,8 +29,17 @@ input bool     InpShowAlerts  = true;                            // Show alerts 
 CTrade trade;
 datetime lastPollTime   = 0;
 datetime lastBalanceSync = 0;
+datetime lastPriceSync  = 0;
 int      pollIntervalSec;
 int      balanceSyncSec;
+int      priceSyncIntervalSec;
+
+// Symbols OMNICEE tracks for its live price ticker — kept as a parallel
+// list to MapSymbol() below since MQL5 has no clean way to enumerate "every
+// key MapSymbol() knows about". Add a symbol here AND to MapSymbol() to
+// report it; a symbol your broker doesn't offer is skipped automatically
+// (see SendPriceTicks() — SymbolSelect() failing just skips it, not a $0 tick).
+string OmniceeSymbols[] = {"BTCUSDT", "ETHUSDT", "EURUSD", "GBPUSD", "USDJPY", "XAUUSD"};
 
 //+------------------------------------------------------------------+
 //| Symbol name mapping: OMNICEE symbol → MT5 broker symbol           |
@@ -65,11 +75,13 @@ int OnInit()
    
    pollIntervalSec  = MathMax(InpPollSeconds, 3);
    balanceSyncSec   = MathMax(InpBalanceSync, 30);
+   priceSyncIntervalSec = MathMax(InpPriceSync, 1);
    
    Print("=== OMNICEE EA Initialized ===");
    Print("Server: ", InpServerURL);
    Print("Poll interval: ", pollIntervalSec, "s");
    Print("Balance sync: ", balanceSyncSec, "s");
+   Print("Price sync: ", priceSyncIntervalSec, "s (", ArraySize(OmniceeSymbols), " symbols)");
    Print("Magic: ", InpMagicNumber);
    
    // Sync balance immediately
@@ -105,6 +117,17 @@ void OnTick()
    {
       lastBalanceSync = now;
       SyncBalance();
+   }
+   
+   // Push live bid/ask ticks — this is the actual point of this EA existing
+   // beyond signal execution: James already has a real broker feed running
+   // here for free, so this is a genuine live tick source for the frontend
+   // ticker (feeds the same market_update pipeline TwelveData/Finnhub do —
+   // see POST /api/ea/prices on the server), no third-party API involved.
+   if(now - lastPriceSync >= priceSyncIntervalSec)
+   {
+      lastPriceSync = now;
+      SendPriceTicks();
    }
 }
 
@@ -368,6 +391,62 @@ void SyncBalance()
       Print("[OMNICEE] Balance synced: $", DoubleToString(balance, 2));
    else if(res == -1)
       Print("[OMNICEE] Balance sync failed — add URL to allowed list");
+}
+
+//+------------------------------------------------------------------+
+//| Push live bid/ask ticks for every OMNICEE-tracked symbol         |
+//| SymbolInfoDouble() works for any symbol in Market Watch, not just|
+//| the chart this EA is attached to — one EA instance can report    |
+//| the whole watchlist this way.                                    |
+//+------------------------------------------------------------------+
+void SendPriceTicks()
+{
+   string body = "{\"prices\":[";
+   int sent = 0;
+
+   for(int i = 0; i < ArraySize(OmniceeSymbols); i++)
+   {
+      string omniceeSymbol = OmniceeSymbols[i];
+      string mt5Symbol     = MapSymbol(omniceeSymbol);
+
+      // SymbolSelect() failing (broker doesn't offer this symbol, or the
+      // name mapping in MapSymbol() is wrong for your broker) means skip
+      // it — SymbolInfoDouble() on an unselected symbol silently returns 0,
+      // which would otherwise send a fake $0 price instead of just omitting
+      // a symbol your broker doesn't carry.
+      if(!SymbolSelect(mt5Symbol, true)) continue;
+
+      double bid = SymbolInfoDouble(mt5Symbol, SYMBOL_BID);
+      double ask = SymbolInfoDouble(mt5Symbol, SYMBOL_ASK);
+      if(bid <= 0) continue;
+
+      if(sent > 0) body += ",";
+      body += "{\"symbol\":\"" + omniceeSymbol + "\",\"bid\":" + DoubleToString(bid, 5) +
+              ",\"ask\":" + DoubleToString(ask, 5) + "}";
+      sent++;
+   }
+
+   body += "]}";
+   if(sent == 0) return; // nothing selectable this cycle — try again next tick
+
+   string url = InpServerURL + "/api/ea/prices";
+   string headers = "Content-Type: application/json\r\n";
+   if(InpEASecret != "")
+      headers += "X-EA-Secret: " + InpEASecret + "\r\n";
+
+   char postData[];
+   StringToCharArray(body, postData, 0, WHOLE_ARRAY, CP_UTF8);
+   ArrayResize(postData, ArraySize(postData) - 1);
+
+   char   result[];
+   string resultHeaders;
+
+   int res = WebRequest("POST", url, headers, 5000, postData, result, resultHeaders);
+
+   if(res == -1)
+      Print("[OMNICEE] Price sync failed — add URL to allowed list");
+   // No success Print() here (unlike SyncBalance) — this fires every
+   // InpPriceSync seconds, which would flood the Experts log otherwise.
 }
 
 //+------------------------------------------------------------------+
