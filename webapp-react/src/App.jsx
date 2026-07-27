@@ -572,7 +572,14 @@ function useLiveFeed() {
         const prevPrice = priceRef.current[sym];
         setFlash(f => ({ ...f, [sym]: payload.price >= prevPrice ? 'up' : 'down' }));
         setPrices(prev => ({ ...prev, [sym]: payload.price }));
-        setChanges(c => ({ ...c, [sym]: ((payload.price - BASE_PRICE[sym]) / BASE_PRICE[sym]) * 100 }));
+        if (payload.change != null) {
+          setChanges(c => ({ ...c, [sym]: payload.change }));
+        } else {
+          // Fallback only if the backend ever omits it — real % change vs a
+          // frozen 2024 demo constant is nonsense, so anchor to the last
+          // known live price instead of BASE_PRICE.
+          setChanges(c => ({ ...c, [sym]: prevPrice ? ((payload.price - prevPrice) / prevPrice) * 100 : (c[sym] ?? 0) }));
+        }
       });
 
       // FIX: the actual point of "connect the agents/pipeline to the
