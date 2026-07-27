@@ -372,13 +372,29 @@ function useLiveFeed() {
   const priceRef = useRef(prices);
   priceRef.current = prices;
 
-  /* One-time reachability probe against the unauthenticated /health route. */
+  /* Reachability probe against the unauthenticated /health route. Render's
+     free tier can take 30-60s+ to wake a cold instance, so a single
+     2.5s-timeout attempt was permanently latching mode='demo' for the rest
+     of the session even when the backend was fine — just asleep. Now: show
+     demo immediately (never a blank/stuck "Connecting" screen) but keep
+     retrying every 4s in the background, and flip to live the instant the
+     backend answers — no manual refresh required. */
+  const [wakingBackend, setWakingBackend] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    omniFetch('/health', 2500)
-      .then(() => { if (!cancelled) setMode('live'); })
-      .catch(() => { if (!cancelled) setMode('demo'); });
-    return () => { cancelled = true; };
+    let timer = null;
+    const tryProbe = () => {
+      omniFetch('/health', 4000)
+        .then(() => { if (!cancelled) { setMode('live'); setWakingBackend(false); } })
+        .catch(() => {
+          if (cancelled) return;
+          setMode(m => (m === 'live' ? m : 'demo'));
+          setWakingBackend(true);
+          timer = setTimeout(tryProbe, 4000);
+        });
+    };
+    tryProbe();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, []);
 
   /* Clock runs regardless of mode. */
@@ -565,7 +581,7 @@ function useLiveFeed() {
     now, prices, changes, flash, signals, auditLog, equityCurve, equityCurveLive,
     stats, outlook, heatmapTiles, feedHealth, uptimeSec, accountBalance, socketLive,
     news, journalStats, learningProfiles, relativeStrength,
-    mode, connected: mode === 'live',
+    mode, connected: mode === 'live', wakingBackend,
   };
 }
 
@@ -582,14 +598,16 @@ const TABS = [
   { key: 'RISK', label: 'Risk', fkey: 'F9', icon: ShieldAlert },
 ];
 
-function TopBar({ now, mode, socketLive, onCommand }) {
+function TopBar({ now, mode, socketLive, wakingBackend, onCommand }) {
   const [cmd, setCmd] = useState('');
   const time = new Date(now).toISOString().slice(11, 19);
   const date = new Date(now).toISOString().slice(0, 10);
   const status = {
     checking: { label: 'Connecting', color: 'var(--gold)', pulse: true },
     live: { label: 'Live', color: 'var(--emerald)', pulse: true },
-    demo: { label: 'Demo Data', color: 'var(--textDim)', pulse: false },
+    demo: wakingBackend
+      ? { label: 'Demo · Waking Backend', color: 'var(--gold)', pulse: true }
+      : { label: 'Demo Data', color: 'var(--textDim)', pulse: false },
   }[mode] || { label: 'Offline', color: 'var(--coral)', pulse: false };
   return (
     <div className="flex items-center gap-4 px-4 py-2.5 border-b" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
@@ -651,18 +669,21 @@ function TickerTape({ prices, changes, flash }) {
   );
 }
 
-function Sidebar({ active, onSelect }) {
+function NavBar({ active, onSelect }) {
   return (
-    <div className="flex flex-col border-r shrink-0" style={{ borderColor: 'var(--border)', background: 'var(--panel)', width: 88 }}>
+    <div className="flex border-t shrink-0 overflow-x-auto omni-scroll" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
       {TABS.map(t => (
         <button
           key={t.key}
           onClick={() => onSelect(t.key)}
-          className={`flex flex-col items-center gap-1 py-3 border-b transition-colors ${active === t.key ? 'omni-tab-active' : ''}`}
-          style={{ borderColor: 'var(--border)', color: active === t.key ? 'var(--emerald)' : 'var(--textDim)' }}
+          className="flex-1 min-w-[52px] flex flex-col items-center gap-0.5 py-2 transition-colors"
+          style={{
+            color: active === t.key ? 'var(--emerald)' : 'var(--textDim)',
+            background: active === t.key ? 'var(--panel2)' : 'transparent',
+            borderTop: active === t.key ? '2px solid var(--emerald)' : '2px solid transparent',
+          }}
         >
           <t.icon size={16} />
-          <span className="font-mono text-[9px]">{t.fkey}</span>
           <span className="font-mono text-[8px] uppercase tracking-wider">{t.label}</span>
         </button>
       ))}
@@ -1585,26 +1606,24 @@ export default function OmniceeDashboard() {
   return (
     <div className="omni-root flex flex-col h-full min-h-[640px] w-full text-sm">
       <ThemeStyle />
-      <TopBar now={feed.now} mode={feed.mode} socketLive={feed.socketLive} onCommand={handleCommand} />
+      <TopBar now={feed.now} mode={feed.mode} socketLive={feed.socketLive} wakingBackend={feed.wakingBackend} onCommand={handleCommand} />
       <TickerTape prices={feed.prices} changes={feed.changes} flash={feed.flash} />
-      <div className="flex flex-1 min-h-0">
-        <Sidebar active={activeTab} onSelect={setActiveTab} />
-        <div className="flex-1 flex flex-col min-h-0">
-          <div className="flex-1 overflow-y-auto omni-scroll">
-            {activeTab === 'DASH' && <DashTab signals={feed.signals} equityCurve={feed.equityCurve} equityCurveLive={feed.equityCurveLive} accountBalance={feed.accountBalance} prices={feed.prices} changes={feed.changes} stats={feed.stats} mode={feed.mode} />}
-            {activeTab === 'SIGNALS' && <SignalsTab signals={feed.signals} />}
-            {activeTab === 'INTEL' && <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} />}
-            {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}
-            {activeTab === 'MONITOR' && <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} />}
-            {activeTab === 'HEAT' && <HeatTab heatmapTiles={feed.heatmapTiles} mode={feed.mode} />}
-            {activeTab === 'VALID' && <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} />}
-            {activeTab === 'TAPE' && <TapeTab signals={feed.signals} prices={feed.prices} />}
-            {activeTab === 'RISK' && <RiskTab prices={feed.prices} changes={feed.changes} stats={feed.stats} accountBalance={feed.accountBalance} relativeStrength={feed.relativeStrength} mode={feed.mode} />}
-          </div>
-          <div className="flex items-center justify-center gap-2 py-1.5 border-t font-mono text-[9px] uppercase tracking-wider" style={{ borderColor: 'var(--border)', color: 'var(--textFaint)' }}>
-            <span>OMNICEE</span><span>·</span><span>Developed by James Yelbert</span>
-          </div>
+      <div className="flex flex-col flex-1 min-h-0">
+        <div className="flex-1 overflow-y-auto omni-scroll">
+          {activeTab === 'DASH' && <DashTab signals={feed.signals} equityCurve={feed.equityCurve} equityCurveLive={feed.equityCurveLive} accountBalance={feed.accountBalance} prices={feed.prices} changes={feed.changes} stats={feed.stats} mode={feed.mode} />}
+          {activeTab === 'SIGNALS' && <SignalsTab signals={feed.signals} />}
+          {activeTab === 'INTEL' && <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} />}
+          {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}
+          {activeTab === 'MONITOR' && <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} />}
+          {activeTab === 'HEAT' && <HeatTab heatmapTiles={feed.heatmapTiles} mode={feed.mode} />}
+          {activeTab === 'VALID' && <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} />}
+          {activeTab === 'TAPE' && <TapeTab signals={feed.signals} prices={feed.prices} />}
+          {activeTab === 'RISK' && <RiskTab prices={feed.prices} changes={feed.changes} stats={feed.stats} accountBalance={feed.accountBalance} relativeStrength={feed.relativeStrength} mode={feed.mode} />}
         </div>
+        <div className="flex items-center justify-center gap-2 py-1 border-t font-mono text-[8px] uppercase tracking-wider" style={{ borderColor: 'var(--border)', color: 'var(--textFaint)' }}>
+          <span>OMNICEE</span><span>·</span><span>Developed by James Yelbert</span>
+        </div>
+        <NavBar active={activeTab} onSelect={setActiveTab} />
       </div>
     </div>
   );
