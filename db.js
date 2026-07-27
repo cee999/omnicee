@@ -583,6 +583,7 @@ module.exports = {
   getDB,
   ensureIndexes,
   saveSignal,
+  compactSignal,
   saveTelemetry,
   saveMarketSnapshot,
   saveCandleHistory,

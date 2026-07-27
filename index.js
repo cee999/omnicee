@@ -1211,46 +1211,56 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
     if (liveOI.openInterest != null) target.openInterest = liveOI.openInterest;
   }
 
-  // FIX: manual-mode.js's ExecutionEngine needs a live price feed to detect
-  // TP/SL/breakeven/trailing hits on manually-tracked positions. Runs on
-  // every tick (not gated by isClosed) for timely execution — a position
-  // shouldn't have to wait for candle close to register a stop-out.
-  // ATR is intentionally omitted for now (only affects the ATR-based
-  // trailing-distance branch inside onPrice — core TP/SL/BE detection via
-  // Position.onPrice() doesn't require it); a follow-up could source it from
-  // the same ATRCalculator sl-tp-engine.js already uses.
-  if (executionEngine?.onPrice && candle) {
-    try { executionEngine.onPrice(symbol, candle.close, null); }
+  // FIX: this was inlined here, reachable ONLY through onCandle() — meaning
+  // any live price source that doesn't go through the full candle pipeline
+  // (Finnhub's WS ticks, the MT5 EA's pushed ticks — see below) fed the
+  // frontend ticker fine but silently skipped executionEngine.onPrice()
+  // entirely, so a manually-tracked forex position only got its TP/SL/BE/
+  // trailing checked on TwelveData's own candle-close cadence — even
+  // though those newer sources are specifically MORE real-time and better
+  // suited to exactly this kind of time-sensitive check. Extracted so any
+  // live price source can drive both without needing a full candle object
+  // or touching candleStores.
+  onLivePrice(symbol, candle.close, {
+    change: candle.open ? ((candle.close - candle.open) / candle.open * 100) : 0,
+  });
+
+  // Only run analysis on closed candles to avoid noise
+  if (isClosed) {
+    setImmediate(() => runAnalysisCycle(symbol, timeframe));
+  }
+}
+
+// FIX: see the comment above where this replaced onCandle()'s inlined
+// version. Drives manual-position TP/SL/BE/trailing monitoring
+// (executionEngine.onPrice) and the frontend's live price ticker
+// (market_update, throttled to ~1/sec/symbol) from ANY price source — a
+// closed/in-progress candle from onCandle() above, a raw WS trade tick
+// from Finnhub, or a bid/ask tick pushed by the MT5 EA. Deliberately does
+// NOT touch candleStores — TwelveData/Binance/Bybit remain the only
+// sources feeding the OHLC history the agents run technical analysis
+// against; this is purely the real-time layer on top of that.
+function onLivePrice(symbol, price, { change = null, bias = null, source = 'candle' } = {}) {
+  if (!SYMBOLS.includes(symbol)) return;
+  if (!Number.isFinite(price)) return;
+
+  if (executionEngine?.onPrice) {
+    try { executionEngine.onPrice(symbol, price, null); }
     catch (e) { log.warn(`ExecutionEngine.onPrice error [${symbol}]: ${e.message}`); }
   }
 
-  // FIX: market_update (the frontend's live price ticker) was gated behind
-  // `if (isClosed)` below — meaning it only updated once per candle CLOSE,
-  // i.e. once every 15 minutes at best (M15 is the fastest configured
-  // timeframe). A user watching the Mini App would see a price sit frozen
-  // for up to 15 minutes, which looks exactly like a dead feed rather than
-  // a market that ticks every second. This now runs on every tick
-  // (isClosed true or false), throttled to ~1/sec per symbol so a busy
-  // pair sending many ticks/sec doesn't flood the socket. runAnalysisCycle
-  // below stays gated on isClosed — re-running full agent analysis on
-  // every raw tick would be far too expensive/noisy; only the price
-  // stream needed to be tick-driven, not the analysis.
-  if (wsBus && candle) {
+  if (wsBus) {
     const now = Date.now();
     if (!lastMarketEmit[symbol] || now - lastMarketEmit[symbol] >= 1000) {
       lastMarketEmit[symbol] = now;
       wsBus.emit('market_update', {
         symbol,
-        price:  candle.close,
-        change: candle.open ? ((candle.close - candle.open) / candle.open * 100) : 0,
-        bias:   lastVotes[symbol]?.smc?.direction?.toLowerCase() || 'wait',
+        price,
+        change,
+        bias: bias ?? lastVotes[symbol]?.smc?.direction?.toLowerCase() ?? 'wait',
+        source,
       });
     }
-  }
-
-  // Only run analysis on closed candles to avoid noise
-  if (isClosed) {
-    setImmediate(() => runAnalysisCycle(symbol, timeframe));
   }
 }
 
@@ -1831,6 +1841,10 @@ function buildSingletons() {
       auditTrail, symbolManager, cotParser, memory,
       // For GET /api/outlook (signal-pipeline/market-outlook.js)
       regimeEngine, candleStores, symbols: SYMBOLS,
+      // For POST /api/ea/prices (api/server.js) — see onLivePrice()'s own
+      // comment above for why EA-pushed ticks need to go through this
+      // rather than emitting market_update directly.
+      onLivePrice,
     });
     log.info('Live engine singletons published for outcome-feedback wiring');
   } catch (err) {
@@ -2011,6 +2025,27 @@ function buildFeeds() {
     if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('TwelveDataFeed', tdFeed, fxSymbols);
   } else if (fxSymbols.length && !TWELVE_KEY) {
     log.warn(`Forex symbols ${fxSymbols.join(',')} configured but TWELVE_DATA_API_KEY is missing`);
+  }
+
+  // FIX: forex's live price ticker was entirely dependent on onCandle()'s
+  // throttled emission, itself gated behind TwelveData's own candle-close
+  // cadence (see lastMarketEmit above) — never genuinely tick-by-tick the
+  // way crypto's Binance WS already is. finnhub-feed.js's connectPriceStream
+  // (added this session — see its own comment for why this is confirmed
+  // free-tier) is a second, independent real-time source for exactly the
+  // symbols TwelveData already covers, feeding the identical market_update
+  // event onCandle() already uses. This doesn't touch TwelveData's request
+  // budget at all — it's a completely separate connection — and doesn't
+  // replace it either: TwelveData/Binance remain the only sources feeding
+  // candleStores (the OHLC data the agents actually run technical analysis
+  // against). This only makes the live price ticker itself more real-time.
+  if (finnhubFeed?.enabled() && fxSymbols.length) {
+    finnhubFeed.on('price', ({ symbol, price }) => {
+      onLivePrice(symbol, price, { source: 'finnhub' });
+    });
+    finnhubFeed.on('connected', () => log.info(`FinnhubFeed price stream connected for: ${fxSymbols.join(', ')}`));
+    finnhubFeed.on('error', (err) => log.warn(`FinnhubFeed price stream error: ${feedErrorMessage(err)}`));
+    finnhubFeed.connectPriceStream(fxSymbols);
   }
 
   return feeds;

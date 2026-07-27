@@ -32,6 +32,22 @@ const BASE_PRICE = {
 const DECIMALS = { EURUSD: 4, GBPUSD: 4, USDJPY: 3, XAUUSD: 2, BTCUSDT: 1, ETHUSDT: 2 };
 const PIP = { EURUSD: 0.0001, GBPUSD: 0.0001, USDJPY: 0.01, XAUUSD: 0.1, BTCUSDT: 10, ETHUSDT: 1 };
 
+// FIX: the Agent Breakdown panel renders `{s.agreeCount}/8 aligned`, but
+// agreeCount was only ever computed by the demo signal generator further
+// down — api/server.js's db.compactSignal() (the shape both /api/signals
+// and the 'signal' socket event actually deliver) never included it, so
+// every real signal showed "undefined/8 aligned" the moment live data
+// started flowing instead of demo data. Applied once, here, to both the
+// REST-polled list and each socket-pushed signal, rather than at render
+// time, so every consumer of `signals` state sees a consistently-shaped
+// object regardless of which transport it arrived by.
+function normalizeSignal(s) {
+  if (s.agreeCount != null) return s;
+  const dir = s.action || s.direction;
+  const agreeCount = Array.isArray(s.agents) ? s.agents.filter(a => a.direction === dir).length : 0;
+  return { ...s, agreeCount };
+}
+
 const FEEDS = [
   { name: 'Binance',      kind: 'crypto ws',  status: 'live' },
   { name: 'Bybit',        kind: 'crypto ws',  status: 'live' },
@@ -470,7 +486,7 @@ function useLiveFeed() {
       try {
         const r = await omniFetch(`/api/signals?limit=40`);
         if (!cancelled && r.ok) {
-          setSignals(r.signals);
+          setSignals(r.signals.map(normalizeSignal));
           setPrices(prev => {
             const next = { ...prev };
             r.signals.forEach(s => { if (s.symbol && s.currentPrice) next[s.symbol] = s.currentPrice; });
@@ -557,6 +573,19 @@ function useLiveFeed() {
         setFlash(f => ({ ...f, [sym]: payload.price >= prevPrice ? 'up' : 'down' }));
         setPrices(prev => ({ ...prev, [sym]: payload.price }));
         setChanges(c => ({ ...c, [sym]: ((payload.price - BASE_PRICE[sym]) / BASE_PRICE[sym]) * 100 }));
+      });
+
+      // FIX: the actual point of "connect the agents/pipeline to the
+      // frontend live data" — new signals previously only reached the UI
+      // via the 5s /api/signals poll above. index.js's agents already emit
+      // a 'signal' event on the shared bus the instant one fires; this
+      // just subscribes to it, so a signal appears on screen within
+      // milliseconds of the pipeline generating it, not up to 5s later.
+      // dedupe by id since the next poll will also pick this signal up
+      // once Mongo (or the server's memory cache) has it.
+      socket.on('signal', payload => {
+        if (cancelled || !payload?.id) return;
+        setSignals(prev => prev.some(s => s.id === payload.id) ? prev : [normalizeSignal(payload), ...prev].slice(0, 200));
       });
 
       // Complements the /api/stats poll above with push updates the

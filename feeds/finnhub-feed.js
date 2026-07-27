@@ -1,5 +1,7 @@
 'use strict';
 const https = require('https');
+const EventEmitter = require('events');
+const WebSocket = require('ws');
 
 // ─────────────────────────────────────────────
 //  CANDLE SUPPORT — ADDED
@@ -45,8 +47,9 @@ const TF_TO_FINNHUB_RESOLUTION = {
 
 const CANDLE_ACCESS_BLOCK_MS = 24 * 3600 * 1000; // stop retrying for 24h after a confirmed 403
 
-class FinnhubFeed {
+class FinnhubFeed extends EventEmitter {
   constructor(config = {}) {
+    super();
     this.apiKey = config.apiKey || process.env.FINNHUB_API_KEY || '';
     this.cacheMs = Number(config.cacheMs || process.env.FINNHUB_CACHE_MS || 5 * 60 * 1000);
     this._cache = new Map();
@@ -56,6 +59,14 @@ class FinnhubFeed {
     this._candleAccessBlockedUntil = null;
     this._candleAccessConfirmed = null; // true | false | null (unknown)
     this.forexSymbolMap = { ...DEFAULT_FOREX_SYMBOL_MAP, ...(config.forexSymbolMap || {}) };
+
+    // Live price stream (WS) state — see connectPriceStream() below.
+    this._ws = null;
+    this._wsSymbols = [];
+    this._wsReconnectAttempts = 0;
+    this._wsBackoffMs = 2000;
+    this._wsClosedByUser = false;
+    this._reverseMap = null;
   }
 
   enabled() {
@@ -236,6 +247,98 @@ class FinnhubFeed {
       });
     }
     return out;
+  }
+
+  // ─────────────────────────────────────────────
+  //  LIVE PRICE STREAM (WebSocket) — ADDED
+  // ─────────────────────────────────────────────
+  //
+  // Separate from the REST candle machinery above, which is 403-gated on
+  // an unconfirmed basis (see the note at the top of this file) — this
+  // path is confirmed free-tier per Finnhub's own docs (finnhub.io/docs/
+  // api/websocket-trades): real-time trade streaming, "1 API key can only
+  // open 1 connection at a time" is the only stated constraint, no
+  // paid-plan gate. Used here specifically for FOREX — crypto already has
+  // a strictly better source (Binance's own WS: no third-party hop, no
+  // key, no per-connection limit) so this is never subscribed for crypto
+  // symbols. Finnhub's docs also note some FX brokers don't support
+  // streaming (FXCM, Forex.com, FHFX) — the default forexSymbolMap above
+  // uses OANDA-sourced symbols, which isn't on that exclusion list, but
+  // this is genuinely a supplementary tick source layered on top of
+  // TwelveData's own polling, not a replacement for it — TwelveData
+  // remains the source of the OHLC candles the agents actually analyze;
+  // this only feeds the live price ticker (see the 'price' event below).
+  connectPriceStream(symbols = []) {
+    if (!this.apiKey) {
+      console.warn('[FinnhubFeed] connectPriceStream: no apiKey configured, skipping');
+      return;
+    }
+    this._wsSymbols = symbols.filter(s => this.forexSymbolMap[s]);
+    if (!this._wsSymbols.length) {
+      console.warn('[FinnhubFeed] connectPriceStream: none of the requested symbols have a forexSymbolMap entry');
+      return;
+    }
+    this._wsClosedByUser = false;
+    this._openWs();
+  }
+
+  disconnectPriceStream() {
+    this._wsClosedByUser = true;
+    if (this._ws) {
+      try { this._ws.close(); } catch (_) { /* already closed */ }
+      this._ws = null;
+    }
+  }
+
+  _openWs() {
+    this._ws = new WebSocket(`wss://ws.finnhub.io?token=${this.apiKey}`);
+
+    this._ws.on('open', () => {
+      this._wsReconnectAttempts = 0;
+      this._wsBackoffMs = 2000;
+      for (const sym of this._wsSymbols) {
+        this._ws.send(JSON.stringify({ type: 'subscribe', symbol: this.forexSymbolMap[sym] }));
+      }
+      console.log(`[FinnhubFeed] Price stream connected for: ${this._wsSymbols.join(', ')}`);
+      this.emit('connected');
+    });
+
+    this._ws.on('message', raw => {
+      let msg;
+      try { msg = JSON.parse(raw.toString()); } catch (_) { return; }
+      if (msg.type !== 'trade' || !Array.isArray(msg.data)) return;
+      const reverse = this._reverseSymbolMap();
+      for (const trade of msg.data) {
+        const omniceeSymbol = reverse[trade.s];
+        // volume 0 means "price update, no actual trade" per Finnhub's own
+        // docs — still a real, usable price tick, not fabricated data.
+        if (!omniceeSymbol || trade.p == null) continue;
+        this.emit('price', { symbol: omniceeSymbol, price: Number(trade.p), timestamp: trade.t || Date.now() });
+      }
+    });
+
+    this._ws.on('error', err => {
+      console.warn(`[FinnhubFeed] Price stream error: ${err.message}`);
+      this.emit('error', err);
+    });
+
+    this._ws.on('close', () => {
+      if (this._wsClosedByUser) return;
+      this._wsBackoffMs = Math.min(this._wsBackoffMs * 1.6, 60000);
+      this._wsReconnectAttempts++;
+      console.log(`[FinnhubFeed] Price stream disconnected — reconnecting in ${Math.round(this._wsBackoffMs)}ms (attempt ${this._wsReconnectAttempts})`);
+      setTimeout(() => this._openWs(), this._wsBackoffMs);
+    });
+  }
+
+  _reverseSymbolMap() {
+    if (!this._reverseMap) {
+      this._reverseMap = {};
+      for (const [omniceeSymbol, finnhubSymbol] of Object.entries(this.forexSymbolMap)) {
+        this._reverseMap[finnhubSymbol] = omniceeSymbol;
+      }
+    }
+    return this._reverseMap;
   }
 }
 
