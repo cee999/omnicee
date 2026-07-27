@@ -417,12 +417,20 @@ function createApp() {
     if (!Array.isArray(prices) || !prices.length) {
       return res.status(400).json({ ok: false, error: 'prices array required' });
     }
+    const onLivePrice = getEngines().onLivePrice;
     let accepted = 0;
     for (const p of prices) {
       if (!p?.symbol || p.bid == null) continue;
       const mid = p.ask != null ? (Number(p.bid) + Number(p.ask)) / 2 : Number(p.bid);
       if (!Number.isFinite(mid)) continue;
-      bus.emit('market_update', { symbol: p.symbol, price: mid, change: null, bias: null, source: 'mt5_ea' });
+      if (onLivePrice) {
+        onLivePrice(p.symbol, mid, { source: 'mt5_ea' });
+      } else {
+        // Trading engine not booted yet (e.g. Mongo/feed init still in
+        // progress) — degrade to a direct emit so the ticker still moves;
+        // executionEngine.onPrice() just isn't reachable yet either way.
+        bus.emit('market_update', { symbol: p.symbol, price: mid, change: null, bias: null, source: 'mt5_ea' });
+      }
       accepted++;
     }
     res.json({ ok: true, accepted });
