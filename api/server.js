@@ -39,6 +39,14 @@ if (!fs.existsSync(path.join(STATIC_ROOT, 'index.html'))) {
 const finnhub = new FinnhubFeed();
 const learningEngine = new AdaptiveLearningEngine({ store: db });
 
+// In-memory ring buffer of recent signals, fed by the live 'signal' bus
+// event inside startServer() below. Module-level (not inside either
+// createApp() or startServer()) because /api/signals lives in createApp()
+// while the bus listener that populates this needs `io` from startServer()
+// — see the FIX comment on that listener for why this cache exists at all.
+const RECENT_SIGNALS_CACHE = [];
+const RECENT_SIGNALS_CACHE_LIMIT = 200;
+
 let serverState = null;
 
 function createApp() {
@@ -90,14 +98,18 @@ function createApp() {
   });
 
   app.get('/api/signals', telegramAuthMiddleware, async (req, res) => {
-    const signals = await db.getRecentSignals({
-      symbol: req.query.symbol,
-      limit: req.query.limit || 50,
-    }).catch(err => {
-      res.status(503).json({ ok: false, error: err.message });
+    const symbol = req.query.symbol;
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    let signals = await db.getRecentSignals({ symbol, limit }).catch(err => {
+      console.warn('[API] getRecentSignals (Mongo) failed, falling back to in-memory cache:', err.message);
       return null;
     });
-    if (signals) res.json({ ok: true, signals });
+    let source = 'mongo';
+    if (!signals || signals.length === 0) {
+      signals = RECENT_SIGNALS_CACHE.filter(s => !symbol || s.symbol === symbol).slice(0, limit);
+      source = 'memory';
+    }
+    res.json({ ok: true, signals, source });
   });
 
   app.get('/api/outlook', telegramAuthMiddleware, async (req, res) => {
@@ -486,7 +498,36 @@ function startServer(config = {}) {
     });
   };
 
-  forward('signal', 'signal', db.saveSignal);
+  // FIX: GET /api/signals — the route the dashboard's Signals tab, Dashboard
+  // cards, and Tape all actually poll — only ever read from Mongo, with no
+  // fallback. The live agent pipeline emits a real 'signal' event on this
+  // bus every time it fires, regardless of Mongo's connection status
+  // (MONGODB_URI is still an unverified/possibly-disconnected piece of
+  // infra), and that event already reached Socket.IO clients in real time —
+  // but the REST route the frontend depends on for its initial load and its
+  // 5s poll returned an empty array forever whenever Mongo wasn't reachable,
+  // even while the pipeline was generating real signals correctly. This
+  // buffer is memory-only (lost on restart; fine, since there's only one
+  // live pipeline and Mongo is the durable copy when it's up) and always
+  // available — /api/signals below prefers Mongo (it has cross-restart
+  // history) but falls back to this whenever Mongo has nothing.
+  //
+  // Also compacts to the same shape db.saveSignal() persists (via
+  // db.compactSignal) BEFORE emitting to socket clients or caching —
+  // previously the socket 'signal' event sent the raw pipeline object
+  // (dozens of internal-only fields: intermarketCheck, entryOptimization,
+  // compressionContext, executionPlan, aiAdvisor reasoning, management,
+  // ensemble, etc.), which didn't match what Mongo-backed /api/signals
+  // returns. A client consuming both transports would have seen two
+  // different shapes for the same signal depending on whether it arrived
+  // by poll or by push.
+  bus.on('signal', payload => {
+    const compact = db.compactSignal(payload);
+    io.emit('signal', compact);
+    RECENT_SIGNALS_CACHE.unshift(compact);
+    if (RECENT_SIGNALS_CACHE.length > RECENT_SIGNALS_CACHE_LIMIT) RECENT_SIGNALS_CACHE.length = RECENT_SIGNALS_CACHE_LIMIT;
+    db.saveSignal(payload).catch(err => console.warn('[API] persist signal:', err.message));
+  });
   forward('market_update', 'market', db.saveMarketSnapshot);
   forward('risk_update', 'risk');
   forward('stats_update', 'stats');
