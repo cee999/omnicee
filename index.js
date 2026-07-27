@@ -63,6 +63,11 @@ const MAX_DRAWDOWN    = parseFloat(requireEnv('MAX_DRAWDOWN_PCT', '10.0'));
 const ACCOUNT_BALANCE = parseFloat(requireEnv('ACCOUNT_BALANCE', '10000'));
 const REQUIRE_KZ      = requireEnv('REQUIRE_KILLZONE', 'false') === 'true';
 const TWELVE_KEY      = requireEnv('TWELVE_DATA_API_KEY', '');
+// Forex provider toggle — TwelveData (default) or Finnhub (see
+// feeds/finnhub-feed.js for why: ~60 req/min free tier vs TwelveData's
+// 8/min). Set FOREX_PROVIDER=finnhub to use it; leaving it unset (or
+// 'twelvedata') keeps existing behavior unchanged.
+const FOREX_PROVIDER  = (requireEnv('FOREX_PROVIDER', 'twelvedata') || 'twelvedata').toLowerCase();
 // FIX: intermarket analysis (DXY/equity cross-confirmation) — the last item
 // on the original audit's "does not exist" list. Configurable since not
 // FIX: was 'DXY' / 'SPX500', with a comment claiming "every TwelveData
@@ -1968,13 +1973,59 @@ function buildFeeds() {
     if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('BybitFeed', bybitFeed, cryptoSymbols);
   }
 
-  // TwelveData feed for forex/commodities
-  if (TwelveDataFeed && fxSymbols.length && TWELVE_KEY) {
+  // Forex/gold feed — Finnhub or TwelveData, chosen via FOREX_PROVIDER.
+  // FIX: several feeds (Bybit, TwelveData, Myfxbook, OpenInsider) emit errors
+  const macroSymbols = intermarketAnalyzer ? [DXY_SYMBOL, EQUITY_INDEX_SYMBOL] : [];
+
+  if (FOREX_PROVIDER === 'finnhub' && FinnhubFeed && fxSymbols.length && process.env.FINNHUB_API_KEY) {
+    // Separate instance from the news-only `finnhubFeed` above so a forex
+    // feed failure/reconnect cycle can't disrupt economic-calendar polling,
+    // and so it's obvious in logs/dataIntegrityMonitor which one is which.
+    const finnhubForexFeed = new FinnhubFeed({
+      apiKey: process.env.FINNHUB_API_KEY, symbols: fxSymbols, timeframes: TIMEFRAMES_STR, db,
+    });
+    finnhubForexFeed.on('candle', onCandle);
+    finnhubForexFeed.on('candle_update', onCandle);
+    finnhubForexFeed.on('error', (err) => log.error(`Finnhub forex error: ${feedErrorMessage(err)}`));
+    finnhubForexFeed.on('connected', () => log.info(`FinnhubForexFeed connected for: ${fxSymbols.join(', ')}`));
+    feeds.push({
+      name: 'FinnhubForexFeed', instance: finnhubForexFeed, symbols: fxSymbols,
+      seed: () => {
+        let seeded = 0;
+        for (const symbol of fxSymbols) {
+          for (const tf of TIMEFRAMES_STR) {
+            const candles = finnhubForexFeed.candleStore.get(symbol, tf);
+            if (candles?.length && candleStores[symbol]) {
+              candleStores[symbol][tf] = candles.slice(-MAX_CANDLES_PER_TF);
+              seeded += candles.length;
+            }
+          }
+        }
+        if (seeded) log.info(`FinnhubForexFeed: seeded ${seeded} preloaded candles into the analysis pipeline`);
+      },
+    });
+    log.info(`FinnhubForexFeed configured for: ${fxSymbols.join(', ')} (free tier ~60 req/min vs TwelveData's 8/min)`);
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('FinnhubForexFeed', finnhubForexFeed, fxSymbols);
+
+    // Finnhub can serve UUP/SPY too (via /stock/candle) but that's a
+    // different endpoint/symbol format this module doesn't implement yet —
+    // reuse the TwelveData macro fallback rather than leave DXY/equity
+    // proxy data silently missing.
+    if (macroSymbols.length && TwelveDataFeed && TWELVE_KEY) {
+      const macroFeed = new TwelveDataFeed({ apiKey: TWELVE_KEY, symbols: macroSymbols, timeframes: TIMEFRAMES_STR, db });
+      macroFeed.on('price', (d) => intermarketAnalyzer.updatePrice(d.symbol, d.price, d.timestamp || Date.now()));
+      macroFeed.on('candle', (d) => intermarketAnalyzer.updatePrice(d.symbol, d.candle.close, d.candle.timestamp || Date.now()));
+      macroFeed.on('error', (err) => log.error(`TwelveData (macro) error: ${feedErrorMessage(err)}`));
+      feeds.push({ name: 'TwelveDataMacroFeed', instance: macroFeed, symbols: macroSymbols });
+      log.info(`TwelveDataMacroFeed configured for intermarket proxies: ${macroSymbols.join(', ')}`);
+    } else if (macroSymbols.length) {
+      log.warn(`Intermarket analysis wants ${macroSymbols.join(', ')} but TWELVE_DATA_API_KEY isn't set — DXY/equity proxy data unavailable`);
+    }
+  } else if (TwelveDataFeed && fxSymbols.length && TWELVE_KEY) {
     // FIX: DXY/equity-index candles must NOT go through onCandle() — it
     // early-returns for any symbol not in the tradeable SYMBOLS list, so a
     // macro symbol added there would be silently discarded, not analyzed.
     // Subscribe them separately and route explicitly to intermarketAnalyzer.
-    const macroSymbols = intermarketAnalyzer ? [DXY_SYMBOL, EQUITY_INDEX_SYMBOL] : [];
     const tdSymbols = [...new Set([...fxSymbols, ...macroSymbols])];
 
     const tdFeed = new TwelveDataFeed({
@@ -2009,6 +2060,8 @@ function buildFeeds() {
     });
     log.info(`TwelveDataFeed configured for: ${fxSymbols.join(', ')}${macroSymbols.length ? ` (+ macro: ${macroSymbols.join(', ')})` : ''}`);
     if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('TwelveDataFeed', tdFeed, fxSymbols);
+  } else if (fxSymbols.length && FOREX_PROVIDER === 'finnhub') {
+    log.warn(`FOREX_PROVIDER=finnhub but FINNHUB_API_KEY isn't set for ${fxSymbols.join(',')}`);
   } else if (fxSymbols.length && !TWELVE_KEY) {
     log.warn(`Forex symbols ${fxSymbols.join(',')} configured but TWELVE_DATA_API_KEY is missing`);
   }
