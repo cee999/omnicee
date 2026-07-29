@@ -784,7 +784,16 @@ class TwelveDataFeed extends EventEmitter {
         }
       } catch (err) {
         this._stats.errorsCount++;
-        this.emit('error', { source: 'rest_poll', error: err });
+        if (err.tdCode === 'DAILY_QUOTA_EXCEEDED') {
+          this._checkDailyReset();
+          if (!this._dailyExhaustedNotified) {
+            console.warn(`[TwelveDataFeed] Daily quota exhausted — ${this.fallbackFeed ? 'using fallback feed for live candles where possible, ' : ''}quote polling paused until reset.`);
+            this._dailyExhaustedNotified = true;
+            this.emit('quota_exhausted', { provider: 'twelvedata', timestamp: Date.now() });
+          }
+        } else {
+          this.emit('error', { source: 'rest_poll', error: err });
+        }
       }
     };
 

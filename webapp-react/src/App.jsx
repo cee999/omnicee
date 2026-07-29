@@ -742,6 +742,31 @@ function DashTab({ signals, equityCurve, equityCurveLive, accountBalance, prices
   // equity curve's last point, which is itself now real once trades have
   // closed (Known gap #2) but stays at the demo-seeded 10000 before that.
   const displayBalance = accountBalance ?? equityCurve[equityCurve.length - 1]?.equity ?? 10000;
+
+  // Live price chart: every real tick (socket 'market' in live mode, or
+  // the demo simulator) already lands in `prices` — this just keeps a
+  // rolling client-side window of it per symbol instead of discarding it,
+  // so there's an actual chart instead of only a snapshot number. No new
+  // backend endpoint needed; this is the same tick stream the ticker uses.
+  const [chartSymbol, setChartSymbol] = useState('XAUUSD');
+  const [priceHistory, setPriceHistory] = useState(() => Object.fromEntries(SYMBOLS.map(s => [s, []])));
+  useEffect(() => {
+    setPriceHistory(prev => {
+      const next = { ...prev };
+      let changed = false;
+      SYMBOLS.forEach(sym => {
+        if (prices[sym] == null) return;
+        const arr = prev[sym] || [];
+        if (arr.length && arr[arr.length - 1].price === prices[sym]) return;
+        next[sym] = [...arr, { t: Date.now(), price: prices[sym] }].slice(-180);
+        changed = true;
+      });
+      return changed ? next : prev;
+    });
+  }, [prices]);
+  const chartData = priceHistory[chartSymbol] || [];
+  const chartUp = chartData.length > 1 ? chartData[chartData.length - 1].price >= chartData[0].price : true;
+
   return (
     <div className="p-4 space-y-4">
       <div className="flex flex-wrap gap-3">
@@ -751,6 +776,46 @@ function DashTab({ signals, equityCurve, equityCurveLive, accountBalance, prices
         <StatCard label="Signals Today" value={signals.length} icon={Zap} accent="var(--violet)" />
         <StatCard label="Account Bal." value={`$${displayBalance.toLocaleString()}`} icon={DollarSign} accent="var(--emerald)" />
         <StatCard label="Max DD Limit" value="10.0%" icon={ShieldAlert} accent="var(--coral)" />
+      </div>
+
+      <div className="omni-panel p-4">
+        <div className="flex items-center justify-between flex-wrap gap-2 mb-1">
+          <SectionHeader icon={TrendingUp} title={`${chartSymbol} — Live`} sub={mode === 'live' ? 'real-time ticks' : 'demo simulator'} />
+          <div className="flex gap-1">
+            {SYMBOLS.map(sym => (
+              <button key={sym} onClick={() => setChartSymbol(sym)}
+                className="px-2 py-1 rounded font-mono text-[9px] uppercase tracking-wider transition-colors"
+                style={{
+                  color: chartSymbol === sym ? '#05070a' : 'var(--textDim)',
+                  background: chartSymbol === sym ? 'var(--emerald)' : 'var(--panel2)',
+                  border: '1px solid var(--border)',
+                }}>{sym}</button>
+            ))}
+          </div>
+        </div>
+        {chartData.length < 2 ? (
+          <div className="flex items-center justify-center font-mono text-[11px]" style={{ color: 'var(--textFaint)', height: 220 }}>
+            Collecting ticks…
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height={220}>
+            <AreaChart data={chartData}>
+              <defs>
+                <linearGradient id="priceGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={chartUp ? '#1fe3a8' : '#ff5470'} stopOpacity={0.35} />
+                  <stop offset="100%" stopColor={chartUp ? '#1fe3a8' : '#ff5470'} stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke="#1c232d" vertical={false} />
+              <XAxis dataKey="t" hide />
+              <YAxis domain={['dataMin', 'dataMax']} tick={{ fill: '#526078', fontSize: 10 }} width={64}
+                tickFormatter={(v) => fmtPrice(chartSymbol, v)} />
+              <Tooltip contentStyle={{ background: '#10151c', border: '1px solid #1c232d', borderRadius: 8, fontSize: 11 }}
+                labelFormatter={(t) => new Date(t).toLocaleTimeString()} formatter={(v) => [fmtPrice(chartSymbol, v), chartSymbol]} />
+              <Area type="monotone" dataKey="price" stroke={chartUp ? '#1fe3a8' : '#ff5470'} fill="url(#priceGrad)" strokeWidth={1.5} isAnimationActive={false} />
+            </AreaChart>
+          </ResponsiveContainer>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

@@ -1996,6 +1996,13 @@ function buildFeeds() {
       symbols:    tdSymbols,
       timeframes: TIMEFRAMES_STR,
       db,
+      // FIX: this was a fully-built, documented option (see the class
+      // JSDoc example: "fallbackFeed: finnhub, // used for live candles
+      // once daily quota is hit") that nothing ever actually passed in —
+      // so hitting the free-tier 800/day cap just logged an error per
+      // blocked request and served stale last-known candles, instead of
+      // routing to Finnhub the way the code already knew how to.
+      fallbackFeed: finnhubFeed?.enabled() ? finnhubFeed : null,
     });
     tdFeed.on('candle',        (d) => macroSymbols.includes(d.symbol) ? intermarketAnalyzer.updatePrice(d.symbol, d.candle.close, d.candle.timestamp || Date.now()) : onCandle(d));
     tdFeed.on('candle_update', (d) => macroSymbols.includes(d.symbol) ? intermarketAnalyzer.updatePrice(d.symbol, d.candle.close, d.candle.timestamp || Date.now()) : onCandle(d));
