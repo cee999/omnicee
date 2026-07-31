@@ -49,14 +49,14 @@ function normalizeSignal(s) {
 }
 
 const FEEDS = [
-  { name: 'Binance',      kind: 'crypto ws',  status: 'live' },
-  { name: 'Bybit',        kind: 'crypto ws',  status: 'live' },
-  { name: 'TwelveData',   kind: 'fx/commod',  status: 'live' },
-  { name: 'Finnhub',      kind: 'news',       status: 'live' },
-  { name: 'Alpha Vantage',kind: 'macro sent', status: 'degraded' },
-  { name: 'FMP',          kind: 'fundamentals',status: 'live' },
-  { name: 'CFTC COT',     kind: 'positioning',status: 'live' },
-  { name: 'Myfxbook',     kind: 'calendar',   status: 'live' },
+  { name: 'Binance',      kind: 'crypto ws',  status: 'unknown' },
+  { name: 'Bybit',        kind: 'crypto ws',  status: 'unknown' },
+  { name: 'TwelveData',   kind: 'fx/commod',  status: 'unknown' },
+  { name: 'Finnhub',      kind: 'news',       status: 'unknown' },
+  { name: 'Alpha Vantage',kind: 'macro sent', status: 'unknown' },
+  { name: 'FMP',          kind: 'fundamentals',status: 'unknown' },
+  { name: 'CFTC COT',     kind: 'positioning',status: 'unknown' },
+  { name: 'Myfxbook',     kind: 'calendar',   status: 'unknown' },
   { name: 'OpenInsider',  kind: 'SEC Form 4', status: 'inert', note: 'needs paid Parse.bot key' },
 ];
 
@@ -161,6 +161,18 @@ function SectionHeader({ icon: Icon, title, sub }) {
   );
 }
 
+/* Shown wherever a panel's real data hasn't arrived yet — replaces every
+   demo/simulated fallback that used to sit here instead. */
+function WaitingForBackend({ height = 140, label = 'Waiting for backend…' }) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-2 font-mono text-[10px] uppercase tracking-wider"
+      style={{ height, color: 'var(--textFaint)' }}>
+      <Circle size={6} fill="currentColor" className="omni-pulse" />
+      {label}
+    </div>
+  );
+}
+
 function StatCard({ label, value, delta, icon: Icon, accent = 'var(--emerald)' }) {
   return (
     <div className="omni-panel p-3 flex-1 min-w-[130px]">
@@ -202,89 +214,10 @@ function Gauge({ value, label, zones = [[0, 40, '#ff5470'], [40, 70, '#f0b429'],
   );
 }
 
-/* ── Mock signal generator — mirrors the real compactSignal() shape from
-   the OMNICEE backend (id/symbol/timeframe/action/score/entry/stopLoss/
-   targets/regime/gate/risk/agents/reasons). ────────────────────────────── */
-let _sigSeq = 1000;
-function generateSignal(symbol, price) {
-  const dir = pick(['BUY', 'SELL']);
-  const score = Math.round(rand(58, 97));
-  const pip = PIP[symbol];
-  const entry = price;
-  const stopLoss = dir === 'BUY' ? entry - pip * rand(8, 22) : entry + pip * rand(8, 22);
-  const risk = Math.abs(entry - stopLoss);
-  const targets = dir === 'BUY'
-    ? [entry + risk * 1.5, entry + risk * 2.6]
-    : [entry - risk * 1.5, entry - risk * 2.6];
-  const agents = AGENTS.map(a => {
-    const bullish = Math.random() > 0.35;
-    const conf = Math.round(rand(45, 96));
-    return { agent: a, score: conf, direction: (Math.random() > 0.22 ? dir : (dir === 'BUY' ? 'SELL' : 'BUY')), status: conf > 60 ? 'active' : 'weak' };
-  });
-  const agreeCount = agents.filter(a => a.direction === dir).length;
-  const gateChecklist = {
-    trap: Math.random() > 0.12,
-    compression: Math.random() > 0.15,
-    abnormalMarket: Math.random() > 0.08,
-    regimeFit: Math.random() > 0.2,
-    strategyFit: Math.random() > 0.18,
-  };
-  const failures = Object.entries(gateChecklist).filter(([, ok]) => !ok).map(([k]) => k);
-  const status = score >= 75 && failures.length === 0 ? 'approved' : (failures.length > 1 ? 'rejected' : 'gated');
-  const mcWinProb = +rand(45, 88).toFixed(1);
-  const bayesPosterior = +rand(0.38, 0.87).toFixed(2);
-  const statPassed = Math.round(rand(4, 10));
-  const wfe = +rand(0.25, 0.92).toFixed(2);
-  const validation = {
-    monteCarlo: { approved: mcWinProb >= 55, winProbability: mcWinProb, expectedR: +rand(-0.3, 1.9).toFixed(2), simulations: 5000 },
-    bayesian: { approved: bayesPosterior >= 0.52, posterior: bayesPosterior },
-    statistical: { approved: statPassed >= 6, passed: statPassed, total: 10 },
-    walkForward: { sufficient: Math.random() > 0.3, wfe, robust: wfe >= 0.5 },
-  };
-  const reasons = [
-    `${agreeCount}/8 agents aligned ${dir}`,
-    `Regime: ${pick(['trending', 'ranging', 'transitional'])} structure on ${pick(TIMEFRAMES)}`,
-    failures.length ? `Flagged: ${failures.join(', ')}` : 'All institutional gates cleared',
-    `Volatility ${pick(['compressed', 'expanding', 'normal'])}, tradeability ${pick(['high', 'medium', 'low'])}`,
-  ];
-  return {
-    id: `sig_${_sigSeq++}`,
-    symbol, timeframe: pick(TIMEFRAMES), action: dir,
-    timestamp: Date.now(), currentPrice: price,
-    score, entry, stopLoss, targets,
-    regime: {
-      regime: pick(['trend-up', 'trend-down', 'range', 'transition']),
-      trend: pick(['bullish', 'bearish', 'neutral']),
-      structure: pick(['HH-HL', 'LH-LL', 'consolidation']),
-      volatility: pick(['low', 'normal', 'elevated']),
-      tradeability: pick(['high', 'medium', 'low']),
-      confidence: Math.round(rand(55, 95)),
-    },
-    gate: { status, confidence: Math.round(rand(50, 95)), failures, warnings: [], checklist: gateChecklist },
-    risk: { approved: status === 'approved', effectiveRisk: +rand(0.5, 1.0).toFixed(2), maxLoss: Math.round(rand(40, 120)), note: status === 'approved' ? 'within daily loss budget' : 'held back by gate' },
-    validation,
-    agents, reasons, agreeCount,
-  };
-}
-
-function generateAuditEntry(symbol) {
-  const fired = Math.random() > 0.55;
-  const reasons = fired
-    ? ['score above threshold', 'gates cleared', 'regime fit confirmed']
-    : pick([['score below 75 threshold'], ['compression detected — held'], ['regime mismatch for strategy'], ['abnormal market — spread spike'], ['trap pattern suspected']]);
-  return { id: `aud_${Math.random().toString(36).slice(2, 9)}`, symbol, timeframe: pick(TIMEFRAMES), fired, reasons, timestamp: Date.now() };
-}
-
-const NEWS_SEED = [
-  'Fed officials signal patience on next rate move',
-  'Gold holds near highs as real yields soften',
-  'BTC funding rates cool after weekend liquidation cascade',
-  'ECB commentary keeps EUR crosses rangebound',
-  'DXY steadies as traders await CPI print',
-  'CFTC data shows large specs trimming USD longs',
-  'Risk sentiment firms on softer inflation expectations',
-  'Asia session liquidity thin ahead of London open',
-];
+/* Demo/simulated data generation has been removed entirely, per explicit
+   request — the app no longer fabricates signals, audit entries, prices,
+   or any other numbers. When the backend isn't reachable, every panel
+   shows a plain "waiting for backend" state instead. */
 
 /* ── Live-data seam ─────────────────────────────────────────────────────
    Point API_BASE at a deployed OMNICEE backend (e.g. your Render URL) and
@@ -341,40 +274,21 @@ async function omniFetch(path, timeoutMs = 4000) {
    self-contained simulator so the dashboard is never just a blank
    loading screen. ──────────────────────────────────────────────────── */
 function useLiveFeed() {
-  const [mode, setMode] = useState('checking'); // 'checking' | 'live' | 'demo'
+  const [mode, setMode] = useState('checking'); // 'checking' | 'live'
   const [now, setNow] = useState(Date.now());
-  const [prices, setPrices] = useState(() => ({ ...BASE_PRICE }));
-  const [changes, setChanges] = useState(() => Object.fromEntries(SYMBOLS.map(s => [s, 0])));
+  const [prices, setPrices] = useState(() => Object.fromEntries(SYMBOLS.map(s => [s, null])));
+  const [changes, setChanges] = useState(() => Object.fromEntries(SYMBOLS.map(s => [s, null])));
   const [flash, setFlash] = useState({});
-  const [signals, setSignals] = useState(() => {
-    const seed = [];
-    for (let i = 0; i < 14; i++) seed.push(generateSignal(pick(SYMBOLS), BASE_PRICE[pick(SYMBOLS)]));
-    return seed.sort((a, b) => b.timestamp - a.timestamp);
-  });
-  const [auditLog, setAuditLog] = useState(() => {
-    const seed = [];
-    for (let i = 0; i < 18; i++) seed.push(generateAuditEntry(pick(SYMBOLS)));
-    return seed;
-  });
-  const [equityCurve, setEquityCurve] = useState(() => {
-    let eq = 10000;
-    const pts = [];
-    for (let i = 60; i >= 0; i--) {
-      eq += rand(-60, 90);
-      pts.push({ t: i, equity: Math.round(eq) });
-    }
-    return pts;
-  });
+  const [signals, setSignals] = useState([]);
+  const [auditLog, setAuditLog] = useState([]);
+  const [equityCurve, setEquityCurve] = useState([]);
   const [stats, setStats] = useState(null);
   const [outlook, setOutlook] = useState(null);
   const [heatmapTiles, setHeatmapTiles] = useState(null);
   const [feedHealth, setFeedHealth] = useState(null);
   const [uptimeSec, setUptimeSec] = useState(null);
-  // FIX (Known gap #3 in webapp-react/README.md): "DASH/RISK account-
-  // balance figures aren't yet pulled from /api/stats's accountBalance
-  // field — still the demo-seeded number." null until a real EA-reported
-  // balance (POST /api/ea/balance) arrives via poll or the 'balance' socket
-  // channel; DashTab/RiskTab fall back to the demo default while it's null.
+  // Null until a real EA-reported balance (POST /api/ea/balance) arrives via
+  // poll or the 'balance' socket channel — DashTab/RiskTab show "—" until then.
   const [accountBalance, setAccountBalance] = useState(null);
   const [equityCurveLive, setEquityCurveLive] = useState(false);
   // FIX (Known gap #1): "Prices tick from signals, not a true feed." True,
@@ -404,7 +318,7 @@ function useLiveFeed() {
         .then(() => { if (!cancelled) { setMode('live'); setWakingBackend(false); } })
         .catch(() => {
           if (cancelled) return;
-          setMode(m => (m === 'live' ? m : 'demo'));
+          setMode(m => (m === 'live' ? m : 'checking'));
           setWakingBackend(true);
           timer = setTimeout(tryProbe, 4000);
         });
@@ -433,45 +347,6 @@ function useLiveFeed() {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
   }, []);
-
-  /* Demo simulation — unchanged behaviour from the original preview,
-     just gated so it only runs once the live probe has failed. */
-  useEffect(() => {
-    if (mode !== 'demo') return;
-    const tick = setInterval(() => {
-      setPrices(prev => {
-        const next = { ...prev };
-        const flashNext = {};
-        SYMBOLS.forEach(sym => {
-          const drift = prev[sym] * rand(-0.0006, 0.0006);
-          next[sym] = +(prev[sym] + drift).toFixed(DECIMALS[sym] + 1);
-          flashNext[sym] = drift >= 0 ? 'up' : 'down';
-        });
-        setFlash(flashNext);
-        setChanges(c => {
-          const nc = { ...c };
-          SYMBOLS.forEach(sym => { nc[sym] = ((next[sym] - BASE_PRICE[sym]) / BASE_PRICE[sym]) * 100; });
-          return nc;
-        });
-        return next;
-      });
-    }, 1600);
-    const signalTimer = setInterval(() => {
-      const sym = pick(SYMBOLS);
-      setSignals(prev => [generateSignal(sym, priceRef.current[sym]), ...prev].slice(0, 40));
-    }, 9000);
-    const auditTimer = setInterval(() => {
-      setAuditLog(prev => [generateAuditEntry(pick(SYMBOLS)), ...prev].slice(0, 30));
-    }, 3500);
-    const eqTimer = setInterval(() => {
-      setEquityCurve(prev => {
-        const last = prev[prev.length - 1]?.equity ?? 10000;
-        const next = Math.round(last + rand(-60, 90));
-        return [...prev.slice(1), { t: prev[prev.length - 1].t + 1, equity: next }];
-      });
-    }, 4000);
-    return () => { clearInterval(tick); clearInterval(signalTimer); clearInterval(auditTimer); clearInterval(eqTimer); };
-  }, [mode]);
 
   /* Live polling — real backend. Fast loop covers signals/stats (the
      things worth refreshing every few seconds); slow loop covers
@@ -639,11 +514,10 @@ function TopBar({ now, mode, socketLive, wakingBackend, onCommand }) {
   const time = new Date(now).toISOString().slice(11, 19);
   const date = new Date(now).toISOString().slice(0, 10);
   const status = {
-    checking: { label: 'Connecting', color: 'var(--gold)', pulse: true },
+    checking: wakingBackend
+      ? { label: 'Connecting · Waking Backend', color: 'var(--gold)', pulse: true }
+      : { label: 'Connecting', color: 'var(--gold)', pulse: true },
     live: { label: 'Live', color: 'var(--emerald)', pulse: true },
-    demo: wakingBackend
-      ? { label: 'Demo · Waking Backend', color: 'var(--gold)', pulse: true }
-      : { label: 'Demo Data', color: 'var(--textDim)', pulse: false },
   }[mode] || { label: 'Offline', color: 'var(--coral)', pulse: false };
   return (
     <div className="flex items-center gap-4 px-4 py-2.5 border-b" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
@@ -728,9 +602,9 @@ function NavBar({ active, onSelect }) {
 }
 
 /* ── DASH ───────────────────────────────────────────────────────────── */
-function DashTab({ signals, equityCurve, equityCurveLive, accountBalance, prices, changes, mode }) {
+function DashTab({ signals, equityCurve, equityCurveLive, accountBalance, journalStats, prices, changes, mode }) {
   const approved = signals.filter(s => s.gate.status === 'approved');
-  const winRate = 61 + Math.round((signals.reduce((a, s) => a + (s.score > 75 ? 1 : -1), 0)) % 8);
+  const hasJournal = journalStats && journalStats.total > 0;
   const avgScore = signals.length ? Math.round(signals.reduce((a, s) => a + s.score, 0) / signals.length) : 0;
   const consensus = AGENTS.map(agent => {
     const votes = signals.slice(0, 12).flatMap(s => s.agents.filter(a => a.agent === agent));
@@ -738,16 +612,18 @@ function DashTab({ signals, equityCurve, equityCurveLive, accountBalance, prices
     const total = votes.length || 1;
     return { agent, bullPct: Math.round((bull / total) * 100) };
   });
-  // FIX (Known gap #3): prefer the real EA-reported balance over the
-  // equity curve's last point, which is itself now real once trades have
-  // closed (Known gap #2) but stays at the demo-seeded 10000 before that.
-  const displayBalance = accountBalance ?? equityCurve[equityCurve.length - 1]?.equity ?? 10000;
+  // FIX: was `61 + (weird modulo of signal scores)` — a formula that looks
+  // like a real percentage but isn't derived from any actual outcome, and
+  // ran unconditionally regardless of mode. Now uses the real journal win
+  // rate (SignalJournal.getStats(), the same source VALID uses) and is
+  // honest about there being nothing to show until trades have closed.
+  const displayBalance = accountBalance ?? (equityCurveLive ? equityCurve[equityCurve.length - 1]?.equity : null);
 
-  // Live price chart: every real tick (socket 'market' in live mode, or
-  // the demo simulator) already lands in `prices` — this just keeps a
-  // rolling client-side window of it per symbol instead of discarding it,
-  // so there's an actual chart instead of only a snapshot number. No new
-  // backend endpoint needed; this is the same tick stream the ticker uses.
+  // Live price chart: every real tick (socket 'market' in live mode)
+  // already lands in `prices` — this just keeps a rolling client-side
+  // window of it per symbol instead of discarding it, so there's an
+  // actual chart instead of only a snapshot number. No new backend
+  // endpoint needed; this is the same tick stream the ticker uses.
   const [chartSymbol, setChartSymbol] = useState('XAUUSD');
   const [priceHistory, setPriceHistory] = useState(() => Object.fromEntries(SYMBOLS.map(s => [s, []])));
   useEffect(() => {
@@ -771,10 +647,10 @@ function DashTab({ signals, equityCurve, equityCurveLive, accountBalance, prices
     <div className="p-4 space-y-4">
       <div className="flex flex-wrap gap-3">
         <StatCard label="Active Signals" value={approved.length} icon={Radio} />
-        <StatCard label="Win Rate (30d)" value={`${winRate}%`} icon={Target} accent="var(--gold)" />
+        <StatCard label={hasJournal ? 'Win Rate (Journal)' : 'Win Rate'} value={hasJournal ? `${journalStats.winRate}%` : '—'} icon={Target} accent="var(--gold)" />
         <StatCard label="Avg Score" value={avgScore} icon={GaugeIcon} accent="var(--blue)" />
         <StatCard label="Signals Today" value={signals.length} icon={Zap} accent="var(--violet)" />
-        <StatCard label="Account Bal." value={`$${displayBalance.toLocaleString()}`} icon={DollarSign} accent="var(--emerald)" />
+        <StatCard label={accountBalance != null ? 'Account Bal. (live)' : 'Account Bal.'} value={displayBalance != null ? `$${displayBalance.toLocaleString()}` : '—'} icon={DollarSign} accent="var(--emerald)" />
         <StatCard label="Max DD Limit" value="10.0%" icon={ShieldAlert} accent="var(--coral)" />
       </div>
 
@@ -996,124 +872,95 @@ function SignalsTab({ signals }) {
 function IntelTab({ now, outlook, mode }) {
   const live = mode === 'live' && outlook;
 
-  /* Demo-mode fallback content — unchanged from the original preview. */
-  const mockSentiment = useMemo(() => SYMBOLS.map(s => ({ symbol: s, score: Math.round(rand(-80, 80)) })), []);
-  const mockCot = useMemo(() => ['EUR', 'GBP', 'JPY', 'XAU'].map(c => ({ currency: c, nonComm: Math.round(rand(-60000, 60000)) })), []);
-  const mockCalendar = useMemo(() => ([
-    { event: 'US CPI y/y', impact: 'high', mins: 42 },
-    { event: 'ECB Rate Decision', impact: 'high', mins: 185 },
-    { event: 'US Initial Jobless Claims', impact: 'medium', mins: 340 },
-    { event: 'UK Retail Sales m/m', impact: 'low', mins: 610 },
-  ]), []);
-  const mockNarrative = useMemo(() => pick([
-    'Majors are consolidating inside prior-week ranges; institutional positioning shows specs trimming dollar longs while gold holds a bid on softer real yields. Crypto remains correlated to macro liquidity signals rather than trading on-chain fundamentals this session.',
-    'Trend structure favors continuation on XAUUSD and BTCUSDT while EURUSD chops inside a well-defined range ahead of the ECB. Session filters currently favor the London/NY overlap for entries.',
-    'Volatility is compressing across forex majors — the pipeline is flagging this as a pre-breakout regime and tightening entry criteria accordingly until a directional resolution confirms.',
-  ]), [Math.floor(now / 45000)]);
-
-  /* Real MarketOutlookBuilder payload (signal-pipeline/market-outlook.js),
-     as returned by GET /api/outlook. */
-  const narrative = live ? (outlook.narrative || 'No narrative generated yet.') : mockNarrative;
+  const narrative = live ? (outlook.narrative || 'No narrative generated yet.') : null;
   const regimeRows = live ? (outlook.symbols || []).map(s => ({ symbol: s.symbol, regime: s.regime || '—', tradeability: s.tradeability || '—' })) : null;
   const cotRows = live
     ? (outlook.symbols || []).filter(s => s.institutionalPositioning).map(s => ({ currency: s.symbol, nonComm: s.institutionalPositioning.largeSpecNet ?? 0, signal: s.institutionalPositioning.signal }))
-    : mockCot;
+    : null;
   const calendarRows = live
     ? [...(outlook.today?.tier1Events || []), ...(outlook.week?.tier1Events || [])].slice(0, 6).map(e => ({ event: `${e.name} (${e.currency})`, impact: 'high', mins: Math.max(0, Math.round((e.hoursAway || 0) * 60)) }))
-    : mockCalendar;
-  const newsRows = live ? (outlook.news || []).slice(0, 6).map(n => n.headline) : NEWS_SEED.slice(0, 6);
+    : null;
+  const newsRows = live ? (outlook.news || []).slice(0, 6).map(n => n.headline) : null;
 
   return (
     <div className="p-4 space-y-4">
       <div className="omni-panel p-4">
-        <SectionHeader icon={Globe2} title="Market Outlook" sub={live ? 'live · signal-pipeline/market-outlook' : 'demo · signal-explainer'} />
-        <p className="text-[12px] leading-relaxed" style={{ color: 'var(--textDim)' }}>{narrative}</p>
+        <SectionHeader icon={Globe2} title="Market Outlook" sub={live ? 'live · signal-pipeline/market-outlook' : undefined} />
+        {narrative ? <p className="text-[12px] leading-relaxed" style={{ color: 'var(--textDim)' }}>{narrative}</p> : <WaitingForBackend height={60} />}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="omni-panel p-4">
-          {live ? (
-            <>
-              <SectionHeader icon={Activity} title="Regime & Tradeability" sub="per symbol" />
-              <div className="space-y-2">
-                {regimeRows.length === 0 && <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No symbol data yet.</div>}
-                {regimeRows.map(r => (
-                  <div key={r.symbol} className="flex items-center justify-between font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
-                    <span style={{ color: 'var(--text)' }}>{r.symbol}</span>
-                    <span style={{ color: 'var(--textDim)' }}>{r.regime}</span>
-                    <Pill tone={r.tradeability === 'high' ? 'up' : r.tradeability === 'low' ? 'down' : 'neutral'}>{r.tradeability}</Pill>
-                  </div>
-                ))}
-              </div>
-            </>
+          <SectionHeader icon={Activity} title="Regime & Tradeability" sub={live ? 'per symbol' : undefined} />
+          {regimeRows === null ? <WaitingForBackend /> : regimeRows.length === 0 ? (
+            <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No symbol data yet.</div>
           ) : (
-            <>
-              <SectionHeader icon={Activity} title="Macro Sentiment" sub="Alpha Vantage · demo" />
-              <div className="space-y-2">
-                {mockSentiment.map(s => (
-                  <div key={s.symbol} className="flex items-center gap-2 font-mono text-[11px]">
-                    <span className="w-16" style={{ color: 'var(--textDim)' }}>{s.symbol}</span>
-                    <div className="flex-1 h-2 rounded-full relative" style={{ background: 'var(--border)' }}>
-                      <div className="absolute top-0 bottom-0 left-1/2" style={{ width: 1, background: 'var(--borderBright)' }} />
-                      <div className="absolute top-0 bottom-0 rounded-full" style={{
-                        left: s.score >= 0 ? '50%' : `${50 + s.score / 2}%`,
-                        width: `${Math.abs(s.score) / 2}%`,
-                        background: s.score >= 0 ? 'var(--emerald)' : 'var(--coral)',
-                      }} />
-                    </div>
-                    <span className="w-10 text-right" style={{ color: s.score >= 0 ? 'var(--emerald)' : 'var(--coral)' }}>{s.score}</span>
-                  </div>
-                ))}
-              </div>
-            </>
+            <div className="space-y-2">
+              {regimeRows.map(r => (
+                <div key={r.symbol} className="flex items-center justify-between font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
+                  <span style={{ color: 'var(--text)' }}>{r.symbol}</span>
+                  <span style={{ color: 'var(--textDim)' }}>{r.regime}</span>
+                  <Pill tone={r.tradeability === 'high' ? 'up' : r.tradeability === 'low' ? 'down' : 'neutral'}>{r.tradeability}</Pill>
+                </div>
+              ))}
+            </div>
           )}
         </div>
 
         <div className="omni-panel p-4">
-          <SectionHeader icon={ShieldAlert} title="CFTC COT Positioning" sub={live ? 'large-spec net, per symbol' : 'non-comm, demo'} />
-          <div className="space-y-3">
-            {cotRows.length === 0 && <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No COT data available for tracked symbols.</div>}
-            {cotRows.map(c => (
-              <div key={c.currency} className="font-mono text-[11px]">
-                <div className="flex justify-between mb-1">
-                  <span style={{ color: 'var(--text)' }}>{c.currency}</span>
-                  {c.signal && <span style={{ color: 'var(--textFaint)' }}>{c.signal}</span>}
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="w-16" style={{ color: 'var(--textFaint)' }}>Large spec</span>
-                  <div className="flex-1 h-1.5 rounded-full" style={{ background: 'var(--border)' }}>
-                    <div className="h-full rounded-full" style={{ width: `${Math.min(100, Math.abs(c.nonComm) / 600)}%`, background: c.nonComm >= 0 ? 'var(--emerald)' : 'var(--coral)' }} />
+          <SectionHeader icon={ShieldAlert} title="CFTC COT Positioning" sub={live ? 'large-spec net, per symbol' : undefined} />
+          {cotRows === null ? <WaitingForBackend /> : cotRows.length === 0 ? (
+            <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No COT data available for tracked symbols.</div>
+          ) : (
+            <div className="space-y-3">
+              {cotRows.map(c => (
+                <div key={c.currency} className="font-mono text-[11px]">
+                  <div className="flex justify-between mb-1">
+                    <span style={{ color: 'var(--text)' }}>{c.currency}</span>
+                    {c.signal && <span style={{ color: 'var(--textFaint)' }}>{c.signal}</span>}
                   </div>
-                  <span className="w-14 text-right" style={{ color: 'var(--textDim)' }}>{c.nonComm.toLocaleString()}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="w-16" style={{ color: 'var(--textFaint)' }}>Large spec</span>
+                    <div className="flex-1 h-1.5 rounded-full" style={{ background: 'var(--border)' }}>
+                      <div className="h-full rounded-full" style={{ width: `${Math.min(100, Math.abs(c.nonComm) / 600)}%`, background: c.nonComm >= 0 ? 'var(--emerald)' : 'var(--coral)' }} />
+                    </div>
+                    <span className="w-14 text-right" style={{ color: 'var(--textDim)' }}>{c.nonComm.toLocaleString()}</span>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="omni-panel p-4">
-          <SectionHeader icon={Clock} title="Economic Calendar" sub={live ? 'Myfxbook · tier-1' : 'Myfxbook · demo'} />
-          <div className="space-y-1.5">
-            {calendarRows.length === 0 && <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No tier-1 events on the horizon.</div>}
-            {calendarRows.map((e, i) => (
-              <div key={i} className="flex items-center gap-2 font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
-                <Pill tone={e.impact === 'high' ? 'down' : e.impact === 'medium' ? 'warn' : 'neutral'}>{e.impact}</Pill>
-                <span className="flex-1" style={{ color: 'var(--textDim)' }}>{e.event}</span>
-                <span style={{ color: 'var(--textFaint)' }}>in {Math.floor(e.mins / 60)}h{e.mins % 60}m</span>
-              </div>
-            ))}
-          </div>
+          <SectionHeader icon={Clock} title="Economic Calendar" sub={live ? 'Myfxbook · tier-1' : undefined} />
+          {calendarRows === null ? <WaitingForBackend /> : calendarRows.length === 0 ? (
+            <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No tier-1 events on the horizon.</div>
+          ) : (
+            <div className="space-y-1.5">
+              {calendarRows.map((e, i) => (
+                <div key={i} className="flex items-center gap-2 font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
+                  <Pill tone={e.impact === 'high' ? 'down' : e.impact === 'medium' ? 'warn' : 'neutral'}>{e.impact}</Pill>
+                  <span className="flex-1" style={{ color: 'var(--textDim)' }}>{e.event}</span>
+                  <span style={{ color: 'var(--textFaint)' }}>in {Math.floor(e.mins / 60)}h{e.mins % 60}m</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
         <div className="omni-panel p-4">
-          <SectionHeader icon={Newspaper} title="Headlines" sub={live ? 'Finnhub' : 'Finnhub · demo'} />
-          <div className="space-y-1.5">
-            {newsRows.length === 0 && <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No headlines returned.</div>}
-            {newsRows.map((n, i) => (
-              <div key={i} className="font-mono text-[11px] py-1 border-b" style={{ color: 'var(--textDim)', borderColor: 'var(--border)' }}>{n}</div>
-            ))}
-          </div>
+          <SectionHeader icon={Newspaper} title="Headlines" sub={live ? 'Finnhub' : undefined} />
+          {newsRows === null ? <WaitingForBackend /> : newsRows.length === 0 ? (
+            <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No headlines returned.</div>
+          ) : (
+            <div className="space-y-1.5">
+              {newsRows.map((n, i) => (
+                <div key={i} className="font-mono text-[11px] py-1 border-b" style={{ color: 'var(--textDim)', borderColor: 'var(--border)' }}>{n}</div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -1125,19 +972,13 @@ function NewsTab({ news, mode }) {
   const [symFilter, setSymFilter] = useState('ALL');
   const live = mode === 'live' && Array.isArray(news);
 
-  const demoNews = useMemo(() => NEWS_SEED.map((headline, i) => ({
-    headline, source: pick(['Reuters', 'Bloomberg', 'DailyFX', 'ForexLive', 'CoinDesk']),
-    url: null, datetime: Date.now() - i * rand(400000, 3200000),
-    symbol: pick(SYMBOLS),
-  })), []);
-
-  const items = live ? news : demoNews;
-  const filtered = symFilter === 'ALL' ? items : items.filter(n => n.symbol === symFilter);
+  const items = live ? news : null;
+  const filtered = items === null ? null : symFilter === 'ALL' ? items : items.filter(n => n.symbol === symFilter);
 
   return (
     <div className="p-4 space-y-3">
       <div className="flex items-center gap-2 flex-wrap">
-        <SectionHeader icon={Newspaper} title="Headlines" sub={live ? 'live · Finnhub' : 'demo · Finnhub'} />
+        <SectionHeader icon={Newspaper} title="Headlines" sub={live ? 'live · Finnhub' : undefined} />
         <div className="ml-auto flex gap-1 flex-wrap">
           {['ALL', ...SYMBOLS].map(s => (
             <button key={s} onClick={() => setSymFilter(s)}
@@ -1149,7 +990,7 @@ function NewsTab({ news, mode }) {
         </div>
       </div>
       <div className="omni-panel p-4">
-        {filtered.length === 0 ? (
+        {filtered === null ? <WaitingForBackend height={200} /> : filtered.length === 0 ? (
           <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No headlines for this filter yet.</div>
         ) : (
           <div className="space-y-0.5 max-h-[560px] overflow-y-auto omni-scroll">
@@ -1186,12 +1027,12 @@ function MonitorTab({ auditLog, feedHealth, uptimeSec, mode }) {
   });
   const uptimeLabel = mode === 'live' && uptimeSec != null
     ? `${Math.floor(uptimeSec / 3600)}h ${Math.floor((uptimeSec % 3600) / 60)}m`
-    : `${Math.floor(rand(4, 72))}h ${Math.floor(rand(0, 59))}m`;
+    : null;
 
   return (
     <div className="p-4 space-y-4">
       <div className="omni-panel p-4">
-        <SectionHeader icon={Database} title="Feed Health" sub={`${feeds.filter(f => f.status === 'live').length}/${feeds.length} live${mode === 'live' ? '' : ' · demo'}`} />
+        <SectionHeader icon={Database} title="Feed Health" sub={`${feeds.filter(f => f.status === 'live').length}/${feeds.length} live${uptimeLabel ? ` · up ${uptimeLabel}` : ''}`} />
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5">
           {feeds.map(f => (
             <div key={f.name} className="omni-panel2 p-3">
@@ -1208,9 +1049,9 @@ function MonitorTab({ auditLog, feedHealth, uptimeSec, mode }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="omni-panel p-4">
-          <SectionHeader icon={ScrollText} title="Audit Trail" sub="every cycle, fired or not" />
+      <div className="omni-panel p-4">
+        <SectionHeader icon={ScrollText} title="Audit Trail" sub="every cycle, fired or not" />
+        {auditLog.length === 0 ? <WaitingForBackend height={140} label="No audit entries yet" /> : (
           <div className="space-y-1 max-h-72 overflow-y-auto omni-scroll">
             {auditLog.map(e => (
               <div key={e.id} className="flex items-start gap-2 font-mono text-[10px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
@@ -1223,41 +1064,7 @@ function MonitorTab({ auditLog, feedHealth, uptimeSec, mode }) {
               </div>
             ))}
           </div>
-        </div>
-
-        <div className="omni-panel p-4">
-          <SectionHeader icon={Cpu} title="Orchestrator" sub="conflict resolution · cache" />
-          <div className="space-y-3">
-            <div className="flex items-center justify-between font-mono text-[11px]">
-              <span style={{ color: 'var(--textDim)' }}>Agent conflicts resolved (1h)</span>
-              <span style={{ color: 'var(--text)' }}>{Math.round(rand(4, 22))}</span>
-            </div>
-            <div className="flex items-center justify-between font-mono text-[11px]">
-              <span style={{ color: 'var(--textDim)' }}>Market-hours gate</span>
-              <Pill tone="up">open</Pill>
-            </div>
-            <div className="flex items-center justify-between font-mono text-[11px]">
-              <span style={{ color: 'var(--textDim)' }}>Symbol blacklist</span>
-              <span style={{ color: 'var(--textFaint)' }}>none active</span>
-            </div>
-            <div className="flex items-center justify-between font-mono text-[11px]">
-              <span style={{ color: 'var(--textDim)' }}>Redis cache</span>
-              <Pill tone="neutral">not configured (free tier)</Pill>
-            </div>
-            <div className="flex items-center justify-between font-mono text-[11px]">
-              <span style={{ color: 'var(--textDim)' }}>Pinecone memory</span>
-              <Pill tone="neutral">not configured (free tier)</Pill>
-            </div>
-            <div className="flex items-center justify-between font-mono text-[11px]">
-              <span style={{ color: 'var(--textDim)' }}>MongoDB Atlas (M0)</span>
-              <Pill tone="up">connected</Pill>
-            </div>
-            <div className="flex items-center justify-between font-mono text-[11px]">
-              <span style={{ color: 'var(--textDim)' }}>Process uptime</span>
-              <span style={{ color: 'var(--text)' }}>{uptimeLabel}</span>
-            </div>
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );
@@ -1272,21 +1079,6 @@ function tileBiasSign(bias) {
 
 function HeatTab({ heatmapTiles, mode }) {
   const live = mode === 'live' && Array.isArray(heatmapTiles);
-
-  /* Demo-mode fallback — unchanged from the original preview. Note: the
-     real GET /api/heatmap (automation/market-heatmap.js) returns a flat,
-     ranked list of per-symbol heat tiles (score/bucket/bias/opportunity/
-     relative-strength), not a symbol×symbol correlation matrix — so the
-     live view below is shaped differently from this demo grid on purpose,
-     not as a simplification of it. */
-  const corr = useMemo(() => {
-    const m = {};
-    SYMBOLS.forEach(a => { m[a] = {}; SYMBOLS.forEach(b => { m[a][b] = a === b ? 1 : +rand(-1, 1).toFixed(2); }); });
-    return m;
-  }, []);
-  const rs = useMemo(() => SYMBOLS.map(s => ({
-    symbol: s, ...Object.fromEntries(TIMEFRAMES.map(tf => [tf, +rand(-1, 1).toFixed(2)])),
-  })), []);
 
   if (live) {
     return (
@@ -1329,47 +1121,10 @@ function HeatTab({ heatmapTiles, mode }) {
   }
 
   return (
-    <div className="p-4 space-y-4">
-      <div className="omni-panel p-4 overflow-x-auto omni-scroll">
-        <SectionHeader icon={Flame} title="Correlation Matrix" sub="rolling 50-bar, H1 · demo" />
-        <div className="inline-block min-w-full">
-          <div className="grid" style={{ gridTemplateColumns: `90px repeat(${SYMBOLS.length}, 68px)` }}>
-            <div />
-            {SYMBOLS.map(s => <div key={s} className="font-mono text-[9px] text-center py-1" style={{ color: 'var(--textFaint)' }}>{s}</div>)}
-            {SYMBOLS.map(rowSym => (
-              <Fragment key={rowSym}>
-                <div className="font-mono text-[10px] py-1 pr-2" style={{ color: 'var(--textDim)' }}>{rowSym}</div>
-                {SYMBOLS.map(colSym => (
-                  <div key={rowSym + colSym} className="font-mono text-[10px] text-center py-2 m-0.5 rounded"
-                    style={{ background: heatColor(corr[rowSym][colSym]), color: 'var(--text)' }}>
-                    {corr[rowSym][colSym].toFixed(2)}
-                  </div>
-                ))}
-              </Fragment>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="omni-panel p-4 overflow-x-auto omni-scroll">
-        <SectionHeader icon={TrendingUp} title="Relative Strength Heat" sub="momentum by timeframe · demo" />
-        <div className="inline-block min-w-full">
-          <div className="grid" style={{ gridTemplateColumns: `90px repeat(${TIMEFRAMES.length}, 90px)` }}>
-            <div />
-            {TIMEFRAMES.map(tf => <div key={tf} className="font-mono text-[9px] text-center py-1" style={{ color: 'var(--textFaint)' }}>{tf}</div>)}
-            {rs.map(row => (
-              <Fragment key={row.symbol}>
-                <div className="font-mono text-[10px] py-1 pr-2" style={{ color: 'var(--textDim)' }}>{row.symbol}</div>
-                {TIMEFRAMES.map(tf => (
-                  <div key={row.symbol + tf} className="font-mono text-[10px] text-center py-2 m-0.5 rounded flex items-center justify-center gap-1"
-                    style={{ background: heatColor(row[tf]), color: 'var(--text)' }}>
-                    {row[tf] >= 0 ? <ArrowUpRight size={10} /> : <ArrowDownRight size={10} />}{Math.abs(row[tf]).toFixed(2)}
-                  </div>
-                ))}
-              </Fragment>
-            ))}
-          </div>
-        </div>
+    <div className="p-4">
+      <div className="omni-panel p-4">
+        <SectionHeader icon={Flame} title="Market Heat Map" />
+        <WaitingForBackend height={200} />
       </div>
     </div>
   );
@@ -1379,52 +1134,12 @@ function HeatTab({ heatmapTiles, mode }) {
 function ValidTab({ signals, journalStats, learningProfiles, mode }) {
   const live = mode === 'live';
 
-  /* Demo-mode fallback — unchanged from the original preview. */
-  const demoMonteCarlo = useMemo(() => {
-    const buckets = [];
-    for (let i = -10; i <= 10; i++) {
-      const h = Math.round(60 * Math.exp(-(i * i) / 18) + rand(-3, 3));
-      buckets.push({ r: i, count: Math.max(0, h) });
-    }
-    return buckets;
-  }, []);
-  const demoBacktest = { winRate: 58.4, profitFactor: 1.74, maxDD: 8.9, sharpe: 1.32, expectancy: 0.31, trades: 1284 };
-
   if (!live) {
     return (
-      <div className="p-4 space-y-4">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div className="omni-panel p-3 flex flex-col items-center"><Gauge value={68} label="Walk-Forward Eff. · demo" /></div>
-          <div className="omni-panel p-3 flex flex-col items-center"><Gauge value={74} label="Bayesian Confidence · demo" /></div>
-          <div className="omni-panel p-3 flex flex-col items-center"><Gauge value={demoBacktest.winRate} label="Backtest Win Rate · demo" /></div>
-          <div className="omni-panel p-3 flex flex-col items-center justify-center">
-            <span className="font-mono text-2xl font-bold" style={{ color: 'var(--gold)' }}>2.3%</span>
-            <span className="font-mono text-[9px] uppercase tracking-wider mt-1" style={{ color: 'var(--textFaint)' }}>Kelly Suggested Size · demo</span>
-          </div>
-        </div>
+      <div className="p-4">
         <div className="omni-panel p-4">
-          <SectionHeader icon={FlaskConical} title="Monte Carlo Return Distribution" sub="10,000 paths · R-multiple · demo" />
-          <ResponsiveContainer width="100%" height={180}>
-            <BarChart data={demoMonteCarlo}>
-              <CartesianGrid stroke="#1c232d" vertical={false} />
-              <XAxis dataKey="r" tick={{ fill: '#526078', fontSize: 10 }} />
-              <YAxis tick={{ fill: '#526078', fontSize: 10 }} width={30} />
-              <Tooltip contentStyle={{ background: '#10151c', border: '1px solid #1c232d', borderRadius: 8, fontSize: 11 }} />
-              <Bar dataKey="count" radius={[2, 2, 0, 0]}>
-                {demoMonteCarlo.map((b, i) => <Cell key={i} fill={b.r >= 0 ? '#1fe3a8' : '#ff5470'} />)}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-        <div className="omni-panel p-4">
-          <SectionHeader icon={CheckCircle2} title="Backtest Summary" sub={`${demoBacktest.trades.toLocaleString()} trades · demo`} />
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-            <StatCard label="Win Rate" value={`${demoBacktest.winRate}%`} />
-            <StatCard label="Profit Factor" value={demoBacktest.profitFactor} accent="var(--gold)" />
-            <StatCard label="Max Drawdown" value={`${demoBacktest.maxDD}%`} accent="var(--coral)" />
-            <StatCard label="Sharpe" value={demoBacktest.sharpe} accent="var(--blue)" />
-            <StatCard label="Expectancy (R)" value={demoBacktest.expectancy} accent="var(--violet)" />
-          </div>
+          <SectionHeader icon={FlaskConical} title="Validation" />
+          <WaitingForBackend height={240} />
         </div>
       </div>
     );
@@ -1529,39 +1244,37 @@ function ValidTab({ signals, journalStats, learningProfiles, mode }) {
 }
 
 /* ── TAPE ───────────────────────────────────────────────────────────── */
-function TapeTab({ signals, prices }) {
-  const executions = useMemo(() => signals.filter(s => s.gate.status === 'approved').slice(0, 20).map(s => {
-    const closed = Math.random() > 0.4;
-    const pnlR = closed ? +rand(-1.2, 2.8).toFixed(2) : null;
-    return { ...s, fillPrice: s.entry * (1 + rand(-0.0003, 0.0003)), closed, pnlR };
-  }), [signals]);
-  const runningPnL = executions.filter(e => e.closed).reduce((a, e) => a + e.pnlR, 0);
+function TapeTab({ signals, prices, mode }) {
+  const approved = useMemo(() => signals.filter(s => s.gate.status === 'approved').slice(0, 20), [signals]);
 
   return (
     <div className="p-4 space-y-4">
       <div className="flex items-center gap-4">
-        <StatCard label="Open Positions" value={executions.filter(e => !e.closed).length} icon={Activity} />
-        <StatCard label="Closed Today" value={executions.filter(e => e.closed).length} icon={CheckCircle2} accent="var(--blue)" />
-        <StatCard label="Running P/L (R)" value={runningPnL.toFixed(2)} delta={runningPnL} icon={DollarSign} accent={runningPnL >= 0 ? 'var(--emerald)' : 'var(--coral)'} />
+        <StatCard label="Approved Signals" value={approved.length} icon={Activity} />
+        <StatCard label="Avg Score" value={approved.length ? Math.round(approved.reduce((a, s) => a + s.score, 0) / approved.length) : '—'} icon={GaugeIcon} accent="var(--blue)" />
       </div>
       <div className="omni-panel overflow-hidden">
-        <SectionHeader icon={ScrollText} title="Execution Tape" sub="via MT5 EA bridge (OmniceeEA.mq5)" />
-        <div className="grid grid-cols-[70px_46px_44px_1fr_1fr_60px_60px] gap-2 px-3 py-2 font-mono text-[9px] uppercase tracking-wider border-b border-t" style={{ color: 'var(--textFaint)', borderColor: 'var(--border)' }}>
-          <span>Symbol</span><span>TF</span><span>Dir</span><span>Fill</span><span>Signal</span><span>P/L (R)</span><span>Status</span>
-        </div>
-        <div className="max-h-96 overflow-y-auto omni-scroll">
-          {executions.map(e => (
-            <div key={e.id} className="omni-row grid grid-cols-[70px_46px_44px_1fr_1fr_60px_60px] gap-2 px-3 py-2 font-mono text-[11px] border-b items-center" style={{ borderColor: 'var(--border)' }}>
-              <span style={{ color: 'var(--text)' }}>{e.symbol}</span>
-              <span style={{ color: 'var(--textDim)' }}>{e.timeframe}</span>
-              <span style={{ color: e.action === 'BUY' ? 'var(--emerald)' : 'var(--coral)' }}>{e.action}</span>
-              <span style={{ color: 'var(--textDim)' }}>{fmtPrice(e.symbol, e.fillPrice)}</span>
-              <span style={{ color: 'var(--textFaint)' }}>{e.id}</span>
-              <span style={{ color: e.pnlR == null ? 'var(--textFaint)' : e.pnlR >= 0 ? 'var(--emerald)' : 'var(--coral)' }}>{e.pnlR == null ? '—' : e.pnlR}</span>
-              <Pill tone={e.closed ? (e.pnlR >= 0 ? 'up' : 'down') : 'info'}>{e.closed ? 'closed' : 'open'}</Pill>
+        <SectionHeader icon={ScrollText} title="Signal Queue" sub="approved, awaiting/pending EA execution — no live fills endpoint yet" />
+        {mode !== 'live' ? <WaitingForBackend height={200} /> : approved.length === 0 ? (
+          <div className="p-4 font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No approved signals yet.</div>
+        ) : (
+          <>
+            <div className="grid grid-cols-[70px_46px_44px_1fr_60px] gap-2 px-3 py-2 font-mono text-[9px] uppercase tracking-wider border-b border-t" style={{ color: 'var(--textFaint)', borderColor: 'var(--border)' }}>
+              <span>Symbol</span><span>TF</span><span>Dir</span><span>Entry</span><span>Score</span>
             </div>
-          ))}
-        </div>
+            <div className="max-h-96 overflow-y-auto omni-scroll">
+              {approved.map(s => (
+                <div key={s.id} className="omni-row grid grid-cols-[70px_46px_44px_1fr_60px] gap-2 px-3 py-2 font-mono text-[11px] border-b items-center" style={{ borderColor: 'var(--border)' }}>
+                  <span style={{ color: 'var(--text)' }}>{s.symbol}</span>
+                  <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
+                  <span style={{ color: s.action === 'BUY' ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
+                  <span style={{ color: 'var(--textDim)' }}>{fmtPrice(s.symbol, s.entry)}</span>
+                  <span style={{ color: 'var(--gold)' }}>{s.score}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -1569,7 +1282,11 @@ function TapeTab({ signals, prices }) {
 
 /* ── RISK ───────────────────────────────────────────────────────────── */
 function RiskTab({ prices, changes, accountBalance, relativeStrength, mode }) {
-  const [balance, setBalance] = useState(10000);
+  const [balance, setBalance] = useState(accountBalance ?? 10000);
+  const [balanceTouched, setBalanceTouched] = useState(false);
+  useEffect(() => {
+    if (!balanceTouched && accountBalance != null) setBalance(accountBalance);
+  }, [accountBalance, balanceTouched]);
   const [riskPct, setRiskPct] = useState(1.0);
   const [stopPips, setStopPips] = useState(20);
   const [symbol, setSymbol] = useState('EURUSD');
@@ -1591,12 +1308,10 @@ function RiskTab({ prices, changes, accountBalance, relativeStrength, mode }) {
   const units = stopPips > 0 ? Math.round(riskAmount / (stopPips * pipValue)) : 0;
   const lots = (units / 100000).toFixed(2);
 
-  const drawdown = 4.2;
   const sessions = [
     { name: 'Asia', start: 0, end: 8 }, { name: 'London', start: 8, end: 16 }, { name: 'New York', start: 13, end: 21 },
   ];
   const hour = new Date().getUTCHours();
-  const exposures = SYMBOLS.map(s => ({ symbol: s, exposure: +rand(-3, 3).toFixed(1) }));
   const liveRanked = mode === 'live' && relativeStrength?.all?.length ? relativeStrength.all.map(r => r.symbol) : null;
   const ranked = liveRanked || [...SYMBOLS].sort((a, b) => (changes[b] ?? 0) - (changes[a] ?? 0));
 
@@ -1608,7 +1323,7 @@ function RiskTab({ prices, changes, accountBalance, relativeStrength, mode }) {
           <div className="grid grid-cols-2 gap-3 mb-3">
             <label className="text-[10px] font-mono uppercase" style={{ color: 'var(--textFaint)' }}>
               Account Balance ($)
-              <input type="number" value={balance} onChange={e => setBalance(+e.target.value)}
+              <input type="number" value={balance} onChange={e => { setBalance(+e.target.value); setBalanceTouched(true); }}
                 className="w-full mt-1 px-2 py-1.5 rounded font-mono text-[12px] outline-none"
                 style={{ background: 'var(--panel2)', border: '1px solid var(--border)', color: 'var(--text)' }} />
             </label>
@@ -1641,29 +1356,15 @@ function RiskTab({ prices, changes, accountBalance, relativeStrength, mode }) {
         </div>
 
         <div className="omni-panel p-4">
-          <SectionHeader icon={ShieldAlert} title="Drawdown Circuit Breaker" />
-          <div className="flex justify-center"><Gauge value={(drawdown / 10) * 100} label={`${drawdown}% of 10% limit`} zones={[[0, 50, '#1fe3a8'], [50, 80, '#f0b429'], [80, 101, '#ff5470']]} /></div>
-          <div className="font-mono text-[11px] text-center mt-2" style={{ color: 'var(--textDim)' }}>
-            Daily loss budget: <span style={{ color: 'var(--text)' }}>3.0%</span> · Used today: <span style={{ color: 'var(--gold)' }}>1.1%</span>
-          </div>
+          <SectionHeader icon={ShieldAlert} title="Drawdown Circuit Breaker" sub="no live risk-manager endpoint yet" />
+          <WaitingForBackend height={140} label="institutional-risk-manager.js tracks this internally — needs a REST/socket endpoint to reach the frontend" />
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="omni-panel p-4">
-          <SectionHeader icon={Layers} title="Portfolio Exposure" />
-          <div className="space-y-2">
-            {exposures.map(e => (
-              <div key={e.symbol} className="flex items-center gap-2 font-mono text-[11px]">
-                <span className="w-16" style={{ color: 'var(--textDim)' }}>{e.symbol}</span>
-                <div className="flex-1 h-2 rounded-full relative" style={{ background: 'var(--border)' }}>
-                  <div className="absolute top-0 bottom-0 left-1/2" style={{ width: 1, background: 'var(--borderBright)' }} />
-                  <div className="absolute top-0 bottom-0 rounded-full" style={{ left: e.exposure >= 0 ? '50%' : `${50 + e.exposure * 12}%`, width: `${Math.abs(e.exposure) * 12}%`, background: e.exposure >= 0 ? 'var(--emerald)' : 'var(--coral)' }} />
-                </div>
-                <span className="w-12 text-right" style={{ color: 'var(--textDim)' }}>{e.exposure}%</span>
-              </div>
-            ))}
-          </div>
+          <SectionHeader icon={Layers} title="Portfolio Exposure" sub="no live fills endpoint yet" />
+          <WaitingForBackend height={140} label="Needs the same EA position-fills endpoint noted on the Tape tab" />
         </div>
 
         <div className="omni-panel p-4">
@@ -1711,7 +1412,7 @@ export default function OmniceeDashboard() {
       <TickerTape prices={feed.prices} changes={feed.changes} flash={feed.flash} />
       <div className="flex flex-col flex-1 min-h-0">
         <div className="flex-1 overflow-y-auto omni-scroll">
-          {activeTab === 'DASH' && <DashTab signals={feed.signals} equityCurve={feed.equityCurve} equityCurveLive={feed.equityCurveLive} accountBalance={feed.accountBalance} prices={feed.prices} changes={feed.changes} stats={feed.stats} mode={feed.mode} />}
+          {activeTab === 'DASH' && <DashTab signals={feed.signals} equityCurve={feed.equityCurve} equityCurveLive={feed.equityCurveLive} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} changes={feed.changes} stats={feed.stats} mode={feed.mode} />}
           {activeTab === 'SIGNALS' && <SignalsTab signals={feed.signals} />}
           {activeTab === 'INTEL' && <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} />}
           {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}
