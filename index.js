@@ -2195,6 +2195,15 @@ async function main() {
   // scoring against stale, non-moving candles with no log line and no
   // alert. Checked every 2 minutes; first check delayed 90s to let feeds
   // finish their initial connect/backfill.
+  //
+  // FIX: the check above only ever logged and reported via /api/health —
+  // it never actually stopped anything. runAnalysisCycle() already has a
+  // symbolManager.isAllowed() gate (built for a future admin blacklist
+  // action), so route staleness into that same gate instead of leaving
+  // this purely observational. Only symbols *this* watchdog blacklisted are
+  // auto-cleared once fresh data resumes — a manual/future blacklist for
+  // some other reason is left alone.
+  const staleAutoBlacklisted = new Set();
   if (dataIntegrityMonitor) {
     const runIntegrityCheck = () => {
       const report = dataIntegrityMonitor.check(candleStores);
@@ -2204,6 +2213,23 @@ async function main() {
         }
         for (const s of report.staleSeries) {
           log.warn(`DataIntegrity: ${s.symbol} ${s.timeframe} stale — last candle ${Math.round(s.ageMs / 1000)}s ago (threshold ${Math.round(s.thresholdMs / 1000)}s)`);
+        }
+      }
+      if (symbolManager) {
+        const staleSymbolsNow = new Set(report.staleSeries.map(s => s.symbol));
+        for (const symbol of staleSymbolsNow) {
+          if (!staleAutoBlacklisted.has(symbol)) {
+            symbolManager.blacklist(symbol);
+            staleAutoBlacklisted.add(symbol);
+            log.warn(`DataIntegrity: blacklisting ${symbol} until its feed is fresh again — no new signals will fire for it`);
+          }
+        }
+        for (const symbol of [...staleAutoBlacklisted]) {
+          if (!staleSymbolsNow.has(symbol)) {
+            symbolManager.unblacklist(symbol);
+            staleAutoBlacklisted.delete(symbol);
+            log.info(`DataIntegrity: ${symbol}'s feed is fresh again — un-blacklisting`);
+          }
         }
       }
       if (wsBus) wsBus.emit('feed_health', report);

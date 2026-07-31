@@ -103,6 +103,10 @@ class SymbolManager {
     this._blacklist.add(symbol);
   }
 
+  unblacklist(symbol) {
+    this._blacklist.delete(symbol);
+  }
+
   getPriority() { return this._priority; }
 
   getMetadata(symbol) {
