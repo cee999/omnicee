@@ -711,13 +711,15 @@ class TwelveDataFeed extends EventEmitter {
         } catch (err) {
           console.error(`[TwelveDataFeed] History load failed ${symbol} ${tf}: ${err.message}`);
           this._stats.errorsCount++;
-          if (err.tdCode === 'DAILY_QUOTA_EXCEEDED') {
-            // Budget's gone for the day — whatever's already in the candle
-            // store (Mongo-restored or from an earlier symbol/tf this same
-            // boot) stands until reset. Retrying won't help.
+          if (err.tdCode === 'DAILY_QUOTA_EXCEEDED' || /run out of api credits for the day/i.test(err.message)) {
+            // Same as above: daily budget's gone, retrying in 65s can't
+            // possibly help (resets once per 24h, not once a minute) — this
+            // was previously falling into the 429 branch below and
+            // scheduling a retry that failed identically, forever, once per
+            // symbol/timeframe hit during that boot.
             continue;
           }
-          if (err.tdCode === 429 || /run out of API credits/i.test(err.message)) {
+          if (err.tdCode === 429) {
             this._retryAfterQuotaReset(symbol, tf, interval);
           }
         }
