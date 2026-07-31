@@ -51,6 +51,7 @@ async function post(path, body) {
 
 export const OmniceeAPI = {
   health: () => get('/health'),
+  market: ({ symbols } = {}) => get('/api/market', { symbols: Array.isArray(symbols) ? symbols.join(',') : symbols }),
   signals: ({ symbol, limit = 50 } = {}) => get('/api/signals', { symbol, limit }),
   outlook: () => get('/api/outlook'),
   heatmap: ({ timeframe } = {}) => get('/api/heatmap', { timeframe }),

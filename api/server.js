@@ -46,6 +46,7 @@ const learningEngine = new AdaptiveLearningEngine({ store: db });
 // — see the FIX comment on that listener for why this cache exists at all.
 const RECENT_SIGNALS_CACHE = [];
 const RECENT_SIGNALS_CACHE_LIMIT = 200;
+const MARKET_SNAPSHOT_CACHE = new Map();
 
 let serverState = null;
 
@@ -110,6 +111,18 @@ function createApp() {
       source = 'memory';
     }
     res.json({ ok: true, signals, source });
+  });
+
+  app.get('/api/market', telegramAuthMiddleware, async (req, res) => {
+    const requested = String(req.query.symbols || '')
+      .split(',')
+      .map(s => s.trim().toUpperCase())
+      .filter(Boolean);
+    const wanted = new Set(requested);
+    const rows = [...MARKET_SNAPSHOT_CACHE.values()]
+      .filter(row => wanted.size === 0 || wanted.has(row.symbol))
+      .sort((a, b) => a.symbol.localeCompare(b.symbol));
+    res.json({ ok: true, market: rows, source: 'memory' });
   });
 
   app.get('/api/outlook', telegramAuthMiddleware, async (req, res) => {
@@ -561,6 +574,19 @@ function startServer(config = {}) {
     RECENT_SIGNALS_CACHE.unshift(compact);
     if (RECENT_SIGNALS_CACHE.length > RECENT_SIGNALS_CACHE_LIMIT) RECENT_SIGNALS_CACHE.length = RECENT_SIGNALS_CACHE_LIMIT;
     db.saveSignal(payload).catch(err => console.warn('[API] persist signal:', err.message));
+  });
+  bus.on('market_update', payload => {
+    if (!payload?.symbol || payload.price == null) return;
+    const price = Number(payload.price);
+    if (!Number.isFinite(price)) return;
+    MARKET_SNAPSHOT_CACHE.set(String(payload.symbol).toUpperCase(), {
+      symbol: String(payload.symbol).toUpperCase(),
+      price,
+      change: payload.change ?? null,
+      bias: payload.bias ?? null,
+      source: payload.source || 'unknown',
+      timestamp: payload.timestamp || Date.now(),
+    });
   });
   forward('market_update', 'market', db.saveMarketSnapshot);
   forward('risk_update', 'risk');

@@ -2006,7 +2006,13 @@ function buildFeeds() {
     });
     tdFeed.on('candle',        (d) => macroSymbols.includes(d.symbol) ? intermarketAnalyzer.updatePrice(d.symbol, d.candle.close, d.candle.timestamp || Date.now()) : onCandle(d));
     tdFeed.on('candle_update', (d) => macroSymbols.includes(d.symbol) ? intermarketAnalyzer.updatePrice(d.symbol, d.candle.close, d.candle.timestamp || Date.now()) : onCandle(d));
-    tdFeed.on('price',         (d) => macroSymbols.includes(d.symbol) && intermarketAnalyzer.updatePrice(d.symbol, d.price, d.timestamp || Date.now()));
+    tdFeed.on('price', (d) => {
+      if (macroSymbols.includes(d.symbol)) {
+        intermarketAnalyzer.updatePrice(d.symbol, d.price, d.timestamp || Date.now());
+        return;
+      }
+      onLivePrice(d.symbol, d.price, { source: 'twelvedata', change: d.pctChange ?? null });
+    });
     tdFeed.on('error', (err) => log.error(`TwelveData error: ${feedErrorMessage(err)}`));
     tdFeed.on('connected', () => log.info(`TwelveDataFeed connected for: ${tdSymbols.join(', ')}`));
     feeds.push({

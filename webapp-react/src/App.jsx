@@ -41,11 +41,59 @@ const PIP = { EURUSD: 0.0001, GBPUSD: 0.0001, USDJPY: 0.01, XAUUSD: 0.1, BTCUSDT
 // REST-polled list and each socket-pushed signal, rather than at render
 // time, so every consumer of `signals` state sees a consistently-shaped
 // object regardless of which transport it arrived by.
+function signalScore(s) {
+  const raw = typeof s.score === 'object' ? s.score?.final : s.score;
+  return Number.isFinite(Number(raw)) ? Number(raw) : 0;
+}
+
+function normalizeDirection(action) {
+  const a = String(action || 'WAIT').toUpperCase();
+  if (a === 'LONG') return 'BUY';
+  if (a === 'SHORT') return 'SELL';
+  return a;
+}
+
+function priceFrom(value, fallback = null) {
+  if (typeof value === 'number') return value;
+  if (!value || typeof value !== 'object') return fallback;
+  const candidates = [value.price, value.midpoint, value.midPoint, value.zoneLow, value.zoneHigh];
+  const nums = candidates.map(Number).filter(Number.isFinite);
+  if (nums.length >= 2 && value.zoneLow != null && value.zoneHigh != null) {
+    return (Number(value.zoneLow) + Number(value.zoneHigh)) / 2;
+  }
+  return nums[0] ?? fallback;
+}
+
+function normalizeTargets(targets) {
+  if (Array.isArray(targets)) return targets.map(t => priceFrom(t)).filter(v => v != null);
+  if (!targets || typeof targets !== 'object') return [];
+  return ['tp1', 'tp2', 'tp3'].map(k => priceFrom(targets[k])).filter(v => v != null);
+}
+
 function normalizeSignal(s) {
-  if (s.agreeCount != null) return s;
-  const dir = s.action || s.direction;
-  const agreeCount = Array.isArray(s.agents) ? s.agents.filter(a => a.direction === dir).length : 0;
-  return { ...s, agreeCount };
+  const action = normalizeDirection(s.action || s.direction);
+  const agents = Array.isArray(s.agents || s.agentBreakdown) ? (s.agents || s.agentBreakdown) : [];
+  const normalizedAgents = agents.map(a => ({ ...a, direction: normalizeDirection(a.direction) }));
+  const agreeCount = s.agreeCount != null
+    ? s.agreeCount
+    : normalizedAgents.filter(a => a.direction === action).length;
+  const score = signalScore(s);
+  const currentPrice = Number(s.currentPrice ?? s.price);
+  return {
+    ...s,
+    id: s.id || `${s.symbol || 'signal'}-${s.timestamp || Date.now()}`,
+    action,
+    score,
+    currentPrice: Number.isFinite(currentPrice) ? currentPrice : null,
+    entry: priceFrom(s.entry, Number.isFinite(currentPrice) ? currentPrice : null),
+    stopLoss: priceFrom(s.stopLoss),
+    targets: normalizeTargets(s.targets),
+    gate: s.gate || { status: 'pending', checklist: {} },
+    regime: s.regime || { regime: 'UNKNOWN' },
+    risk: s.risk || { effectiveRisk: 0, maxLoss: 0, note: 'Awaiting risk evaluation' },
+    agents: normalizedAgents,
+    agreeCount,
+  };
 }
 
 const FEEDS = [
@@ -62,8 +110,9 @@ const FEEDS = [
 
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 function fmtPrice(symbol, v) {
+  if (v == null || !Number.isFinite(Number(v))) return '-';
   const d = DECIMALS[symbol] ?? 2;
-  return v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+  return Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 }
 function fmtPct(v, digits = 2) { return `${v >= 0 ? '+' : ''}${v.toFixed(digits)}%`; }
 function timeAgo(ts) {
@@ -229,8 +278,8 @@ function Gauge({ value, label, zones = [[0, 40, '#ff5470'], [40, 70, '#f0b429'],
    load unlisted npm packages) and in the real Vite build; src/lib/api.js
    in the companion project adds true real-time push via socket.io-client
    on top of this once you're running it for real. */
-const API_BASE = '';
-const APP_TOKEN = '';
+const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '');
+const APP_TOKEN = (import.meta.env.VITE_APP_TOKEN || '').trim();
 
 // FIX: api/telegram-auth.js's telegramAuthMiddleware checks for an
 // `x-telegram-init-data` header (or `initData` on sockets) and, in
@@ -357,12 +406,28 @@ function useLiveFeed() {
 
     const pullFast = async () => {
       try {
-        const r = await omniFetch(`/api/signals?limit=40`);
-        if (!cancelled && r.ok) {
-          setSignals(r.signals.map(normalizeSignal));
+        const r = await omniFetch(`/api/market?symbols=${SYMBOLS.join(',')}`);
+        if (!cancelled && r.ok && Array.isArray(r.market)) {
           setPrices(prev => {
             const next = { ...prev };
-            r.signals.forEach(s => { if (s.symbol && s.currentPrice) next[s.symbol] = s.currentPrice; });
+            r.market.forEach(m => { if (m.symbol && m.price != null && m.symbol in next) next[m.symbol] = Number(m.price); });
+            return next;
+          });
+          setChanges(prev => {
+            const next = { ...prev };
+            r.market.forEach(m => { if (m.symbol && m.change != null && m.symbol in next) next[m.symbol] = Number(m.change); });
+            return next;
+          });
+        }
+      } catch (_) { /* market snapshots are optional; socket ticks may be live */ }
+      try {
+        const r = await omniFetch(`/api/signals?limit=40`);
+        if (!cancelled && r.ok) {
+          const normalized = r.signals.map(normalizeSignal);
+          setSignals(normalized);
+          setPrices(prev => {
+            const next = { ...prev };
+            normalized.forEach(s => { if (s.symbol && s.currentPrice) next[s.symbol] = s.currentPrice; });
             return next;
           });
         }
@@ -444,7 +509,7 @@ function useLiveFeed() {
         const sym = payload.symbol;
         const prevPrice = priceRef.current[sym];
         setFlash(f => ({ ...f, [sym]: payload.price >= prevPrice ? 'up' : 'down' }));
-        setPrices(prev => ({ ...prev, [sym]: payload.price }));
+        setPrices(prev => ({ ...prev, [sym]: Number(payload.price) }));
         if (payload.change != null) {
           setChanges(c => ({ ...c, [sym]: payload.change }));
         } else {
