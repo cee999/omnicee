@@ -1235,11 +1235,11 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
 // version. Drives manual-position TP/SL/BE/trailing monitoring
 // (executionEngine.onPrice) and the frontend's live price ticker
 // (market_update, throttled to ~1/sec/symbol) from ANY price source — a
-// closed/in-progress candle from onCandle() above, a raw WS trade tick
-// from Finnhub, or a bid/ask tick pushed by the MT5 EA. Deliberately does
-// NOT touch candleStores — TwelveData/Binance/Bybit remain the only
-// sources feeding the OHLC history the agents run technical analysis
-// against; this is purely the real-time layer on top of that.
+// closed/in-progress candle from onCandle() above, or a raw WS trade tick
+// from Finnhub. Deliberately does NOT touch candleStores — TwelveData/
+// Binance/Bybit/onMT5Tick (below) are the sources that feed the OHLC
+// history the agents run technical analysis against; this is purely the
+// real-time layer on top of that.
 function onLivePrice(symbol, price, { change = null, bias = null, source = 'candle' } = {}) {
   if (!SYMBOLS.includes(symbol)) return;
   if (!Number.isFinite(price)) return;
@@ -1261,6 +1261,68 @@ function onLivePrice(symbol, price, { change = null, bias = null, source = 'cand
         source,
       });
     }
+  }
+}
+
+const TIMEFRAME_MS = {
+  M1: 60e3, M5: 5 * 60e3, M15: 15 * 60e3, M30: 30 * 60e3,
+  H1: 3600e3, H2: 2 * 3600e3, H4: 4 * 3600e3, H8: 8 * 3600e3, H12: 12 * 3600e3,
+  D1: 86400e3, W1: 7 * 86400e3,
+};
+
+// FIX: the MT5 EA sits on James's own broker's live tick feed — the single
+// most real-time forex price source available here, cheaper and higher-
+// fidelity than any REST/WS API on a free tier — but its ticks previously
+// only reached onLivePrice() (ticker + position monitoring), never
+// candleStores. That meant the agents' actual technical analysis for forex
+// still depended entirely on TwelveData's rate-limited polling / Finnhub's
+// WS supplement, even on symbols where a much better live feed already
+// existed. This builds real OHLC candles directly from broker ticks, one
+// per configured timeframe (a single tick updates the H1 candle AND the H4
+// candle simultaneously, same as any real market), and calls onCandle()
+// exactly like Binance/TwelveData/Finnhub already do — so isClosed-gated
+// analysis fires on genuine candle-close boundaries, not on every tick.
+// Coexists with TwelveData/Finnhub for the same symbol (both write through
+// onCandle() into the same candleStores slot, keyed by matching wall-clock
+// timestamps) rather than replacing them outright — whichever source has
+// the freshest data for a given candle naturally wins, and MT5 ticks
+// (roughly 1/sec, see mt5/OmniceeEA.mq5's InpPriceSync) will usually be
+// freshest whenever the EA is actually connected and reporting.
+const mt5CandleBuilders = {};
+
+function onMT5Tick(symbol, price, { bid, ask, timestamp } = {}) {
+  if (!SYMBOLS.includes(symbol)) return;
+  if (!Number.isFinite(price)) return;
+  const now = timestamp || Date.now();
+
+  for (const tf of TIMEFRAMES_STR) {
+    const durationMs = TIMEFRAME_MS[tf];
+    if (!durationMs) continue; // unrecognized timeframe string — skip, don't guess
+    const bucketStart = Math.floor(now / durationMs) * durationMs;
+    const key = `${symbol}_${tf}`;
+    const prev = mt5CandleBuilders[key];
+
+    if (!prev || prev.timestamp !== bucketStart) {
+      // New bucket — the previous one (if any) is now closed. Finalize it
+      // before starting the new one, so runAnalysisCycle sees a complete bar.
+      if (prev) {
+        try { onCandle({ symbol, timeframe: tf, candle: { ...prev }, isClosed: true }); }
+        catch (e) { log.warn(`onMT5Tick close [${symbol} ${tf}]: ${e.message}`); }
+      }
+      mt5CandleBuilders[key] = {
+        timestamp: bucketStart, open: price, high: price, low: price, close: price,
+        volume: 0, bid, ask, source: 'mt5_ea',
+      };
+    } else {
+      prev.high = Math.max(prev.high, price);
+      prev.low = Math.min(prev.low, price);
+      prev.close = price;
+      prev.bid = bid;
+      prev.ask = ask;
+    }
+
+    try { onCandle({ symbol, timeframe: tf, candle: { ...mt5CandleBuilders[key] }, isClosed: false }); }
+    catch (e) { log.warn(`onMT5Tick update [${symbol} ${tf}]: ${e.message}`); }
   }
 }
 
@@ -1841,10 +1903,11 @@ function buildSingletons() {
       auditTrail, symbolManager, cotParser, memory,
       // For GET /api/outlook (signal-pipeline/market-outlook.js)
       regimeEngine, candleStores, symbols: SYMBOLS,
-      // For POST /api/ea/prices (api/server.js) — see onLivePrice()'s own
-      // comment above for why EA-pushed ticks need to go through this
-      // rather than emitting market_update directly.
-      onLivePrice,
+      // For POST /api/ea/prices (api/server.js): onLivePrice for the
+      // ticker/position-monitoring layer, onMT5Tick for the actual OHLC
+      // candle building — see onMT5Tick()'s own comment for why broker
+      // ticks now drive candleStores directly instead of only the ticker.
+      onLivePrice, onMT5Tick,
     });
     log.info('Live engine singletons published for outcome-feedback wiring');
   } catch (err) {

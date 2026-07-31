@@ -18,7 +18,7 @@ input string   InpServerURL   = "https://omnicee.onrender.com"; // OMNICEE Serve
 input string   InpEASecret    = "";                              // EA Secret (leave blank if none)
 input int      InpPollSeconds = 5;                               // Poll interval (seconds)
 input int      InpBalanceSync = 60;                              // Balance sync interval (seconds)
-input int      InpPriceSync   = 2;                                // Live price sync interval (seconds)
+input int      InpPriceSync   = 1;                                // Live price sync interval (seconds)
 input int      InpSlippage    = 10;                              // Max slippage (points)
 input int      InpMagicNumber = 777888;                          // EA Magic Number
 input bool     InpShowAlerts  = true;                            // Show alerts on execution
@@ -422,7 +422,8 @@ void SendPriceTicks()
 
       if(sent > 0) body += ",";
       body += "{\"symbol\":\"" + omniceeSymbol + "\",\"bid\":" + DoubleToString(bid, 5) +
-              ",\"ask\":" + DoubleToString(ask, 5) + "}";
+              ",\"ask\":" + DoubleToString(ask, 5) +
+              ",\"timestamp\":" + IntegerToString(TimeGMT() * 1000) + "}";
       sent++;
    }
 

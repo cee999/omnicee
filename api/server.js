@@ -462,23 +462,39 @@ function createApp() {
   // identical market_update event both of the above use. Same eaAuth as
   // every other /api/ea/* route; same {bid, ask} shape the EA already reads
   // via SymbolInfoDouble() for its own position-sizing math.
+  // FIX: this used to compute a flattened mid-price and hand it straight to
+  // onLivePrice() — the ticker/position-monitoring layer only. That threw
+  // away bid/ask (this file never even read p.ask except to average it) and
+  // meant MT5's broker ticks — James's own live forex feed, more real-time
+  // than any REST/WS API on a free tier — never actually built OHLC candles
+  // for the agents to analyze; see onMT5Tick()'s own comment in index.js.
+  // Now passes bid/ask through and prefers onMT5Tick (candles + ticker +
+  // position monitoring, all three); falls back to onLivePrice (ticker +
+  // position monitoring only) if the candle aggregator isn't published yet,
+  // and to a bare emit if the engine hasn't booted at all — same tiered
+  // degradation as before, just one more rung.
   app.post('/api/ea/prices', eaAuth, (req, res) => {
     const { prices } = req.body || {};
     if (!Array.isArray(prices) || !prices.length) {
       return res.status(400).json({ ok: false, error: 'prices array required' });
     }
-    const onLivePrice = getEngines().onLivePrice;
+    const engines = getEngines();
     let accepted = 0;
     for (const p of prices) {
       if (!p?.symbol || p.bid == null) continue;
-      const mid = p.ask != null ? (Number(p.bid) + Number(p.ask)) / 2 : Number(p.bid);
+      const bid = Number(p.bid);
+      const ask = p.ask != null ? Number(p.ask) : null;
+      const mid = ask != null ? (bid + ask) / 2 : bid;
       if (!Number.isFinite(mid)) continue;
-      if (onLivePrice) {
-        onLivePrice(p.symbol, mid, { source: 'mt5_ea' });
+      if (engines.onMT5Tick) {
+        engines.onMT5Tick(p.symbol, mid, { bid, ask, timestamp: p.timestamp });
+      } else if (engines.onLivePrice) {
+        engines.onLivePrice(p.symbol, mid, { source: 'mt5_ea' });
       } else {
         // Trading engine not booted yet (e.g. Mongo/feed init still in
         // progress) — degrade to a direct emit so the ticker still moves;
-        // executionEngine.onPrice() just isn't reachable yet either way.
+        // executionEngine.onPrice() and candle building just aren't
+        // reachable yet either way.
         bus.emit('market_update', { symbol: p.symbol, price: mid, change: null, bias: null, source: 'mt5_ea' });
       }
       accepted++;
