@@ -61,8 +61,6 @@ const FEEDS = [
 ];
 
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
-function rand(a, b) { return a + Math.random() * (b - a); }
-function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 function fmtPrice(symbol, v) {
   const d = DECIMALS[symbol] ?? 2;
   return v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
