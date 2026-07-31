@@ -28,6 +28,8 @@ envVarGroups:
       # to disable — Telegram auth is unaffected either way.
       - key: APP_ACCESS_TOKEN
         sync: false
+      - key: PUBLIC_DASHBOARD_READ
+        value: "true"
 
       # ── EA (MT5 Expert Advisor) auth ────────────────────────
       # FIX: was missing from this blueprint entirely. Without it,

@@ -50,6 +50,46 @@ const MARKET_SNAPSHOT_CACHE = new Map();
 
 let serverState = null;
 
+function dashboardReadAuth(req, res, next) {
+  if (req.method === 'GET' && process.env.PUBLIC_DASHBOARD_READ !== 'false') {
+    req.telegramUser = { id: 'public-dashboard', username: 'public-dashboard' };
+    req.authMethod = 'public-dashboard-read';
+    return next();
+  }
+  return telegramAuthMiddleware(req, res, next);
+}
+
+function latestMarketRows(symbols = []) {
+  const wanted = new Set(symbols);
+  const rowsBySymbol = new Map(MARKET_SNAPSHOT_CACHE);
+  const live = getEngines();
+
+  if (live?.candleStores) {
+    const sourceSymbols = wanted.size ? [...wanted] : (live.symbols || Object.keys(live.candleStores));
+    for (const symbol of sourceSymbols) {
+      if (rowsBySymbol.has(symbol)) continue;
+      const byTf = live.candleStores[symbol];
+      if (!byTf) continue;
+      const preferredTf = ['M1', 'M5', 'M15', 'H1', 'H4', 'D1'].find(tf => byTf[tf]?.length);
+      const candles = preferredTf ? byTf[preferredTf] : null;
+      const last = candles?.[candles.length - 1];
+      if (!last?.close) continue;
+      rowsBySymbol.set(symbol, {
+        symbol,
+        price: Number(last.close),
+        change: last.open ? ((Number(last.close) - Number(last.open)) / Number(last.open)) * 100 : null,
+        bias: null,
+        source: `candle:${preferredTf}`,
+        timestamp: last.timestamp || Date.now(),
+      });
+    }
+  }
+
+  return [...rowsBySymbol.values()]
+    .filter(row => wanted.size === 0 || wanted.has(row.symbol))
+    .sort((a, b) => a.symbol.localeCompare(b.symbol));
+}
+
 function createApp() {
   const app = express();
   app.disable('x-powered-by');
@@ -98,7 +138,7 @@ function createApp() {
     res.json({ ok: true, user: validation.user });
   });
 
-  app.get('/api/signals', telegramAuthMiddleware, async (req, res) => {
+  app.get('/api/signals', dashboardReadAuth, async (req, res) => {
     const symbol = req.query.symbol;
     const limit = Math.min(Number(req.query.limit) || 50, 200);
     let signals = await db.getRecentSignals({ symbol, limit }).catch(err => {
@@ -113,19 +153,16 @@ function createApp() {
     res.json({ ok: true, signals, source });
   });
 
-  app.get('/api/market', telegramAuthMiddleware, async (req, res) => {
+  app.get('/api/market', dashboardReadAuth, async (req, res) => {
     const requested = String(req.query.symbols || '')
       .split(',')
       .map(s => s.trim().toUpperCase())
       .filter(Boolean);
-    const wanted = new Set(requested);
-    const rows = [...MARKET_SNAPSHOT_CACHE.values()]
-      .filter(row => wanted.size === 0 || wanted.has(row.symbol))
-      .sort((a, b) => a.symbol.localeCompare(b.symbol));
+    const rows = latestMarketRows(requested);
     res.json({ ok: true, market: rows, source: 'memory' });
   });
 
-  app.get('/api/outlook', telegramAuthMiddleware, async (req, res) => {
+  app.get('/api/outlook', dashboardReadAuth, async (req, res) => {
     const live = getEngines();
     if (!live.regimeEngine || !live.candleStores) {
       return res.status(503).json({ ok: false, error: 'Outlook unavailable — trading engine not yet initialized' });
@@ -160,7 +197,7 @@ function createApp() {
   // ── Trading Journal / Setup Analytics (doc items: AI Trading Journal,
   // Setup Analytics — 'which of my strategies is actually making money')
   // ─────────────────────────────────────────────────────────────────────
-  app.get('/api/journal', telegramAuthMiddleware, async (req, res) => {
+  app.get('/api/journal', dashboardReadAuth, async (req, res) => {
     const live = getEngines();
     if (!live.executionEngine) {
       return res.status(503).json({ ok: false, error: 'Journal unavailable — execution engine not yet initialized' });
@@ -177,7 +214,7 @@ function createApp() {
     res.json({ ok: true, stats });
   });
 
-  app.get('/api/watchlist', telegramAuthMiddleware, async (req, res) => {
+  app.get('/api/watchlist', dashboardReadAuth, async (req, res) => {
     const live = getEngines();
     if (!live.opportunityRanker) {
       return res.status(503).json({ ok: false, error: 'Watchlist unavailable — trading engine not yet initialized' });
@@ -203,7 +240,7 @@ function createApp() {
   // ── Market Heat Map (doc item #56) ──────────────────────────────────
   // Composites the same OpportunityRanker + RelativeStrengthEngine data
   // above into per-symbol heat buckets for a grid-style dashboard view.
-  app.get('/api/heatmap', telegramAuthMiddleware, async (req, res) => {
+  app.get('/api/heatmap', dashboardReadAuth, async (req, res) => {
     const live = getEngines();
     if (!live.opportunityRanker) {
       return res.status(503).json({ ok: false, error: 'Heat map unavailable — trading engine not yet initialized' });
@@ -227,7 +264,7 @@ function createApp() {
   // ── Audit Trail (extracted from orphaned task-planner.js) ───────────
   // Every analysis cycle result, fired or not — "what did the pipeline
   // decide about symbol X in the last hour" without grepping logs.
-  app.get('/api/audit-trail', telegramAuthMiddleware, async (req, res) => {
+  app.get('/api/audit-trail', dashboardReadAuth, async (req, res) => {
     const live = getEngines();
     if (!live.auditTrail) {
       return res.status(503).json({ ok: false, error: 'Audit trail unavailable — trading engine not yet initialized' });
@@ -240,7 +277,7 @@ function createApp() {
 
   // ── Data Integrity / Feed Health (doc item: Connection & Data Integrity
   // Monitor) ────────────────────────────────────────────────────────────
-  app.get('/api/health', telegramAuthMiddleware, async (req, res) => {
+  app.get('/api/health', dashboardReadAuth, async (req, res) => {
     const live = getEngines();
     if (!live.dataIntegrityMonitor || !live.candleStores) {
       return res.status(503).json({ ok: false, error: 'Health monitor unavailable — trading engine not yet initialized' });
@@ -255,7 +292,7 @@ function createApp() {
     res.json({ ok: true, ...report, cache });
   });
 
-  app.get('/api/telemetry', telegramAuthMiddleware, async (req, res) => {
+  app.get('/api/telemetry', dashboardReadAuth, async (req, res) => {
     const telemetry = await db.getTelemetry({ limit: req.query.limit || 100 }).catch(err => {
       res.status(503).json({ ok: false, error: err.message });
       return null;
@@ -263,7 +300,7 @@ function createApp() {
     if (telemetry) res.json({ ok: true, telemetry });
   });
 
-  app.get('/api/stats', telegramAuthMiddleware, async (_req, res) => {
+  app.get('/api/stats', dashboardReadAuth, async (_req, res) => {
     const stats = await db.getStats().catch(err => ({ db: 'error', error: err.message }));
     // FIX: dispatcher.accountBalance is set from real MT5 EA reports
     // (/api/ea/balance) but was never exposed anywhere for initial-load —
@@ -281,7 +318,7 @@ function createApp() {
   // /api/stats. Worth adding a db.getEquityCurve() + route"). Realized-only
   // (compounds each closed trade_outcomes.pnlPct onto a starting balance),
   // not a tick-by-tick feed — see the comment on db.getEquityCurve().
-  app.get('/api/equity-curve', telegramAuthMiddleware, async (req, res) => {
+  app.get('/api/equity-curve', dashboardReadAuth, async (req, res) => {
     const dispatcher = getDispatcher();
     const startBalance = dispatcher?.accountBalance || Number(process.env.ACCOUNT_BALANCE) || 10000;
     const curve = await db.getEquityCurve({
@@ -294,7 +331,7 @@ function createApp() {
     if (curve) res.json({ ok: true, curve, startBalance });
   });
 
-  app.get('/api/news', telegramAuthMiddleware, async (req, res) => {
+  app.get('/api/news', dashboardReadAuth, async (req, res) => {
     const symbol = req.query.symbol;
     const news = symbol
       ? await finnhub.companyNews(symbol).catch(err => ({ error: err.message }))
@@ -302,7 +339,7 @@ function createApp() {
     res.json({ ok: !news.error, news });
   });
 
-  app.get('/api/learning', telegramAuthMiddleware, async (req, res) => {
+  app.get('/api/learning', dashboardReadAuth, async (req, res) => {
     const profiles = await db.getLearningProfiles({ limit: req.query.limit || 50 }).catch(err => {
       res.status(503).json({ ok: false, error: err.message });
       return null;
