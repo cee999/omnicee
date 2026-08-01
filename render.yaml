@@ -154,7 +154,18 @@ services:
     # frontend. --include=dev overrides the ambient NODE_ENV for just that
     # install; the root install's explicit --omit=dev is deliberate and
     # unaffected (the server bundle genuinely doesn't need dev tooling).
-    buildCommand: npm ci --omit=dev && npm --prefix webapp-react ci --include=dev && npm --prefix webapp-react run build
+    # FIX: webapp-react/src/App.jsx sends APP_TOKEN as the x-app-token header
+    # on every /api/* call (telegramAuthMiddleware requires it or real
+    # Telegram initData — see api/telegram-auth.js), but Vite only bakes in
+    # VITE_-prefixed vars that exist in *this build's* environment, and
+    # nothing here ever passed this service's APP_ACCESS_TOKEN through under
+    # that name. Net effect in production: the unauthenticated /health check
+    # succeeds (top bar shows LIVE), but every actual data call — signals,
+    # outlook, journal, heatmap, everything — silently 401s and stays on
+    # "Waiting for backend" forever, because the frontend bundle always had
+    # an empty token baked in. This is almost certainly the real cause of
+    # "most tabs are dead silent" even once the backend itself is healthy.
+    buildCommand: npm ci --omit=dev && npm --prefix webapp-react ci --include=dev && VITE_APP_TOKEN=$APP_ACCESS_TOKEN npm --prefix webapp-react run build
     startCommand: node start-all.js
     healthCheckPath: /health
     autoDeployTrigger: commit

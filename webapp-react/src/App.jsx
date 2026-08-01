@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback, Fragment } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis,
   Tooltip, ResponsiveContainer, CartesianGrid, Cell,
@@ -7,18 +7,19 @@ import {
   LayoutDashboard, Radio, Globe2, Activity, Flame, FlaskConical,
   ScrollText, ShieldAlert, ChevronRight, ChevronDown,
   TrendingUp, CheckCircle2, XCircle,
-  Circle, Clock, Zap, Database, Cpu, ArrowUpRight,
-  ArrowDownRight, Terminal, Newspaper, Gauge as GaugeIcon,
+  Circle, Clock, Zap, Database,
+  Terminal, Newspaper, Gauge as GaugeIcon,
   Layers, Target, DollarSign,
 } from 'lucide-react';
 
 /* ────────────────────────────────────────────────────────────────────────
    OMNICEE // INSTITUTIONAL SIGNAL TERMINAL
-   A self-contained live-simulated preview of the OMNICEE trading dashboard.
-   Mirrors the real API surface (GET /api/signals, /api/outlook, /api/heatmap,
-   /api/audit-trail, /api/health, /api/stats, /api/journal, /api/news) and
-   socket.io channels (signal, market, risk, stats, regime, telemetry, intel)
-   so it can be wired to the live backend with a data-layer swap only.
+   The real dashboard: every panel reads from the live backend (GET
+   /api/signals, /api/outlook, /api/heatmap, /api/audit-trail, /api/health,
+   /api/stats, /api/journal, /api/news, /api/watchlist, /api/equity-curve)
+   plus a socket.io channel for tick-by-tick prices where available. No
+   demo/simulated data — a panel with nothing real to show yet displays an
+   honest "Waiting for backend" state instead of an invented number.
    ──────────────────────────────────────────────────────────────────────── */
 
 const SYMBOLS = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'BTCUSDT', 'ETHUSDT'];
@@ -400,13 +401,18 @@ function useLiveFeed() {
      outlook/heatmap/audit-trail/feed-health (heavier, computed routes
      that 503 until the trading engine finishes booting, so failures here
      are expected right after a cold start and just retry next tick). */
+  const [fetchErrors, setFetchErrors] = useState({});
+  const recordFetch = (key, promise) => promise
+    .then(r => { setFetchErrors(prev => (prev[key] ? { ...prev, [key]: null } : prev)); return r; })
+    .catch(err => { setFetchErrors(prev => ({ ...prev, [key]: err.message })); throw err; });
+
   useEffect(() => {
     if (mode !== 'live') return;
     let cancelled = false;
 
     const pullFast = async () => {
       try {
-        const r = await omniFetch(`/api/market?symbols=${SYMBOLS.join(',')}`);
+        const r = await recordFetch('market', omniFetch(`/api/market?symbols=${SYMBOLS.join(',')}`));
         if (!cancelled && r.ok && Array.isArray(r.market)) {
           setPrices(prev => {
             const next = { ...prev };
@@ -421,7 +427,7 @@ function useLiveFeed() {
         }
       } catch (_) { /* market snapshots are optional; socket ticks may be live */ }
       try {
-        const r = await omniFetch(`/api/signals?limit=40`);
+        const r = await recordFetch('signals', omniFetch(`/api/signals?limit=40`));
         if (!cancelled && r.ok) {
           const normalized = r.signals.map(normalizeSignal);
           setSignals(normalized);
@@ -433,7 +439,7 @@ function useLiveFeed() {
         }
       } catch (_) { /* keep last-known signals on a transient failure */ }
       try {
-        const r = await omniFetch('/api/stats');
+        const r = await recordFetch('stats', omniFetch('/api/stats'));
         if (!cancelled && r.ok) {
           setStats(r.stats);
           // FIX (Known gap #3): real balance, once an MT5 EA has reported
@@ -444,10 +450,10 @@ function useLiveFeed() {
       } catch (_) { /* stats optional */ }
     };
     const pullSlow = async () => {
-      try { const r = await omniFetch('/api/outlook'); if (!cancelled && r.ok) setOutlook(r.outlook); } catch (_) {}
-      try { const r = await omniFetch('/api/heatmap'); if (!cancelled && r.ok) setHeatmapTiles(r.tiles); } catch (_) {}
-      try { const r = await omniFetch('/api/audit-trail?limit=30'); if (!cancelled && r.ok) setAuditLog(r.entries); } catch (_) {}
-      try { const r = await omniFetch('/api/health'); if (!cancelled && r.ok) setFeedHealth(r.feeds); } catch (_) {}
+      try { const r = await recordFetch('outlook', omniFetch('/api/outlook')); if (!cancelled && r.ok) setOutlook(r.outlook); } catch (_) {}
+      try { const r = await recordFetch('heatmap', omniFetch('/api/heatmap')); if (!cancelled && r.ok) setHeatmapTiles(r.tiles); } catch (_) {}
+      try { const r = await recordFetch('audit-trail', omniFetch('/api/audit-trail?limit=30')); if (!cancelled && r.ok) setAuditLog(r.entries); } catch (_) {}
+      try { const r = await recordFetch('health', omniFetch('/api/health')); if (!cancelled && r.ok) setFeedHealth(r.feeds); } catch (_) {}
       try { const r = await omniFetch('/health'); if (!cancelled && r.ok) setUptimeSec(r.uptime); } catch (_) {}
       // FIX (Known gap #2): "Equity curve stays illustrative even in live
       // mode ... worth adding a db.getEquityCurve() + route." Realized-trade
@@ -456,16 +462,16 @@ function useLiveFeed() {
       // empty curve, so keep the demo-seeded one on screen until real
       // points exist rather than blanking the chart.
       try {
-        const r = await omniFetch('/api/equity-curve?limit=300');
+        const r = await recordFetch('equity-curve', omniFetch('/api/equity-curve?limit=300'));
         if (!cancelled && r.ok && Array.isArray(r.curve) && r.curve.length > 1) {
           setEquityCurve(r.curve.map((pt, i) => ({ t: i, equity: pt.balance, timestamp: pt.timestamp, symbol: pt.symbol, result: pt.result })));
           setEquityCurveLive(true);
         }
       } catch (_) {}
-      try { const r = await omniFetch('/api/news'); if (!cancelled && r.ok) setNews(Array.isArray(r.news) ? r.news : []); } catch (_) {}
-      try { const r = await omniFetch('/api/journal'); if (!cancelled && r.ok) setJournalStats(r.stats); } catch (_) {}
-      try { const r = await omniFetch('/api/learning?limit=20'); if (!cancelled && r.ok) setLearningProfiles(r.profiles); } catch (_) {}
-      try { const r = await omniFetch('/api/watchlist'); if (!cancelled && r.ok) setRelativeStrength(r.relativeStrength); } catch (_) {}
+      try { const r = await recordFetch('news', omniFetch('/api/news')); if (!cancelled && r.ok) setNews(Array.isArray(r.news) ? r.news : []); } catch (_) {}
+      try { const r = await recordFetch('journal', omniFetch('/api/journal')); if (!cancelled && r.ok) setJournalStats(r.stats); } catch (_) {}
+      try { const r = await recordFetch('learning', omniFetch('/api/learning?limit=20')); if (!cancelled && r.ok) setLearningProfiles(r.profiles); } catch (_) {}
+      try { const r = await recordFetch('watchlist', omniFetch('/api/watchlist')); if (!cancelled && r.ok) setRelativeStrength(r.relativeStrength); } catch (_) {}
     };
 
     pullFast(); pullSlow();
@@ -554,7 +560,7 @@ function useLiveFeed() {
   return {
     now, prices, changes, flash, signals, auditLog, equityCurve, equityCurveLive,
     stats, outlook, heatmapTiles, feedHealth, uptimeSec, accountBalance, socketLive,
-    news, journalStats, learningProfiles, relativeStrength,
+    news, journalStats, learningProfiles, relativeStrength, fetchErrors,
     mode, connected: mode === 'live', wakingBackend,
   };
 }
@@ -1060,11 +1066,21 @@ function NewsTab({ news, mode }) {
             {filtered.map((n, i) => (
               <a key={i} href={n.url || undefined} target={n.url ? '_blank' : undefined} rel="noreferrer"
                 className="omni-row flex items-start gap-3 px-2 py-2 rounded border-b" style={{ borderColor: 'var(--border)', textDecoration: 'none', cursor: n.url ? 'pointer' : 'default' }}>
-                <Clock size={12} style={{ color: 'var(--textFaint)', marginTop: 2, flexShrink: 0 }} />
-                <div className="flex-1">
+                {n.image ? (
+                  <img src={n.image} alt="" loading="lazy"
+                    className="rounded object-cover shrink-0"
+                    style={{ width: 64, height: 64, background: 'var(--panel2)' }}
+                    onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                ) : (
+                  <div className="rounded flex items-center justify-center shrink-0" style={{ width: 64, height: 64, background: 'var(--panel2)' }}>
+                    <Newspaper size={20} style={{ color: 'var(--textFaint)' }} />
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
                   <div className="text-[12px]" style={{ color: 'var(--text)' }}>{n.headline}</div>
-                  <div className="font-mono text-[9px] uppercase mt-0.5" style={{ color: 'var(--textFaint)' }}>
-                    {n.source || 'Unknown'} · {timeAgo(n.datetime)} ago{n.symbol ? ` · ${n.symbol}` : ''}
+                  {n.summary && <div className="text-[10px] mt-0.5 line-clamp-2" style={{ color: 'var(--textFaint)' }}>{n.summary}</div>}
+                  <div className="font-mono text-[9px] uppercase mt-1" style={{ color: 'var(--textFaint)' }}>
+                    {n.source || 'Unknown'} · {timeAgo((n.datetime || 0) * 1000)} ago{n.symbol ? ` · ${n.symbol}` : ''}
                   </div>
                 </div>
               </a>
@@ -1077,7 +1093,7 @@ function NewsTab({ news, mode }) {
 }
 
 /* ── MONITOR ────────────────────────────────────────────────────────── */
-function MonitorTab({ auditLog, feedHealth, uptimeSec, mode }) {
+function MonitorTab({ auditLog, feedHealth, uptimeSec, mode, fetchErrors }) {
   // In live mode, layer the real DataIntegrityMonitor report (name/connected
   // from /api/health) over the known feed list; feeds it doesn't mention
   // (e.g. OpenInsider, which is inert without a paid key) keep their static
@@ -1091,9 +1107,23 @@ function MonitorTab({ auditLog, feedHealth, uptimeSec, mode }) {
   const uptimeLabel = mode === 'live' && uptimeSec != null
     ? `${Math.floor(uptimeSec / 3600)}h ${Math.floor((uptimeSec % 3600) / 60)}m`
     : null;
+  const activeErrors = Object.entries(fetchErrors || {}).filter(([, v]) => v);
 
   return (
     <div className="p-4 space-y-4">
+      {activeErrors.length > 0 && (
+        <div className="omni-panel p-4" style={{ borderColor: 'var(--coral)' }}>
+          <SectionHeader icon={ShieldAlert} title="API Diagnostics" sub={`${activeErrors.length} endpoint${activeErrors.length > 1 ? 's' : ''} failing — real reason, not a generic "waiting"`} />
+          <div className="space-y-1.5">
+            {activeErrors.map(([endpoint, message]) => (
+              <div key={endpoint} className="flex items-center gap-2 font-mono text-[11px]">
+                <span className="w-28 shrink-0" style={{ color: 'var(--text)' }}>/api/{endpoint}</span>
+                <span style={{ color: 'var(--coral)' }}>{message}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="omni-panel p-4">
         <SectionHeader icon={Database} title="Feed Health" sub={`${feeds.filter(f => f.status === 'live').length}/${feeds.length} live${uptimeLabel ? ` · up ${uptimeLabel}` : ''}`} />
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5">
@@ -1479,7 +1509,7 @@ export default function OmniceeDashboard() {
           {activeTab === 'SIGNALS' && <SignalsTab signals={feed.signals} />}
           {activeTab === 'INTEL' && <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} />}
           {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}
-          {activeTab === 'MONITOR' && <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} />}
+          {activeTab === 'MONITOR' && <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} fetchErrors={feed.fetchErrors} />}
           {activeTab === 'HEAT' && <HeatTab heatmapTiles={feed.heatmapTiles} mode={feed.mode} />}
           {activeTab === 'VALID' && <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} />}
           {activeTab === 'TAPE' && <TapeTab signals={feed.signals} prices={feed.prices} />}
