@@ -51,6 +51,7 @@ class CFTCCotFeed {
   }
 
   enabled() { return true; } // free public API, no key required
+  isConnected() { return true; }
 
   /** List of trading symbols this feed knows how to map to a CFTC contract. */
   supportedSymbols() { return Object.keys(SYMBOL_TO_CFTC_CONTRACT); }

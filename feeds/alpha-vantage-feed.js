@@ -74,6 +74,8 @@ class AlphaVantageFeed extends EventEmitter {
     return Boolean(this.apiKey);
   }
 
+  isConnected() { return this.enabled(); }
+
   stop() {
     if (this._pollTimer) clearInterval(this._pollTimer);
     this._pollTimer = null;

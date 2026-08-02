@@ -297,8 +297,9 @@ class FinnhubFeed extends EventEmitter {
    * and always rendered as an ambiguous unknown/down state regardless of
    * whether the price stream was actually up. */
   isConnected() {
+    // REST news/calendar work with a key even if the optional FX WS is down
     if (!this.apiKey) return false;
-    return this._wsConnected === true;
+    return true;
   }
 
   _openWs() {

@@ -98,6 +98,7 @@ function normalizeSignal(s) {
 }
 
 const FEEDS = [
+  { name: 'Yahoo',        kind: 'free ticks', status: 'unknown' },
   { name: 'Binance',      kind: 'crypto ws',  status: 'unknown' },
   { name: 'Bybit',        kind: 'crypto ws',  status: 'unknown' },
   { name: 'TwelveData',   kind: 'fx/commod',  status: 'unknown' },
@@ -1105,11 +1106,22 @@ function MonitorTab({ auditLog, feedHealth, uptimeSec, mode, fetchErrors }) {
   // from /api/health) over the known feed list; feeds it doesn't mention
   // (e.g. OpenInsider, which is inert without a paid key) keep their static
   // description rather than disappearing.
-  const liveByName = new Map((feedHealth || []).map(f => [f.name, f]));
+  const liveByName = new Map();
+  for (const f of (feedHealth || [])) {
+    liveByName.set(f.name, f);
+    // backend used to register as BinanceFeed / TwelveDataFeed
+    const short = String(f.name || '').replace(/Feed$/i, '');
+    if (short && short !== f.name) liveByName.set(short, f);
+  }
   const feeds = FEEDS.map(f => {
+    if (f.status === 'inert') return f;
     const live = liveByName.get(f.name);
     if (mode !== 'live' || !live) return f;
-    const status = live.status === 'connected' ? 'live' : live.status === 'disconnected' ? 'down' : 'unknown';
+    const status = live.status === 'connected' ? 'live'
+      : live.status === 'disconnected' ? 'down'
+      : live.connected === true ? 'live'
+      : live.connected === false ? 'down'
+      : 'unknown';
     return { ...f, status };
   });
   const uptimeLabel = mode === 'live' && uptimeSec != null

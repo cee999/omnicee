@@ -2004,7 +2004,7 @@ function buildFeeds() {
       },
     });
     log.info(`BinanceFeed configured for: ${cryptoSymbols.join(', ')}`);
-    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('BinanceFeed', binanceFeed, cryptoSymbols);
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('Binance', binanceFeed, cryptoSymbols);
   }
 
   // FIX: BybitFeed (funding rate, open interest, liquidation cascades, CVD —
@@ -2086,7 +2086,7 @@ function buildFeeds() {
       },
     });
     log.info(`BybitFeed configured for: ${cryptoSymbols.join(', ')}`);
-    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('BybitFeed', bybitFeed, cryptoSymbols);
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('Bybit', bybitFeed, cryptoSymbols);
   }
 
   // TwelveData feed for forex/commodities
@@ -2148,7 +2148,7 @@ function buildFeeds() {
       },
     });
     log.info(`TwelveDataFeed configured for: ${fxSymbols.join(', ')}${macroSymbols.length ? ` (+ macro: ${macroSymbols.join(', ')})` : ''}`);
-    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('TwelveDataFeed', tdFeed, fxSymbols);
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('TwelveData', tdFeed, fxSymbols);
   } else if (fxSymbols.length && !TWELVE_KEY) {
     log.warn(`Forex symbols ${fxSymbols.join(',')} configured but TWELVE_DATA_API_KEY is missing`);
   }
@@ -2193,7 +2193,25 @@ function buildFeeds() {
       instance: freeRateFeed,
       symbols: SYMBOLS,
     });
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('Yahoo', freeRateFeed, SYMBOLS);
     log.info(`FreeRateFeed configured for: ${SYMBOLS.join(', ')}`);
+  }
+
+  // Surface Finnhub in Monitor when a key is present (news + optional FX stream)
+  if (dataIntegrityMonitor && finnhubFeed?.enabled?.()) {
+    dataIntegrityMonitor.registerFeed('Finnhub', finnhubFeed, fxSymbols.length ? fxSymbols : SYMBOLS);
+  }
+  if (dataIntegrityMonitor && alphaVantageFeed) {
+    dataIntegrityMonitor.registerFeed('Alpha Vantage', alphaVantageFeed, []);
+  }
+  if (dataIntegrityMonitor && fmpFeed?.enabled?.()) {
+    dataIntegrityMonitor.registerFeed('FMP', fmpFeed, []);
+  }
+  if (dataIntegrityMonitor && cftcCotFeed) {
+    dataIntegrityMonitor.registerFeed('CFTC COT', cftcCotFeed, []);
+  }
+  if (dataIntegrityMonitor && myfxbookFeed) {
+    dataIntegrityMonitor.registerFeed('Myfxbook', myfxbookFeed, []);
   }
 
   return feeds;

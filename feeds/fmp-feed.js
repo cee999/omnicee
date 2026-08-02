@@ -37,6 +37,8 @@ class FMPFeed {
     return Boolean(this.apiKey);
   }
 
+  isConnected() { return this.enabled(); }
+
   _get(path) {
     const sep = path.includes('?') ? '&' : '?';
     const url = `${this._baseUrl}${path}${sep}apikey=${this.apiKey}`;

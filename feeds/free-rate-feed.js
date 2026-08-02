@@ -107,6 +107,10 @@ class FreeRateFeed extends EventEmitter {
     return this.symbols.length > 0;
   }
 
+  isConnected() {
+    return this._running === true;
+  }
+
   async connect() {
     return this.start();
   }

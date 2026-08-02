@@ -302,6 +302,10 @@ class MyfxbookFeed extends EventEmitter {
     };
   }
 
+  isConnected() {
+    return this._connected === true;
+  }
+
   async connect() {
     console.log('[Myfxbook] Connecting...');
     this._stats.startTime = Date.now();
