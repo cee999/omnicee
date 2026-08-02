@@ -1243,9 +1243,44 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
 // Binance/Bybit/onMT5Tick (below) are the sources that feed the OHLC
 // history the agents run technical analysis against; this is purely the
 // real-time layer on top of that.
+// Price authority: broker (mt5_ea) > exchange WS (binance/bybit) > paid APIs
+// > yahoo-free. Free mid rates will NEVER match Exness/MT5 bid-ask — only
+// the EA push (POST /api/ea/prices) can. When a recent broker tick exists,
+// ignore lower-priority sources so the dashboard matches MetaTrader.
+const PRICE_SOURCE_RANK = {
+  mt5_ea: 100,
+  tradingview: 90,
+  binance: 70,
+  bybit: 70,
+  finnhub: 50,
+  twelvedata: 50,
+  candle: 40,
+  'yahoo-free': 10,
+  'free-rate': 10,
+  'free-rate-daily': 5,
+  unknown: 0,
+};
+const BROKER_PRICE_HOLD_MS = Number(process.env.BROKER_PRICE_HOLD_MS) || 8000; // keep broker price for 8s
+const lastPriceBySymbol = {}; // symbol -> { price, source, rank, ts }
+
 function onLivePrice(symbol, price, { change = null, bias = null, source = 'candle' } = {}) {
   if (!SYMBOLS.includes(symbol)) return;
   if (!Number.isFinite(price)) return;
+
+  const now = Date.now();
+  const rank = PRICE_SOURCE_RANK[source] ?? PRICE_SOURCE_RANK.unknown;
+  const prev = lastPriceBySymbol[symbol];
+
+  // If we have a recent higher-authority price (esp. broker), drop this update
+  if (prev && prev.rank > rank && (now - prev.ts) < BROKER_PRICE_HOLD_MS) {
+    return;
+  }
+  // Same rank within 400ms — skip spam
+  if (prev && prev.rank === rank && (now - prev.ts) < 400) {
+    return;
+  }
+
+  lastPriceBySymbol[symbol] = { price, source, rank, ts: now };
 
   if (executionEngine?.onPrice) {
     try { executionEngine.onPrice(symbol, price, null); }
@@ -1253,8 +1288,7 @@ function onLivePrice(symbol, price, { change = null, bias = null, source = 'cand
   }
 
   if (wsBus) {
-    const now = Date.now();
-    if (!lastMarketEmit[symbol] || now - lastMarketEmit[symbol] >= 1000) {
+    if (!lastMarketEmit[symbol] || now - lastMarketEmit[symbol] >= 500) {
       lastMarketEmit[symbol] = now;
       wsBus.emit('market_update', {
         symbol,
@@ -1327,6 +1361,10 @@ function onMT5Tick(symbol, price, { bid, ask, timestamp } = {}) {
     try { onCandle({ symbol, timeframe: tf, candle: { ...mt5CandleBuilders[key] }, isClosed: false }); }
     catch (e) { log.warn(`onMT5Tick update [${symbol} ${tf}]: ${e.message}`); }
   }
+
+  // Always push broker mid to the ticker with highest authority so Yahoo/free
+  // rates cannot overwrite Exness/MT5 prices while the EA is connected.
+  onLivePrice(symbol, price, { source: 'mt5_ea' });
 }
 
 // ── 7. Instantiate singletons ──────────────────────────────────────────────

@@ -529,6 +529,102 @@ function createApp() {
     });
   });
 
+  // ── TradingView webhook (alerts → signals / optional price ticks) ───────
+  // Configure a TradingView alert Webhook URL to:
+  //   POST https://omnicee.onrender.com/api/webhooks/tradingview?secret=YOUR_SECRET
+  // Message body (JSON):
+  //   {"symbol":"{{ticker}}","price":{{close}},"action":"{{strategy.order.action}}",
+  //    "interval":"{{interval}}","strategy":"{{strategy.order.id}}"}
+  // Or simpler price-only: {"symbol":"EURUSD","price":1.085,"source":"tradingview"}
+  // SIGNAL_ONLY by default: creates a signal event for the dashboard/Telegram,
+  // does NOT place broker orders (ExecutionEngine stays MANUAL).
+  const TV_WEBHOOK_SECRET = process.env.TRADINGVIEW_WEBHOOK_SECRET || process.env.EA_SECRET || '';
+  function tvAuth(req, res, next) {
+    if (!TV_WEBHOOK_SECRET) return next();
+    const token = req.headers['x-webhook-secret'] || req.query.secret || req.body?.secret;
+    if (token === TV_WEBHOOK_SECRET) return next();
+    return res.status(401).json({ ok: false, error: 'Invalid webhook secret' });
+  }
+
+  app.post('/api/webhooks/tradingview', tvAuth, (req, res) => {
+    let body = req.body;
+    // TradingView sometimes sends raw text — try to parse
+    if (typeof body === 'string') {
+      try { body = JSON.parse(body); } catch (_) { body = { raw: body }; }
+    }
+    if (!body || typeof body !== 'object') {
+      return res.status(400).json({ ok: false, error: 'JSON body required' });
+    }
+
+    // Normalize symbol (EURUSD, EURUSD=X, FX:EURUSD, BINANCE:BTCUSDT → clean)
+    let symbol = String(body.symbol || body.ticker || body.pair || '')
+      .toUpperCase()
+      .replace(/^(FX:|FOREX:|OANDA:|TVC:|BINANCE:|BYBIT:|COINBASE:)/, '')
+      .replace(/=X$/, '')
+      .replace(/[^A-Z0-9]/g, '');
+    if (symbol === 'XAUUSD' || symbol === 'GOLD') symbol = 'XAUUSD';
+    if (symbol === 'BTCUSD' || symbol === 'BTCUSDT') symbol = symbol.includes('USDT') ? 'BTCUSDT' : 'BTCUSDT';
+    if (symbol === 'ETHUSD' || symbol === 'ETHUSDT') symbol = 'ETHUSDT';
+
+    const price = Number(body.price ?? body.close ?? body.bid);
+    const actionRaw = String(body.action || body.side || body.order || body.strategy_action || 'WAIT').toUpperCase();
+    let action = 'WAIT';
+    if (['BUY', 'LONG', 'B'].includes(actionRaw)) action = 'LONG';
+    if (['SELL', 'SHORT', 'S'].includes(actionRaw)) action = 'SHORT';
+
+    const engines = getEngines();
+    let priceAccepted = false;
+    if (symbol && Number.isFinite(price) && price > 0) {
+      if (engines.onLivePrice) {
+        engines.onLivePrice(symbol, price, { source: 'tradingview' });
+        priceAccepted = true;
+      } else {
+        bus.emit('market_update', { symbol, price, change: null, bias: null, source: 'tradingview' });
+        priceAccepted = true;
+      }
+    }
+
+    // Optional: treat as a signal alert (dashboard + telegram path via bus)
+    const makeSignal = body.signal !== false && action !== 'WAIT' && symbol;
+    let signalId = null;
+    if (makeSignal) {
+      signalId = `tv-${symbol}-${Date.now()}`;
+      const payload = {
+        id: signalId,
+        symbol,
+        action,
+        timeframe: body.interval || body.timeframe || 'TV',
+        currentPrice: Number.isFinite(price) ? price : null,
+        score: { final: Number(body.score) || 80, grade: 'TV' },
+        source: 'tradingview',
+        strategy: body.strategy || body.strategy_id || 'TradingView Alert',
+        timestamp: Date.now(),
+        entry: Number.isFinite(price) ? price : null,
+        stopLoss: body.sl != null ? Number(body.sl) : null,
+        targets: body.tp != null ? [Number(body.tp)] : [],
+        gate: { status: 'tv_alert', checklist: {} },
+        agents: [{ name: 'TradingView', direction: action, confidence: 80 }],
+        agreeCount: 1,
+        note: body.message || body.comment || 'TradingView webhook alert',
+      };
+      bus.emit('signal', payload);
+      // Also try dispatcher if present
+      try {
+        const dispatcher = getDispatcher();
+        if (dispatcher?.ingestExternalSignal) dispatcher.ingestExternalSignal(payload);
+      } catch (_) {}
+    }
+
+    res.json({
+      ok: true,
+      symbol: symbol || null,
+      priceAccepted,
+      signalId,
+      action: makeSignal ? action : 'none',
+      mode: 'signal_only',
+    });
+  });
+
   app.use(express.static(STATIC_ROOT, {
     etag: true,
     maxAge: process.env.NODE_ENV === 'production' ? '5m' : 0,
