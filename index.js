@@ -1331,7 +1331,7 @@ const PRICE_SOURCE_RANK = {
 const BROKER_PRICE_HOLD_MS = Number(process.env.BROKER_PRICE_HOLD_MS) || 60000; // keep Exness/MT5 price for 60s — TwelveData/Yahoo cannot overwrite
 const lastPriceBySymbol = {}; // symbol -> { price, source, rank, ts }
 
-function onLivePrice(symbol, price, { change = null, bias = null, source = 'candle' } = {}) {
+function onLivePrice(symbol, price, { change = null, bias = null, source = 'candle', bid = null, ask = null } = {}) {
   if (!SYMBOLS.includes(symbol)) return;
   if (!Number.isFinite(price)) return;
 
@@ -1343,12 +1343,15 @@ function onLivePrice(symbol, price, { change = null, bias = null, source = 'cand
   if (prev && prev.rank > rank && (now - prev.ts) < BROKER_PRICE_HOLD_MS) {
     return;
   }
-  // Same rank within 400ms — skip spam
-  if (prev && prev.rank === rank && (now - prev.ts) < 400) {
+  // Same rank throttle: broker ticks can be faster (100ms); others 400ms
+  const sameRankMin = source === 'mt5_ea' ? 100 : 400;
+  if (prev && prev.rank === rank && (now - prev.ts) < sameRankMin) {
     return;
   }
 
-  lastPriceBySymbol[symbol] = { price, source, rank, ts: now };
+  const b = Number.isFinite(bid) ? bid : (prev?.bid ?? null);
+  const a = Number.isFinite(ask) ? ask : (prev?.ask ?? null);
+  lastPriceBySymbol[symbol] = { price, bid: b, ask: a, source, rank, ts: now };
 
   if (executionEngine?.onPrice) {
     try { executionEngine.onPrice(symbol, price, null); }
@@ -1356,11 +1359,14 @@ function onLivePrice(symbol, price, { change = null, bias = null, source = 'cand
   }
 
   if (wsBus) {
-    if (!lastMarketEmit[symbol] || now - lastMarketEmit[symbol] >= 500) {
+    const emitMin = source === 'mt5_ea' ? 100 : 400;
+    if (!lastMarketEmit[symbol] || now - lastMarketEmit[symbol] >= emitMin) {
       lastMarketEmit[symbol] = now;
       wsBus.emit('market_update', {
         symbol,
         price,
+        bid: b,
+        ask: a,
         change,
         bias: bias ?? lastVotes[symbol]?.smc?.direction?.toLowerCase() ?? 'wait',
         source,
@@ -1432,7 +1438,7 @@ function onMT5Tick(symbol, price, { bid, ask, timestamp } = {}) {
 
   // Always push broker mid to the ticker with highest authority so Yahoo/free
   // rates cannot overwrite Exness/MT5 prices while the EA is connected.
-  onLivePrice(symbol, price, { source: 'mt5_ea' });
+  onLivePrice(symbol, price, { source: 'mt5_ea', bid, ask });
 }
 
 // ── 7. Instantiate singletons ──────────────────────────────────────────────

@@ -177,6 +177,10 @@ function ThemeStyle() {
       .omni-flash-up { animation: omni-flash-up 0.7s ease-out; }
       .omni-flash-down { animation: omni-flash-down 0.7s ease-out; }
       .omni-tab-active { box-shadow: inset 3px 0 0 var(--emerald); background: var(--panel2); }
+.omni-ticker-wrap { height: 32px; }
+.omni-ticker-track { animation: omni-ticker 28s linear infinite; width: max-content; }
+.omni-ticker-wrap:hover .omni-ticker-track { animation-play-state: paused; }
+@keyframes omni-ticker { from { transform: translateX(0); } to { transform: translateX(-50%); } }
       .omni-cmd::placeholder { color: var(--textFaint); }
       .omni-row:hover { background: rgba(255,255,255,0.02); }
     `}</style>
@@ -327,6 +331,7 @@ function useLiveFeed() {
   const [mode, setMode] = useState('checking'); // 'checking' | 'live'
   const [now, setNow] = useState(Date.now());
   const [prices, setPrices] = useState(() => Object.fromEntries(SYMBOLS.map(s => [s, null])));
+  const [quotes, setQuotes] = useState(() => Object.fromEntries(SYMBOLS.map(s => [s, null])));
   const [changes, setChanges] = useState(() => Object.fromEntries(SYMBOLS.map(s => [s, null])));
   const [flash, setFlash] = useState({});
   const [signals, setSignals] = useState([]);
@@ -431,6 +436,24 @@ function useLiveFeed() {
               if (prevSrc && prevSrc.rank > rank && (Date.now() - prevSrc.ts) < 60000) return;
               priceSourceRef.current[m.symbol] = { source: src, rank, ts: Date.now() };
               next[m.symbol] = Number(m.price);
+            });
+            return next;
+          });
+          setQuotes(prev => {
+            const next = { ...prev };
+            r.market.forEach(m => {
+              if (!m.symbol || m.price == null) return;
+              const src = m.source || 'unknown';
+              const rank = SRC_RANK[src] ?? 0;
+              const prevSrc = priceSourceRef.current[m.symbol];
+              if (prevSrc && prevSrc.rank > rank && (Date.now() - prevSrc.ts) < 60000) return;
+              next[m.symbol] = {
+                price: Number(m.price),
+                bid: m.bid != null ? Number(m.bid) : prev[m.symbol]?.bid ?? null,
+                ask: m.ask != null ? Number(m.ask) : prev[m.symbol]?.ask ?? null,
+                source: src,
+                ts: Date.now(),
+              };
             });
             return next;
           });
@@ -539,6 +562,16 @@ function useLiveFeed() {
         const prevPrice = priceRef.current[sym];
         setFlash(f => ({ ...f, [sym]: payload.price >= prevPrice ? 'up' : 'down' }));
         setPrices(prev => ({ ...prev, [sym]: Number(payload.price) }));
+        setQuotes(prev => ({
+          ...prev,
+          [sym]: {
+            price: Number(payload.price),
+            bid: payload.bid != null ? Number(payload.bid) : prev[sym]?.bid ?? null,
+            ask: payload.ask != null ? Number(payload.ask) : prev[sym]?.ask ?? null,
+            source: src,
+            ts: Date.now(),
+          },
+        }));
         if (payload.change != null) {
           setChanges(c => ({ ...c, [sym]: payload.change }));
         } else {
@@ -581,7 +614,7 @@ function useLiveFeed() {
   }, [mode]);
 
   return {
-    now, prices, changes, flash, signals, auditLog, equityCurve, equityCurveLive,
+    now, prices, quotes, changes, flash, signals, auditLog, equityCurve, equityCurveLive,
     stats, outlook, heatmapTiles, feedHealth, uptimeSec, accountBalance, socketLive,
     news, sentiment, journalStats, learningProfiles, relativeStrength, fetchErrors,
     mode, connected: mode === 'live', wakingBackend,
@@ -597,8 +630,7 @@ const TABS = [
   { key: 'MONITOR', label: 'Monitor', fkey: 'F5', icon: Activity },
   { key: 'HEAT', label: 'Heat', fkey: 'F6', icon: Flame },
   { key: 'VALID', label: 'Valid', fkey: 'F7', icon: FlaskConical },
-  { key: 'TAPE', label: 'Tape', fkey: 'F8', icon: ScrollText },
-  { key: 'RISK', label: 'Risk', fkey: 'F9', icon: ShieldAlert },
+  { key: 'DESK', label: 'Desk', fkey: 'F8', icon: ShieldAlert },
 ];
 
 function TopBar({ now, mode, socketLive, wakingBackend, onCommand }) {
@@ -653,22 +685,46 @@ function TopBar({ now, mode, socketLive, wakingBackend, onCommand }) {
   );
 }
 
-function TickerTape({ prices, changes, flash }) {
-  // Unique symbols only (env can accidentally list the same pair twice)
-  const syms = [...new Set(SYMBOLS)];
-  const row = syms.map(sym => (
-    <span key={sym} className={`inline-flex items-center gap-2 px-5 font-mono text-[12px] ${flash[sym] === 'up' ? 'omni-flash-up' : flash[sym] === 'down' ? 'omni-flash-down' : ''}`}>
-      <span style={{ color: 'var(--textDim)' }}>{sym}</span>
-      <span style={{ color: 'var(--text)' }}>{fmtPrice(sym, prices[sym])}</span>
-      <span style={{ color: (changes[sym] ?? 0) >= 0 ? 'var(--emerald)' : 'var(--coral)' }}>{fmtPct(changes[sym] ?? 0)}</span>
-    </span>
-  ));
+function TickerTape({ prices, changes, flash, quotes }) {
+  // Smooth continuous strip — duplicate symbols for seamless marquee
+  const syms = [...SYMBOLS, ...SYMBOLS];
   return (
-    <div className="overflow-hidden border-b py-1.5" style={{ borderColor: 'var(--border)', background: '#080a0d' }}>
-      {/* Two copies = smooth loop; not a bug. Animation is faster (16s). */}
-      <div className="flex omni-marquee whitespace-nowrap w-max">
-        <div className="flex">{row}</div>
-        <div className="flex" aria-hidden="true">{row}</div>
+    <div className="omni-ticker-wrap border-b overflow-hidden shrink-0" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
+      <div className="omni-ticker-track flex items-center gap-6 px-3 py-1.5 font-mono text-[11px] whitespace-nowrap">
+        {syms.map((sym, i) => {
+          const q = quotes?.[sym];
+          const mid = q?.price ?? prices[sym];
+          const bid = q?.bid;
+          const ask = q?.ask;
+          const ch = changes[sym];
+          const up = ch == null ? null : ch >= 0;
+          const fl = flash[sym];
+          return (
+            <span key={`${sym}-${i}`} className="inline-flex items-center gap-2 shrink-0"
+              style={{
+                color: 'var(--text)',
+                background: fl === 'up' ? 'rgba(31,227,168,0.12)' : fl === 'down' ? 'rgba(255,84,112,0.12)' : 'transparent',
+                borderRadius: 4,
+                padding: '1px 6px',
+                transition: 'background 0.15s',
+              }}>
+              <span style={{ color: 'var(--textFaint)' }}>{sym}</span>
+              {bid != null && ask != null ? (
+                <>
+                  <span style={{ color: 'var(--coral)' }}>{fmtPrice(sym, bid)}</span>
+                  <span style={{ color: 'var(--textFaint)' }}>/</span>
+                  <span style={{ color: 'var(--emerald)' }}>{fmtPrice(sym, ask)}</span>
+                </>
+              ) : (
+                <span style={{ color: 'var(--text)' }}>{fmtPrice(sym, mid)}</span>
+              )}
+              {ch != null && (
+                <span style={{ color: up ? 'var(--emerald)' : 'var(--coral)' }}>{fmtPct(ch)}</span>
+              )}
+              {q?.source === 'mt5_ea' && <span style={{ color: 'var(--gold)', fontSize: 9 }}>LIVE</span>}
+            </span>
+          );
+        })}
       </div>
     </div>
   );
@@ -846,24 +902,57 @@ function DashTab({ signals, equityCurve, equityCurveLive, accountBalance, journa
 }
 
 /* ── SIGNALS ────────────────────────────────────────────────────────── */
-function SignalsTab({ signals }) {
+function SignalsTab({ signals, prices, quotes }) {
   const [expanded, setExpanded] = useState(null);
-  const [symFilter, setSymFilter] = useState('ALL');
-  const filtered = symFilter === 'ALL' ? signals : signals.filter(s => s.symbol === symFilter);
+  const [desk, setDesk] = useState('ALL');
+  const DESKS = {
+    ALL: SYMBOLS,
+    GOLD: ['XAUUSD'],
+    CRYPTO: ['BTCUSDT', 'ETHUSDT'],
+    FX: ['EURUSD', 'GBPUSD', 'USDJPY'],
+  };
+  const deskSymbols = DESKS[desk] || SYMBOLS;
+  const filtered = signals.filter(s => deskSymbols.includes(s.symbol));
 
   return (
     <div className="p-4 space-y-3">
       <div className="flex items-center gap-2 flex-wrap">
-        <SectionHeader icon={Radio} title="Live Signals" sub={`${filtered.length} shown`} />
+        <SectionHeader icon={Radio} title="Signal Desks" sub={`${filtered.length} signal(s) · live broker prices`} />
         <div className="ml-auto flex gap-1 flex-wrap">
-          {['ALL', ...SYMBOLS].map(s => (
-            <button key={s} onClick={() => setSymFilter(s)}
-              className="font-mono text-[10px] px-2 py-1 rounded uppercase"
-              style={{ background: symFilter === s ? 'var(--emerald)' : 'var(--panel2)', color: symFilter === s ? '#05070a' : 'var(--textDim)' }}>
-              {s}
+          {Object.keys(DESKS).map(d => (
+            <button key={d} onClick={() => setDesk(d)}
+              className="font-mono text-[10px] px-2.5 py-1 rounded uppercase"
+              style={{ background: desk === d ? 'var(--emerald)' : 'var(--panel2)', color: desk === d ? '#05070a' : 'var(--textDim)' }}>
+              {d}
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Per-symbol quote strip for this desk */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
+        {deskSymbols.map(sym => {
+          const q = quotes?.[sym];
+          const mid = q?.price ?? prices?.[sym];
+          const n = signals.filter(s => s.symbol === sym).length;
+          return (
+            <div key={sym} className="omni-panel2 px-2.5 py-2 font-mono text-[10px]">
+              <div className="flex justify-between mb-1">
+                <span style={{ color: 'var(--text)' }}>{sym}</span>
+                <span style={{ color: q?.source === 'mt5_ea' ? 'var(--gold)' : 'var(--textFaint)' }}>{q?.source === 'mt5_ea' ? 'MT5' : (q?.source || '—')}</span>
+              </div>
+              {q?.bid != null && q?.ask != null ? (
+                <div className="flex gap-2">
+                  <span style={{ color: 'var(--coral)' }}>{fmtPrice(sym, q.bid)}</span>
+                  <span style={{ color: 'var(--emerald)' }}>{fmtPrice(sym, q.ask)}</span>
+                </div>
+              ) : (
+                <div style={{ color: 'var(--textDim)' }}>{fmtPrice(sym, mid)}</div>
+              )}
+              <div className="mt-1" style={{ color: 'var(--textFaint)' }}>{n} signal{n === 1 ? '' : 's'}</div>
+            </div>
+          );
+        })}
       </div>
 
       <div className="omni-panel overflow-hidden">
@@ -871,7 +960,11 @@ function SignalsTab({ signals }) {
           <span>Symbol</span><span>TF</span><span>Dir</span><span>Grade</span><span>Entry</span><span>Stop</span><span>Targets</span><span>Gate</span><span>Age</span>
         </div>
         <div className="max-h-[520px] overflow-y-auto omni-scroll">
-          {filtered.map(s => (
+          {filtered.length === 0 ? (
+            <div className="p-6 font-mono text-[11px] text-center" style={{ color: 'var(--textFaint)' }}>
+              No signals for this desk yet. The engine only fires when score ≥ min, agents agree, and risk gates pass — not on every tick.
+            </div>
+          ) : filtered.map(s => (
             <div key={s.id}>
               <div onClick={() => setExpanded(expanded === s.id ? null : s.id)}
                 className="omni-row grid grid-cols-[70px_46px_44px_44px_1fr_1fr_1fr_70px_50px] gap-2 px-3 py-2 font-mono text-[11px] cursor-pointer border-b items-center"
@@ -1534,6 +1627,79 @@ function TapeTab({ signals, prices, mode }) {
   );
 }
 
+
+/* ── DESK (Tape + Risk combined) ───────────────────────────────────── */
+function DeskTab({ signals, prices, quotes, changes, accountBalance, relativeStrength, mode, stats }) {
+  const approved = useMemo(() => signals.filter(s => s.gate?.status === 'approved' || s.gate?.status === 'APPROVED').slice(0, 30), [signals]);
+  const bySymbol = useMemo(() => {
+    const m = {};
+    SYMBOLS.forEach(s => { m[s] = signals.filter(x => x.symbol === s); });
+    return m;
+  }, [signals]);
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <StatCard label="Approved Queue" value={approved.length} icon={Activity} />
+        <StatCard label="All Signals" value={signals.length} icon={Radio} />
+        <StatCard label="Account" value={accountBalance != null ? `$${Number(accountBalance).toLocaleString()}` : '—'} icon={Target} accent="var(--gold)" />
+        <StatCard label="Broker Quotes" value={Object.values(quotes || {}).filter(q => q?.source === 'mt5_ea').length + '/' + SYMBOLS.length} icon={Zap} accent="var(--emerald)" />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="omni-panel overflow-hidden">
+          <SectionHeader icon={ScrollText} title="Signal Queue" sub="approved setups ready for EA / manual — empty until agents fire a high-score signal" />
+          {approved.length === 0 ? (
+            <div className="p-4 font-mono text-[11px] space-y-2" style={{ color: 'var(--textFaint)' }}>
+              <div>Nothing in the queue right now.</div>
+              <div>This is not waiting on prices — prices are live. It waits for a <span style={{ color: 'var(--emerald)' }}>full signal</span>: agents agree, score ≥ minimum, session/risk gates pass.</div>
+              <div>When one fires, it appears here by symbol with entry / SL / TP.</div>
+            </div>
+          ) : (
+            <div className="max-h-72 overflow-y-auto omni-scroll">
+              {approved.map(s => (
+                <div key={s.id} className="omni-row grid grid-cols-[70px_40px_40px_1fr_1fr] gap-2 px-3 py-2 font-mono text-[11px] border-b" style={{ borderColor: 'var(--border)' }}>
+                  <span>{s.symbol}</span>
+                  <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
+                  <span style={{ color: s.action === 'BUY' || s.action === 'LONG' ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
+                  <span style={{ color: 'var(--textDim)' }}>{fmtPrice(s.symbol, s.entry)}</span>
+                  <span style={{ color: 'var(--gold)' }}>{s.score}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="omni-panel p-4">
+          <SectionHeader icon={Layers} title="By Symbol" sub="signal count per desk" />
+          <div className="space-y-2">
+            {SYMBOLS.map(sym => {
+              const q = quotes?.[sym];
+              const list = bySymbol[sym] || [];
+              return (
+                <div key={sym} className="flex items-center gap-3 font-mono text-[11px] omni-panel2 px-2 py-1.5 rounded">
+                  <span className="w-16" style={{ color: 'var(--text)' }}>{sym}</span>
+                  {q?.bid != null ? (
+                    <span className="flex-1"><span style={{ color: 'var(--coral)' }}>{fmtPrice(sym, q.bid)}</span>
+                      <span style={{ color: 'var(--textFaint)' }}> / </span>
+                      <span style={{ color: 'var(--emerald)' }}>{fmtPrice(sym, q.ask)}</span></span>
+                  ) : (
+                    <span className="flex-1" style={{ color: 'var(--textDim)' }}>{fmtPrice(sym, prices?.[sym])}</span>
+                  )}
+                  <span style={{ color: 'var(--textFaint)' }}>{list.length} sig</span>
+                  <span style={{ color: q?.source === 'mt5_ea' ? 'var(--gold)' : 'var(--textFaint)', fontSize: 9 }}>{q?.source === 'mt5_ea' ? 'MT5' : (q?.source || '—')}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      <RiskTab prices={prices} changes={changes} accountBalance={accountBalance} relativeStrength={relativeStrength} mode={mode} stats={stats} />
+    </div>
+  );
+}
+
 /* ── RISK ───────────────────────────────────────────────────────────── */
 function RiskTab({ prices, changes, accountBalance, relativeStrength, mode }) {
   const [balance, setBalance] = useState(accountBalance ?? 10000);
@@ -1663,18 +1829,17 @@ export default function OmniceeDashboard() {
     <div className="omni-root flex flex-col h-full min-h-[640px] w-full text-sm">
       <ThemeStyle />
       <TopBar now={feed.now} mode={feed.mode} socketLive={feed.socketLive} wakingBackend={feed.wakingBackend} onCommand={handleCommand} />
-      <TickerTape prices={feed.prices} changes={feed.changes} flash={feed.flash} />
+      <TickerTape prices={feed.prices} changes={feed.changes} flash={feed.flash} quotes={feed.quotes} />
       <div className="flex flex-col flex-1 min-h-0">
         <div className="flex-1 overflow-y-auto omni-scroll">
           {activeTab === 'DASH' && <DashTab signals={feed.signals} equityCurve={feed.equityCurve} equityCurveLive={feed.equityCurveLive} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} changes={feed.changes} stats={feed.stats} mode={feed.mode} />}
-          {activeTab === 'SIGNALS' && <SignalsTab signals={feed.signals} />}
+          {activeTab === 'SIGNALS' && <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} />}
           {activeTab === 'INTEL' && <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} />}
           {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}
           {activeTab === 'MONITOR' && <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} fetchErrors={feed.fetchErrors} />}
           {activeTab === 'HEAT' && <HeatTab heatmapTiles={feed.heatmapTiles} mode={feed.mode} sentiment={feed.sentiment} />}
           {activeTab === 'VALID' && <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} />}
-          {activeTab === 'TAPE' && <TapeTab signals={feed.signals} prices={feed.prices} />}
-          {activeTab === 'RISK' && <RiskTab prices={feed.prices} changes={feed.changes} stats={feed.stats} accountBalance={feed.accountBalance} relativeStrength={feed.relativeStrength} mode={feed.mode} />}
+          {activeTab === 'DESK' && <DeskTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} stats={feed.stats} accountBalance={feed.accountBalance} relativeStrength={feed.relativeStrength} mode={feed.mode} />}
         </div>
         <div className="flex items-center justify-center gap-2 py-1 border-t font-mono text-[8px] uppercase tracking-wider" style={{ borderColor: 'var(--border)', color: 'var(--textFaint)' }}>
           <span>OMNICEE</span><span>·</span><span>Developed by James Yelbert</span>

@@ -78,6 +78,8 @@ function latestMarketRows(symbols = []) {
     rowsBySymbol.set(symbol, {
       symbol,
       price: tick.price,
+      bid: tick.bid ?? null,
+      ask: tick.ask ?? null,
       change: null,
       bias: null,
       source: tick.source || 'unknown',
@@ -598,9 +600,9 @@ function createApp() {
       if (engines.onMT5Tick) {
         engines.onMT5Tick(p.symbol, mid, { bid, ask, timestamp: p.timestamp });
       } else if (engines.onLivePrice) {
-        engines.onLivePrice(p.symbol, mid, { source: 'mt5_ea' });
+        engines.onLivePrice(p.symbol, mid, { source: 'mt5_ea', bid, ask });
       } else {
-        bus.emit('market_update', { symbol: p.symbol, price: mid, change: null, bias: null, source: 'mt5_ea' });
+        bus.emit('market_update', { symbol: p.symbol, price: mid, bid, ask, change: null, bias: null, source: 'mt5_ea' });
       }
       accepted++;
     }
