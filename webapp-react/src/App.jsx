@@ -22,15 +22,16 @@ import {
    honest "Waiting for backend" state instead of an invented number.
    ──────────────────────────────────────────────────────────────────────── */
 
-const SYMBOLS = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'BTCUSDT', 'ETHUSDT'];
+const SYMBOLS = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'USOIL', 'BTCUSDT', 'ETHUSDT'];
 const TIMEFRAMES = ['M15', 'H1', 'H4', 'D1'];
 const AGENTS = ['SMC', 'MTF', 'Momentum', 'VolumeOI', 'Sentiment', 'Pattern', 'Fractal', 'Microstructure'];
 
 const BASE_PRICE = {
   EURUSD: 1.0842, GBPUSD: 1.2694, USDJPY: 156.32,
-  XAUUSD: 2418.30, BTCUSDT: 67420.5, ETHUSDT: 3512.8,
+  XAUUSD: 2418.30,
+  USOIL: 70, BTCUSDT: 67420.5, ETHUSDT: 3512.8,
 };
-const DECIMALS = { EURUSD: 4, GBPUSD: 4, USDJPY: 3, XAUUSD: 2, BTCUSDT: 1, ETHUSDT: 2 };
+const DECIMALS = { EURUSD: 4, GBPUSD: 4, USDJPY: 3, XAUUSD: 2, USOIL: 2, BTCUSDT: 1, ETHUSDT: 2 };
 const PIP = { EURUSD: 0.0001, GBPUSD: 0.0001, USDJPY: 0.01, XAUUSD: 0.1, BTCUSDT: 10, ETHUSDT: 1 };
 
 // FIX: the Agent Breakdown panel renders `{s.agreeCount}/8 aligned`, but
@@ -332,6 +333,8 @@ function useLiveFeed() {
   const [now, setNow] = useState(Date.now());
   const [prices, setPrices] = useState(() => Object.fromEntries(SYMBOLS.map(s => [s, null])));
   const [quotes, setQuotes] = useState(() => Object.fromEntries(SYMBOLS.map(s => [s, null])));
+  const [calendar, setCalendar] = useState([]);
+  const [levels, setLevels] = useState({});
   const [changes, setChanges] = useState(() => Object.fromEntries(SYMBOLS.map(s => [s, null])));
   const [flash, setFlash] = useState({});
   const [signals, setSignals] = useState([]);
@@ -492,6 +495,8 @@ function useLiveFeed() {
     };
     const pullSlow = async () => {
       try { const r = await recordFetch('outlook', omniFetch('/api/outlook')); if (!cancelled && r.ok) setOutlook(r.outlook); } catch (_) {}
+      try { const r = await recordFetch('calendar', omniFetch('/api/calendar')); if (!cancelled && r.ok && Array.isArray(r.events)) setCalendar(r.events); } catch (_) {}
+      try { const r = await recordFetch('levels', omniFetch('/api/levels')); if (!cancelled && r.ok && r.levels) setLevels(r.levels); } catch (_) {}
       try { const r = await recordFetch('heatmap', omniFetch('/api/heatmap')); if (!cancelled && r.ok) setHeatmapTiles(r.tiles); } catch (_) {}
       try { const r = await recordFetch('audit-trail', omniFetch('/api/audit-trail?limit=30')); if (!cancelled && r.ok) setAuditLog(r.entries); } catch (_) {}
       try { const r = await recordFetch('health', omniFetch('/api/health')); if (!cancelled && r.ok) setFeedHealth(r.feeds); } catch (_) {}
@@ -629,7 +634,7 @@ function useLiveFeed() {
   }, [mode]);
 
   return {
-    now, prices, quotes, changes, flash, signals, auditLog, equityCurve, equityCurveLive,
+    now, prices, quotes, changes, flash, signals, calendar, levels, auditLog, equityCurve, equityCurveLive,
     stats, outlook, heatmapTiles, feedHealth, uptimeSec, accountBalance, socketLive,
     news, sentiment, journalStats, learningProfiles, relativeStrength, fetchErrors,
     mode, connected: mode === 'live', wakingBackend,
@@ -809,11 +814,10 @@ function MarketVoice({ now, signals, quotes, outlook, mode }) {
 }
 
 /* ── DASH ───────────────────────────────────────────────────────────── */
-function DashTab({ signals, accountBalance, journalStats, prices, quotes, changes, mode, outlook, now }) {
+function DashTab({ signals, accountBalance, journalStats, prices, quotes, changes, mode, outlook, now, calendar, levels }) {
   const approved = signals.filter(s => s.gate?.status === 'approved' || s.gate?.status === 'APPROVED');
   const recent = signals.slice(0, 12);
   const [chartSymbol, setChartSymbol] = useState('XAUUSD');
-  const [ticksOpen, setTicksOpen] = useState(true);
   const [priceHistory, setPriceHistory] = useState(() => Object.fromEntries(SYMBOLS.map(s => [s, []])));
 
   useEffect(() => {
@@ -837,6 +841,43 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
   return (
     <div className="p-2 md:p-4 space-y-3 max-w-[1400px] mx-auto w-full">
       <MarketVoice now={now || Date.now()} signals={signals} quotes={quotes} outlook={outlook} mode={mode} />
+
+      {/* Upcoming calendar + S/R */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="omni-panel p-3">
+          <SectionHeader icon={Clock} title="Economic calendar" sub="next events · Forex Factory" />
+          {!calendar || calendar.length === 0 ? (
+            <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>Loading calendar…</div>
+          ) : (
+            <div className="max-h-40 overflow-y-auto omni-scroll space-y-1">
+              {calendar.slice(0, 12).map((e, i) => (
+                <div key={i} className="flex items-center gap-2 font-mono text-[10px] py-0.5">
+                  <Pill tone={String(e.impact).toLowerCase() === 'high' ? 'down' : String(e.impact).toLowerCase() === 'medium' ? 'warn' : 'neutral'}>{e.impact || '—'}</Pill>
+                  <span className="flex-1 truncate" style={{ color: 'var(--textDim)' }}>{e.name}</span>
+                  <span style={{ color: 'var(--textFaint)' }}>{e.currency}</span>
+                  <span style={{ color: 'var(--textFaint)' }}>{e.hoursAway != null ? `${e.hoursAway}h` : ''}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="omni-panel p-3">
+          <SectionHeader icon={Layers} title="Support / Resistance" sub="H1 swings · session structure" />
+          <div className="max-h-40 overflow-y-auto omni-scroll space-y-1">
+            {SYMBOLS.map(sym => {
+              const lv = levels?.[sym];
+              return (
+                <div key={sym} className="flex items-center gap-2 font-mono text-[10px]">
+                  <span className="w-14" style={{ color: 'var(--text)' }}>{sym}</span>
+                  <span style={{ color: 'var(--coral)' }}>S {lv?.support != null ? fmtPrice(sym, lv.support) : '—'}</span>
+                  <span style={{ color: 'var(--emerald)' }}>R {lv?.resistance != null ? fmtPrice(sym, lv.resistance) : '—'}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
 
       {/* MT5-style: chart left/center, watchlist RIGHT */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-3">
@@ -885,13 +926,9 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
 
         {/* Watchlist RIGHT — Exness/MT5 style */}
         <div className="omni-panel overflow-hidden order-1 lg:order-2 flex flex-col max-h-[380px] lg:max-h-none">
-          <button type="button" onClick={() => setTicksOpen(o => !o)}
-            className="flex items-center justify-between px-3 py-2 border-b w-full text-left"
-            style={{ borderColor: 'var(--border)' }}>
+          <div className="px-3 py-2 border-b" style={{ borderColor: 'var(--border)' }}>
             <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>Market Watch</span>
-            <ChevronDown size={14} style={{ transform: ticksOpen ? 'rotate(180deg)' : 'none', color: 'var(--textDim)' }} />
-          </button>
-          {ticksOpen && (
+          </div>
             <div className="overflow-y-auto omni-scroll flex-1">
               <div className="grid grid-cols-[1fr_72px_72px] gap-1 px-2 py-1 font-mono text-[9px] uppercase" style={{ color: 'var(--textFaint)' }}>
                 <span>Symbol</span><span className="text-right">Bid</span><span className="text-right">Ask</span>
@@ -915,7 +952,6 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
                 );
               })}
             </div>
-          )}
         </div>
       </div>
 
@@ -959,6 +995,7 @@ function SignalsTab({ signals, prices, quotes }) {
   const DESKS = {
     ALL: SYMBOLS,
     GOLD: ['XAUUSD'],
+    OIL: ['USOIL'],
     CRYPTO: ['BTCUSDT', 'ETHUSDT'],
     FX: ['EURUSD', 'GBPUSD', 'USDJPY'],
   };
@@ -1108,7 +1145,7 @@ function SignalsTab({ signals, prices, quotes }) {
 }
 
 /* ── INTEL ──────────────────────────────────────────────────────────── */
-function IntelTab({ now, outlook, mode }) {
+function IntelTab({ now, outlook, mode, calendar, levels }) {
   const live = mode === 'live' && outlook;
 
   const narrative = live ? (outlook.narrative || 'No narrative generated yet.') : null;
@@ -1230,10 +1267,21 @@ function IntelTab({ now, outlook, mode }) {
       </div>
 
       <div className="omni-panel p-4">
-        <SectionHeader icon={Clock} title="Economic Calendar" sub={live ? 'Tier-1 / Tier-2 · session filter' : undefined} />
-        {calendarRows === null ? <WaitingForBackend /> : calendarRows.length === 0 ? (
+        <SectionHeader icon={Clock} title="Economic Calendar" sub="Forex Factory · high/medium impact" />
+        {(calendar && calendar.length) ? (
+          <div className="space-y-1.5 max-h-72 overflow-y-auto omni-scroll">
+            {calendar.slice(0, 40).map((e, i) => (
+              <div key={i} className="flex items-center gap-2 font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
+                <Pill tone={String(e.impact).toLowerCase() === 'high' ? 'down' : String(e.impact).toLowerCase() === 'medium' ? 'warn' : 'neutral'}>{e.impact || '—'}</Pill>
+                <span className="flex-1" style={{ color: 'var(--textDim)' }}>{e.name}</span>
+                <span style={{ color: 'var(--textFaint)' }}>{e.currency}</span>
+                <span style={{ color: 'var(--textFaint)' }}>{e.hoursAway != null ? `in ${e.hoursAway}h` : ''}</span>
+              </div>
+            ))}
+          </div>
+        ) : calendarRows === null ? <WaitingForBackend /> : calendarRows.length === 0 ? (
           <div className="font-mono text-[11px] leading-relaxed" style={{ color: 'var(--textFaint)' }}>
-            No upcoming Tier-1/2 events in the loaded calendar. Events appear after Finnhub/FMP/Myfxbook calendar poll succeeds (needs API keys where required).
+            Calendar still loading from Forex Factory…
           </div>
         ) : (
           <div className="space-y-1.5">
@@ -1254,9 +1302,27 @@ function IntelTab({ now, outlook, mode }) {
 /* ── NEWS ───────────────────────────────────────────────────────────── */
 function NewsTab({ news, mode }) {
   const live = mode === 'live' && Array.isArray(news);
-  const items = live ? news : null;
-
-  // Biggest / most recent story first as the main headline
+  const [cat, setCat] = useState('all');
+  const CATS = [
+    { id: 'all', label: 'All' },
+    { id: 'forex', label: 'Forex' },
+    { id: 'gold', label: 'Gold' },
+    { id: 'oil', label: 'Oil' },
+    { id: 'dxy', label: 'Dollar' },
+    { id: 'crypto', label: 'Crypto' },
+  ];
+  const filtered = !live || !Array.isArray(news) ? null : news.filter(n => {
+    if (cat === 'all') return true;
+    const c = (n.category || '').toLowerCase();
+    const h = `${n.headline || ''} ${n.summary || ''}`.toLowerCase();
+    if (cat === 'forex') return c === 'forex' || /forex|eur|gbp|jpy|fx |currency|ecb|fed|fomc|cpi|nfp/.test(h);
+    if (cat === 'gold') return c === 'gold' || /gold|xau|bullion/.test(h);
+    if (cat === 'oil') return c === 'oil' || /oil|opec|wti|brent|crude/.test(h);
+    if (cat === 'dxy') return c === 'dxy' || /dollar index|dxy|greenback/.test(h);
+    if (cat === 'crypto') return c === 'crypto' || /bitcoin|btc|ethereum|eth|crypto/.test(h);
+    return true;
+  });
+  const items = filtered;
   const major = items && items.length ? items[0] : null;
   const rest = items && items.length > 1 ? items.slice(1) : [];
 
@@ -1269,7 +1335,14 @@ function NewsTab({ news, mode }) {
 
   return (
     <div className="p-4 space-y-3">
-      <SectionHeader icon={Newspaper} title="Headlines" sub={live ? 'Yahoo Finance + Finnhub · live' : undefined} />
+      <SectionHeader icon={Newspaper} title="Market news" sub={live ? 'Forex · Gold · Oil · Dollar · Crypto' : undefined} />
+      <div className="flex gap-1 flex-wrap">
+        {CATS.map(c => (
+          <button key={c.id} type="button" onClick={() => setCat(c.id)}
+            className="font-mono text-[10px] px-2 py-1 rounded uppercase"
+            style={{ background: cat === c.id ? 'var(--emerald)' : 'var(--panel2)', color: cat === c.id ? '#05070a' : 'var(--textDim)' }}>{c.label}</button>
+        ))}
+      </div>
 
       {items === null ? (
         <div className="omni-panel p-4"><WaitingForBackend height={200} /></div>
@@ -1699,12 +1772,12 @@ function DeskTab({ signals, prices, quotes, changes, accountBalance, relativeStr
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="omni-panel overflow-hidden">
-          <SectionHeader icon={ScrollText} title="Signal Queue" sub="approved setups ready for EA / manual — empty until agents fire a high-score signal" />
+          <SectionHeader icon={ScrollText} title="Approved queue" sub="only gate-approved · subset of Recent signals on Home · stored in MongoDB for learning" />
           {approved.length === 0 ? (
             <div className="p-4 font-mono text-[11px] space-y-2" style={{ color: 'var(--textFaint)' }}>
-              <div>Nothing in the queue right now.</div>
-              <div>This is not waiting on prices — prices are live. It waits for a <span style={{ color: 'var(--emerald)' }}>full signal</span>: agents agree, score ≥ minimum, session/risk gates pass.</div>
-              <div>When one fires, it appears here by symbol with entry / SL / TP.</div>
+              <div><b style={{ color: 'var(--text)' }}>Queue ≠ Recent.</b> Home “Recent signals” = all fired setups. This queue = only approved ones.</div>
+              <div>All signals (approved or blocked) are saved to MongoDB so adaptive learning can avoid repeat bad setups.</div>
+              <div>Empty queue means nothing cleared the gate yet — not a dead system.</div>
             </div>
           ) : (
             <div className="max-h-72 overflow-y-auto omni-scroll">
@@ -1746,7 +1819,9 @@ function DeskTab({ signals, prices, quotes, changes, accountBalance, relativeStr
         </div>
       </div>
 
-      <RiskTab prices={prices} changes={changes} accountBalance={accountBalance} relativeStrength={relativeStrength} mode={mode} stats={stats} />
+      <div className="omni-panel p-3 font-mono text-[11px]" style={{ color: 'var(--textDim)' }}>
+        Manual trading mode: position-size calculator and portfolio exposure removed from Desk — use your broker for size. Validation tab still shows quality checks if you want them.
+      </div>
     </div>
   );
 }
@@ -1889,9 +1964,9 @@ export default function OmniceeDashboard() {
       <TickerTape prices={feed.prices} changes={feed.changes} flash={feed.flash} quotes={feed.quotes} />
       <div className="flex flex-col flex-1 min-h-0">
         <div className="flex-1 overflow-y-auto omni-scroll">
-          {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} />}
+          {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} calendar={feed.calendar} levels={feed.levels} />}
           {activeTab === 'SIGNALS' && <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} />}
-          {activeTab === 'INTEL' && <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} />}
+          {activeTab === 'INTEL' && <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} calendar={feed.calendar} levels={feed.levels} />}
           {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}
           {activeTab === 'DESK' && <DeskTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} stats={feed.stats} accountBalance={feed.accountBalance} relativeStrength={feed.relativeStrength} mode={feed.mode} />}
           {activeTab === 'VALID' && <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} />}

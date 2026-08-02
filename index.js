@@ -54,7 +54,7 @@ const CHAT_IDS        = (requireEnv('TELEGRAM_CHAT_IDS', '') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
 // Default matches the dashboard ticker so every tab has live prices out of
 // the box. Override via SYMBOLS env to trade a smaller/larger set.
-const SYMBOLS         = (requireEnv('SYMBOLS', 'EURUSD,GBPUSD,USDJPY,XAUUSD,BTCUSDT,ETHUSDT') || '')
+const SYMBOLS         = (requireEnv('SYMBOLS', 'EURUSD,GBPUSD,USDJPY,XAUUSD,USOIL,BTCUSDT,ETHUSDT') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
 const TIMEFRAMES_STR  = (requireEnv('TIMEFRAMES', 'H1,H4') || '')
   .split(',').map(s => s.trim()).filter(Boolean);

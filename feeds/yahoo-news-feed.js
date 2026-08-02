@@ -10,13 +10,15 @@ const UA = 'Mozilla/5.0 (compatible; OMNICEE/1.0; +https://github.com/cee999/omn
 
 // Topics we pull so News tab always has market-relevant stories
 const TOPICS = [
-  'stock market',
-  'forex',
-  'Federal Reserve',
-  'bitcoin',
-  'gold price',
-  'oil prices',
-  'inflation economy',
+  'forex EUR USD',
+  'dollar index DXY',
+  'Federal Reserve interest rates',
+  'gold XAUUSD',
+  'crude oil WTI OPEC',
+  'bitcoin ethereum crypto',
+  'ECB Bank of England BoJ',
+  'US CPI NFP inflation',
+  'geopolitics oil markets',
 ];
 
 function httpGetJSON(url) {
@@ -33,6 +35,16 @@ function httpGetJSON(url) {
     req.on('error', reject);
     req.setTimeout(12000, () => { req.destroy(); reject(new Error('timeout')); });
   });
+}
+
+function guessCategory(query, title) {
+  const t = `${query} ${title}`.toLowerCase();
+  if (/oil|opec|wti|brent|crude/.test(t)) return 'oil';
+  if (/gold|xau|silver/.test(t)) return 'gold';
+  if (/bitcoin|btc|ethereum|eth|crypto/.test(t)) return 'crypto';
+  if (/dollar index|dxy|\buup\b/.test(t)) return 'dxy';
+  if (/forex|eur|gbp|jpy|fx |currency|ecb|fed |fomc|cpi|nfp/.test(t)) return 'forex';
+  return 'markets';
 }
 
 function thumbUrl(item) {
@@ -66,7 +78,7 @@ class YahooNewsFeed {
       datetime: n.providerPublishTime
         ? (n.providerPublishTime < 1e12 ? n.providerPublishTime * 1000 : n.providerPublishTime)
         : Date.now(),
-      category: 'yahoo',
+      category: guessCategory(query, n.title || ''),
       symbol: Array.isArray(n.relatedTickers) ? n.relatedTickers[0] : null,
       relatedTickers: n.relatedTickers || [],
     })).filter(n => n.headline);

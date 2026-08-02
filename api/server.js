@@ -15,6 +15,7 @@ const db = require('../db');
 const { telegramAuthMiddleware, validateTelegramInitData, validateAppToken } = require('./telegram-auth');
 const { FinnhubFeed } = require('../feeds/finnhub-feed');
 const { YahooNewsFeed } = require('../feeds/yahoo-news-feed');
+const { ForexFactoryCalendar } = require('../feeds/forex-factory-calendar');
 const { FearGreedFeed } = require('../feeds/fear-greed-feed');
 const { CoinGeckoFeed } = require('../feeds/coingecko-feed');
 const { AdaptiveLearningEngine } = require('../signal-pipeline/adaptive-learning-engine');
@@ -41,6 +42,7 @@ if (!fs.existsSync(path.join(STATIC_ROOT, 'index.html'))) {
 }
 const finnhub = new FinnhubFeed();
 const yahooNews = new YahooNewsFeed();
+const ffCalendar = new ForexFactoryCalendar();
 const fearGreed = new FearGreedFeed();
 const coinGecko = new CoinGeckoFeed();
 const learningEngine = new AdaptiveLearningEngine({ store: db });
@@ -230,6 +232,67 @@ function createApp() {
       })) : [];
     }
     res.json({ ok: true, outlook: { ...outlook, news } });
+  });
+
+
+  // Live economic calendar (Forex Factory — no key). Frontend was only
+  // seeing Tier-1 from outlook; this exposes the full week for Intel/Home.
+  app.get('/api/calendar', dashboardReadAuth, async (_req, res) => {
+    try {
+      const events = await ffCalendar.economicCalendar();
+      const now = Date.now();
+      const upcoming = (events || [])
+        .filter(e => Number.isFinite(e.time) && e.time >= now - 3600000)
+        .sort((a, b) => a.time - b.time)
+        .slice(0, 80)
+        .map(e => ({
+          name: e.name,
+          currency: e.currency,
+          time: e.time,
+          impact: e.impact,
+          forecast: e.forecast,
+          previous: e.previous,
+          source: e.source || 'forex-factory',
+          hoursAway: Math.round((e.time - now) / 3600000 * 10) / 10,
+        }));
+      res.json({ ok: true, events: upcoming, count: upcoming.length });
+    } catch (err) {
+      res.status(503).json({ ok: false, error: err.message, events: [] });
+    }
+  });
+
+  // Simple support / resistance from live H1 candles (swing highs/lows)
+  app.get('/api/levels', dashboardReadAuth, (req, res) => {
+    const live = getEngines();
+    const symbols = live.symbols || [];
+    const stores = live.candleStores || {};
+    const out = {};
+    for (const symbol of symbols) {
+      const candles = stores[symbol]?.H1 || stores[symbol]?.H4 || [];
+      if (!candles || candles.length < 20) {
+        out[symbol] = { support: null, resistance: null, note: 'need more candles' };
+        continue;
+      }
+      const slice = candles.slice(-48);
+      const highs = slice.map(c => c.high).filter(Number.isFinite);
+      const lows = slice.map(c => c.low).filter(Number.isFinite);
+      const closes = slice.map(c => c.close).filter(Number.isFinite);
+      if (!highs.length || !lows.length) {
+        out[symbol] = { support: null, resistance: null, note: 'bad candles' };
+        continue;
+      }
+      const resistance = Math.max(...highs);
+      const support = Math.min(...lows);
+      const mid = closes[closes.length - 1];
+      out[symbol] = {
+        support: Math.round(support * 1e5) / 1e5,
+        resistance: Math.round(resistance * 1e5) / 1e5,
+        last: mid,
+        range: Math.round((resistance - support) * 1e5) / 1e5,
+        note: 'H1 swing 48 bars',
+      };
+    }
+    res.json({ ok: true, levels: out });
   });
 
   // ── Watchlist / Opportunity Ranking (doc items: Market Scanner, Watchlist
