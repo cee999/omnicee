@@ -22,16 +22,20 @@ import {
    honest "Waiting for backend" state instead of an invented number.
    ──────────────────────────────────────────────────────────────────────── */
 
-const SYMBOLS = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'USOIL', 'BTCUSDT', 'ETHUSDT'];
+const SYMBOLS = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'USOIL', 'UUP', 'BTCUSDT', 'ETHUSDT'];
+const SYMBOL_LABEL = { UUP: 'DXY', XAUUSD: 'GOLD', USOIL: 'OIL', BTCUSDT: 'BTC', ETHUSDT: 'ETH' };
+function symLabel(s) { return SYMBOL_LABEL[s] || s; }
+
 const TIMEFRAMES = ['M15', 'H1', 'H4', 'D1'];
 const AGENTS = ['SMC', 'MTF', 'Momentum', 'VolumeOI', 'Sentiment', 'Pattern', 'Fractal', 'Microstructure'];
 
 const BASE_PRICE = {
   EURUSD: 1.0842, GBPUSD: 1.2694, USDJPY: 156.32,
   XAUUSD: 2418.30,
-  USOIL: 70, BTCUSDT: 67420.5, ETHUSDT: 3512.8,
+  USOIL: 70,
+  UUP: 28, BTCUSDT: 67420.5, ETHUSDT: 3512.8,
 };
-const DECIMALS = { EURUSD: 4, GBPUSD: 4, USDJPY: 3, XAUUSD: 2, USOIL: 2, BTCUSDT: 1, ETHUSDT: 2 };
+const DECIMALS = { EURUSD: 4, GBPUSD: 4, USDJPY: 3, XAUUSD: 2, USOIL: 2, UUP: 3, BTCUSDT: 1, ETHUSDT: 2 };
 const PIP = { EURUSD: 0.0001, GBPUSD: 0.0001, USDJPY: 0.01, XAUUSD: 0.1, BTCUSDT: 10, ETHUSDT: 1 };
 
 // FIX: the Agent Breakdown panel renders `{s.agreeCount}/8 aligned`, but
@@ -727,7 +731,7 @@ function TickerTape({ prices, changes, flash, quotes }) {
                 padding: '1px 6px',
                 transition: 'background 0.15s',
               }}>
-              <span style={{ color: 'var(--textFaint)' }}>{sym}</span>
+              <span style={{ color: 'var(--textFaint)' }}>{typeof symLabel === 'function' ? symLabel(sym) : sym}</span>
               {bid != null && ask != null ? (
                 <>
                   <span style={{ color: 'var(--coral)' }}>{fmtPrice(sym, bid)}</span>
@@ -814,7 +818,7 @@ function MarketVoice({ now, signals, quotes, outlook, mode }) {
 }
 
 /* ── DASH ───────────────────────────────────────────────────────────── */
-function DashTab({ signals, accountBalance, journalStats, prices, quotes, changes, mode, outlook, now, calendar, levels }) {
+function DashTab({ signals, accountBalance, journalStats, prices, quotes, changes, mode, outlook, now, levels }) {
   const approved = signals.filter(s => s.gate?.status === 'approved' || s.gate?.status === 'APPROVED');
   const recent = signals.slice(0, 12);
   const [chartSymbol, setChartSymbol] = useState('XAUUSD');
@@ -838,57 +842,26 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
   const chartUp = chartData.length >= 2 ? chartData[chartData.length - 1].price >= chartData[0].price : true;
   const q = quotes?.[chartSymbol];
 
+  const levelGroups = [
+    { title: 'Gold', syms: ['XAUUSD'] },
+    { title: 'FX', syms: ['EURUSD', 'GBPUSD', 'USDJPY'] },
+    { title: 'Oil', syms: ['USOIL'] },
+    { title: 'Dollar', syms: ['UUP'] },
+    { title: 'Crypto', syms: ['BTCUSDT', 'ETHUSDT'] },
+  ];
+
   return (
-    <div className="p-2 md:p-4 space-y-3 max-w-[1400px] mx-auto w-full">
-      <MarketVoice now={now || Date.now()} signals={signals} quotes={quotes} outlook={outlook} mode={mode} />
-
-      {/* Upcoming calendar + S/R */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <div className="omni-panel p-3">
-          <SectionHeader icon={Clock} title="Economic calendar" sub="next events · Forex Factory" />
-          {!calendar || calendar.length === 0 ? (
-            <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>Loading calendar…</div>
-          ) : (
-            <div className="max-h-40 overflow-y-auto omni-scroll space-y-1">
-              {calendar.slice(0, 12).map((e, i) => (
-                <div key={i} className="flex items-center gap-2 font-mono text-[10px] py-0.5">
-                  <Pill tone={String(e.impact).toLowerCase() === 'high' ? 'down' : String(e.impact).toLowerCase() === 'medium' ? 'warn' : 'neutral'}>{e.impact || '—'}</Pill>
-                  <span className="flex-1 truncate" style={{ color: 'var(--textDim)' }}>{e.name}</span>
-                  <span style={{ color: 'var(--textFaint)' }}>{e.currency}</span>
-                  <span style={{ color: 'var(--textFaint)' }}>{e.hoursAway != null ? `${e.hoursAway}h` : ''}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="omni-panel p-3">
-          <SectionHeader icon={Layers} title="Support / Resistance" sub="H1 swings · session structure" />
-          <div className="max-h-40 overflow-y-auto omni-scroll space-y-1">
-            {SYMBOLS.map(sym => {
-              const lv = levels?.[sym];
-              return (
-                <div key={sym} className="flex items-center gap-2 font-mono text-[10px]">
-                  <span className="w-14" style={{ color: 'var(--text)' }}>{sym}</span>
-                  <span style={{ color: 'var(--coral)' }}>S {lv?.support != null ? fmtPrice(sym, lv.support) : '—'}</span>
-                  <span style={{ color: 'var(--emerald)' }}>R {lv?.resistance != null ? fmtPrice(sym, lv.resistance) : '—'}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-
-      {/* MT5-style: chart left/center, watchlist RIGHT */}
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-3">
+    <div className="p-2 md:p-3 space-y-2 max-w-[1400px] mx-auto w-full">
+      {/* LIVE TICKS FIRST — no scroll required */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_260px] gap-2">
         <div className="omni-panel p-2 md:p-3 order-2 lg:order-1">
-          <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+          <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
             <div className="flex gap-1 flex-wrap">
               {SYMBOLS.map(sym => (
                 <button key={sym} onClick={() => setChartSymbol(sym)}
                   className="font-mono text-[10px] px-2 py-1 rounded"
                   style={{ background: chartSymbol === sym ? 'var(--emerald)' : 'var(--panel2)', color: chartSymbol === sym ? '#05070a' : 'var(--textDim)' }}>
-                  {sym}
+                  {symLabel(sym)}
                 </button>
               ))}
             </div>
@@ -899,9 +872,9 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
               {q?.source === 'mt5_ea' && <Pill tone="up">MT5</Pill>}
             </div>
           </div>
-          <div className="h-[220px] md:h-[320px]">
+          <div className="h-[200px] md:h-[280px]">
             {chartData.length < 2 ? (
-              <WaitingForBackend height={200} label="Collecting live ticks for chart…" />
+              <WaitingForBackend height={180} label="Collecting live ticks…" />
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={chartData}>
@@ -916,7 +889,7 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
                   <YAxis orientation="right" domain={['dataMin', 'dataMax']} tick={{ fill: '#526078', fontSize: 10 }} width={72}
                     tickFormatter={(v) => fmtPrice(chartSymbol, v)} />
                   <Tooltip contentStyle={{ background: '#10151c', border: '1px solid #1c232d', borderRadius: 8, fontSize: 11 }}
-                    labelFormatter={(t) => new Date(t).toLocaleTimeString()} formatter={(v) => [fmtPrice(chartSymbol, v), chartSymbol]} />
+                    labelFormatter={(t) => new Date(t).toLocaleTimeString()} formatter={(v) => [fmtPrice(chartSymbol, v), symLabel(chartSymbol)]} />
                   <Area type="monotone" dataKey="price" stroke={chartUp ? '#1fe3a8' : '#ff5470'} fill="url(#priceGrad)" strokeWidth={1.5} isAnimationActive={false} />
                 </AreaChart>
               </ResponsiveContainer>
@@ -924,49 +897,72 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
           </div>
         </div>
 
-        {/* Watchlist RIGHT — Exness/MT5 style */}
-        <div className="omni-panel overflow-hidden order-1 lg:order-2 flex flex-col max-h-[380px] lg:max-h-none">
-          <div className="px-3 py-2 border-b" style={{ borderColor: 'var(--border)' }}>
-            <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>Market Watch</span>
+        <div className="omni-panel overflow-hidden order-1 lg:order-2 flex flex-col max-h-[320px] lg:max-h-[340px]">
+          <div className="px-3 py-1.5 border-b" style={{ borderColor: 'var(--border)' }}>
+            <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>Market Watch · live</span>
           </div>
-            <div className="overflow-y-auto omni-scroll flex-1">
-              <div className="grid grid-cols-[1fr_72px_72px] gap-1 px-2 py-1 font-mono text-[9px] uppercase" style={{ color: 'var(--textFaint)' }}>
-                <span>Symbol</span><span className="text-right">Bid</span><span className="text-right">Ask</span>
-              </div>
-              {SYMBOLS.map(sym => {
-                const qq = quotes?.[sym];
-                const ch = changes?.[sym];
-                const up = ch == null ? null : ch >= 0;
-                return (
-                  <button key={sym} type="button" onClick={() => setChartSymbol(sym)}
-                    className="omni-row w-full grid grid-cols-[1fr_72px_72px] gap-1 px-2 py-2 font-mono text-[11px] text-left border-b"
-                    style={{ borderColor: 'var(--border)', background: chartSymbol === sym ? 'var(--panel2)' : 'transparent' }}>
-                    <span>
-                      <span style={{ color: 'var(--text)' }}>{sym}</span>
-                      {qq?.source === 'mt5_ea' && <span className="ml-1 text-[8px]" style={{ color: 'var(--gold)' }}>L</span>}
-                      {ch != null && <div className="text-[9px]" style={{ color: up ? 'var(--emerald)' : 'var(--coral)' }}>{fmtPct(ch)}</div>}
-                    </span>
-                    <span className="text-right" style={{ color: 'var(--coral)' }}>{fmtPrice(sym, qq?.bid ?? qq?.price ?? prices?.[sym])}</span>
-                    <span className="text-right" style={{ color: 'var(--emerald)' }}>{fmtPrice(sym, qq?.ask ?? qq?.price ?? prices?.[sym])}</span>
-                  </button>
-                );
-              })}
+          <div className="overflow-y-auto omni-scroll flex-1">
+            <div className="grid grid-cols-[1fr_64px_64px] gap-1 px-2 py-1 font-mono text-[9px] uppercase" style={{ color: 'var(--textFaint)' }}>
+              <span>Symbol</span><span className="text-right">Bid</span><span className="text-right">Ask</span>
             </div>
+            {SYMBOLS.map(sym => {
+              const qq = quotes?.[sym];
+              const ch = changes?.[sym];
+              const up = ch == null ? null : ch >= 0;
+              return (
+                <button key={sym} type="button" onClick={() => setChartSymbol(sym)}
+                  className="omni-row w-full grid grid-cols-[1fr_64px_64px] gap-1 px-2 py-1.5 font-mono text-[11px] text-left border-b"
+                  style={{ borderColor: 'var(--border)', background: chartSymbol === sym ? 'var(--panel2)' : 'transparent' }}>
+                  <span>
+                    <span style={{ color: 'var(--text)' }}>{symLabel(sym)}</span>
+                    {qq?.source === 'mt5_ea' && <span className="ml-1 text-[8px]" style={{ color: 'var(--gold)' }}>L</span>}
+                    {ch != null && <div className="text-[9px]" style={{ color: up ? 'var(--emerald)' : 'var(--coral)' }}>{fmtPct(ch)}</div>}
+                  </span>
+                  <span className="text-right" style={{ color: 'var(--coral)' }}>{fmtPrice(sym, qq?.bid ?? qq?.price ?? prices?.[sym])}</span>
+                  <span className="text-right" style={{ color: 'var(--emerald)' }}>{fmtPrice(sym, qq?.ask ?? qq?.price ?? prices?.[sym])}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
 
-      {/* Recent signals — high on page, mobile friendly */}
+      {/* Voice + S/R side by side — BELOW ticks so ticks stay visible */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+        <MarketVoice now={now || Date.now()} signals={signals} quotes={quotes} outlook={outlook} mode={mode} />
+        <div className="omni-panel p-3">
+          <SectionHeader icon={Layers} title="Support / Resistance" sub="by desk · H1 swings" />
+          <div className="space-y-2 max-h-36 overflow-y-auto omni-scroll">
+            {levelGroups.map(g => (
+              <div key={g.title}>
+                <div className="font-mono text-[9px] uppercase mb-0.5" style={{ color: 'var(--textFaint)' }}>{g.title}</div>
+                {g.syms.map(sym => {
+                  const lv = levels?.[sym];
+                  return (
+                    <div key={sym} className="flex items-center gap-2 font-mono text-[10px] py-0.5">
+                      <span className="w-12" style={{ color: 'var(--text)' }}>{symLabel(sym)}</span>
+                      <span style={{ color: 'var(--coral)' }}>S {lv?.support != null ? fmtPrice(sym, lv.support) : '—'}</span>
+                      <span style={{ color: 'var(--emerald)' }}>R {lv?.resistance != null ? fmtPrice(sym, lv.resistance) : '—'}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
       <div className="omni-panel overflow-hidden">
-        <SectionHeader icon={Radio} title="Recent signals" sub={`${recent.length} latest · approved ${approved.length}`} />
+        <SectionHeader icon={Radio} title="Recent signals" sub={`${recent.length} latest · approved ${approved.length} · all saved to MongoDB`} />
         {recent.length === 0 ? (
-          <div className="p-4 font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
-            No signals yet. Live prices are active — the desk only posts when score, agents, and risk gates clear.
+          <div className="p-3 font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
+            No signals yet. Live prices keep running — signals fire only when score, agents, and gates clear.
           </div>
         ) : (
-          <div className="divide-y max-h-[280px] md:max-h-[360px] overflow-y-auto omni-scroll" style={{ borderColor: 'var(--border)' }}>
+          <div className="divide-y max-h-[220px] overflow-y-auto omni-scroll" style={{ borderColor: 'var(--border)' }}>
             {recent.map(s => (
-              <div key={s.id} className="px-3 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px]" style={{ borderColor: 'var(--border)' }}>
-                <span className="font-semibold" style={{ color: 'var(--text)' }}>{s.symbol}</span>
+              <div key={s.id} className="px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px]">
+                <span className="font-semibold" style={{ color: 'var(--text)' }}>{symLabel(s.symbol)}</span>
                 <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
                 <span style={{ color: (s.action === 'BUY' || s.action === 'LONG') ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
                 <span style={{ color: 'var(--gold)' }}>{s.score}</span>
@@ -996,6 +992,7 @@ function SignalsTab({ signals, prices, quotes }) {
     ALL: SYMBOLS,
     GOLD: ['XAUUSD'],
     OIL: ['USOIL'],
+    DXY: ['UUP'],
     CRYPTO: ['BTCUSDT', 'ETHUSDT'],
     FX: ['EURUSD', 'GBPUSD', 'USDJPY'],
   };
@@ -1335,7 +1332,7 @@ function NewsTab({ news, mode }) {
 
   return (
     <div className="p-4 space-y-3">
-      <SectionHeader icon={Newspaper} title="Market news" sub={live ? 'Forex · Gold · Oil · Dollar · Crypto' : undefined} />
+      <SectionHeader icon={Newspaper} title="Market news" sub={live ? 'Yahoo + Finnhub forex/general · multi-source' : undefined} />
       <div className="flex gap-1 flex-wrap">
         {CATS.map(c => (
           <button key={c.id} type="button" onClick={() => setCat(c.id)}
@@ -1964,7 +1961,7 @@ export default function OmniceeDashboard() {
       <TickerTape prices={feed.prices} changes={feed.changes} flash={feed.flash} quotes={feed.quotes} />
       <div className="flex flex-col flex-1 min-h-0">
         <div className="flex-1 overflow-y-auto omni-scroll">
-          {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} calendar={feed.calendar} levels={feed.levels} />}
+          {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} />}
           {activeTab === 'SIGNALS' && <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} />}
           {activeTab === 'INTEL' && <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} calendar={feed.calendar} levels={feed.levels} />}
           {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}

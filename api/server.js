@@ -466,7 +466,7 @@ function createApp() {
     let news = [];
     // Yahoo Finance news first (free, no key, images)
     try {
-      const y = await yahooNews.getNews({ limit: 25 });
+      const y = await yahooNews.getNews({ limit: 40 });
       if (Array.isArray(y)) news.push(...y.map(n => normalize(n, 'Yahoo Finance')));
     } catch (err) {
       console.warn('[API] Yahoo news failed:', err.message);
@@ -477,6 +477,13 @@ function createApp() {
       let fh = symbol
         ? await finnhub.companyNews(symbol)
         : await finnhub.marketNews(req.query.category || 'general');
+      // Extra forex-focused pull when no symbol filter
+      if (!symbol && finnhub.enabled()) {
+        try {
+          const extra = await finnhub.marketNews('forex');
+          if (Array.isArray(extra)) fh = [...(Array.isArray(fh) ? fh : []), ...extra];
+        } catch (_) {}
+      }
       if (Array.isArray(fh)) {
         news.push(...fh.map(n => normalize({
           headline: n.headline || n.title,

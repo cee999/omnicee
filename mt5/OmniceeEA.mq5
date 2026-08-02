@@ -39,7 +39,7 @@ int      priceSyncIntervalSec;
 // key MapSymbol() knows about". Add a symbol here AND to MapSymbol() to
 // report it; a symbol your broker doesn't offer is skipped automatically
 // (see SendPriceTicks() — SymbolSelect() failing just skips it, not a $0 tick).
-string OmniceeSymbols[] = {"BTCUSDT", "ETHUSDT", "EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "USOIL"};
+string OmniceeSymbols[] = {"BTCUSDT", "ETHUSDT", "EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "USOIL", "UUP"};
 
 //+------------------------------------------------------------------+
 //| Symbol name mapping: OMNICEE symbol → MT5 broker symbol           |
@@ -59,6 +59,7 @@ string MapSymbol(string omniceeSymbol)
    // Commodities
    if(omniceeSymbol == "XAUUSD")    return "XAUUSDm";
    if(omniceeSymbol == "USOIL")     return "USOILm";
+   if(omniceeSymbol == "UUP")       return "USDXm";  // Exness dollar index if available
    
    // Default: try the symbol as-is
    return omniceeSymbol;
