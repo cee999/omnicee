@@ -736,7 +736,7 @@ class SocialSentimentProxy {
 
 class SentimentScorer {
   static score(components, direction) {
-    const { news, cot, fearGreed, lsRatio, macro, social } = components;
+    const { news, cot, fearGreed, lsRatio, macro, social, insider } = components;
     const isLong = direction === 'LONG';
     let score    = 0;
     const reasons = [];
@@ -806,6 +806,26 @@ class SentimentScorer {
     if (social) {
       if (social.direction === direction && social.score >= 50) {
         score += 5; reasons.push(`Social: ${social.signals[0]}`);
+      }
+    }
+
+    // ── SEC Form 4 Insider (max 15 pts) — smart-money equity flow ──
+    // Cluster buys / CEO-CFO purchases are among the strongest public
+    // non-price signals. Used as risk-on / risk-off for all symbols:
+    // heavy insider accumulation → risk-on (supports LONG risk assets);
+    // concentrated executive selling → risk-off.
+    if (insider) {
+      const insDir = insider.direction; // LONG | SHORT | NEUTRAL
+      const insScore = Number(insider.score) || 0;
+      if (insDir === direction && insScore >= 70) {
+        score += 15;
+        reasons.push(`Insider: ${insider.note || 'cluster/executive flow aligned'}`);
+      } else if (insDir === direction && insScore >= 50) {
+        score += 10;
+        reasons.push(`Insider flow supports ${direction}`);
+      } else if (insDir !== 'NEUTRAL' && insDir !== direction && insScore >= 65) {
+        score -= 8;
+        reasons.push(`Insider flow opposes ${direction} — smart money caution`);
       }
     }
 
@@ -971,6 +991,18 @@ class SentimentAgent extends EventEmitter {
       ? SocialSentimentProxy.analyze(data.social)
       : null;
 
+    // ── Insider (SEC Form 4 / OpenInsider) ──
+    let insiderResult = null;
+    if (data.insider) {
+      insiderResult = {
+        direction: data.insider.direction || 'NEUTRAL',
+        score: Number(data.insider.score) || 0,
+        note: data.insider.note || data.insider.reason || '',
+        clusters: data.insider.clusters || 0,
+        executiveBias: data.insider.executiveBias || null,
+      };
+    }
+
     const components = {
       news:      newsResult,
       cot:       cotResult,
@@ -978,6 +1010,7 @@ class SentimentAgent extends EventEmitter {
       lsRatio:   lsResult,
       macro:     macroResult,
       social:    socialResult,
+      insider:   insiderResult,
     };
 
     // ── Direction resolution ──

@@ -58,7 +58,7 @@ const SYMBOLS         = (requireEnv('SYMBOLS', 'EURUSD,GBPUSD,USDJPY,XAUUSD,BTCU
   .split(',').map(s => s.trim()).filter(Boolean);
 const TIMEFRAMES_STR  = (requireEnv('TIMEFRAMES', 'H1,H4') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
-const MIN_SCORE       = parseFloat(requireEnv('MIN_SIGNAL_SCORE', '75'));
+const MIN_SCORE       = parseFloat(requireEnv('MIN_SIGNAL_SCORE', '78'));
 const RISK_PCT        = parseFloat(requireEnv('RISK_PCT_PER_TRADE', '1.0'));
 const MAX_DAILY_LOSS  = parseFloat(requireEnv('MAX_DAILY_LOSS_PCT', '3.0'));
 const MAX_DRAWDOWN    = parseFloat(requireEnv('MAX_DRAWDOWN_PCT', '10.0'));
@@ -136,7 +136,6 @@ const { SessionFilter }      = loadModule('./risk-engine/session-filter',       
 const { CorrelationFilter }  = loadModule('./risk-engine/correlation',           'CorrelationFilter') || {};
 const { ConflictResolver: ConflictResolverClass } = loadModule('./orchestrator/conflict-resolver', 'ConflictResolver') || {};
 const { MemoryManager }      = loadModule('./orchestrator/memory-manager',       'MemoryManager')     || {};
-const { ExecutionManager }   = loadModule('./orchestrator/execution-algorithms',  'ExecutionManager')  || {};
 const { SignalMonitor }      = loadModule('./signal-pipeline/signal-monitor',     'SignalMonitor')     || {};
 const { InstitutionalRiskManager } = loadModule('./risk-engine/institutional-risk-manager', 'InstitutionalRiskManager') || {};
 const { MyfxbookFeed }       = loadModule('./feeds/myfxbook-feed',               'MyfxbookFeed')      || {};
@@ -161,7 +160,6 @@ const { CandleIntelligence } = loadModule('./signal-pipeline/candle-intelligence
 const { AIAdvisor }          = loadModule('./signal-pipeline/ai-advisor',           'AIAdvisor')          || {};
 const { MarketHoursGate, SymbolManager } = loadModule('./orchestrator/scheduling-gate', 'MarketHoursGate') || {};
 const { AuditTrail }          = loadModule('./orchestrator/audit-trail',             'AuditTrail')         || {};
-const { SignalExplainer }    = loadModule('./signal-pipeline/signal-explainer',     'SignalExplainer')    || {};
 
 // ConflictResolver is instantiated (not static) — create one singleton
 const conflictResolver = ConflictResolverClass ? new ConflictResolverClass() : null;
@@ -185,11 +183,6 @@ if (aiAdvisor) {
     ? `AI Advisor active (model=${aiAdvisor.model}) — advisory-only, fails open on any error`
     : 'AI Advisor loaded but disabled — ANTHROPIC_API_KEY not set in .env');
 }
-// SignalExplainer is the free counterpart to AIAdvisor — pure template-driven
-// natural-language breakdown of the pipeline's own already-computed context,
-// no API key, no network call, no cost, never fails. Always on.
-const signalExplainer = SignalExplainer ? new SignalExplainer() : null;
-
 // SymbolManager (extracted from orphaned task-planner.js) — seeded with the
 // exact SYMBOLS list already configured via .env, so nothing changes by
 // default; it exists so a symbol can be blacklisted at runtime (e.g. via a
@@ -226,7 +219,7 @@ const inFlight = new Set();
 
 function initAgentsForSymbol(symbol) {
   agentPool[symbol] = {
-    smc:            SMCAgent           ? new SMCAgent({ symbol, timeframe: 'H1', lookback: 30, pivotStrength: 3, minScore: 60 }) : null,
+    smc:            SMCAgent           ? new SMCAgent({ symbol, timeframe: 'H1', lookback: 30, pivotStrength: 3, minScore: 65 }) : null,
     mtf:            MTFAgent           ? new MTFAgent({ symbol, requireHTFAlign: true }) : null,
     momentum:       MomentumAgent      ? new MomentumAgent({ symbol, timeframe: 'H1' }) : null,
     sentiment:      SentimentAgent     ? new SentimentAgent({ symbol }) : null,
@@ -840,23 +833,7 @@ async function runAnalysisCycle(symbol, timeframe) {
       return;
     }
 
-    // FIX: ExecutionManager (TWAP/VWAP/POV, ~830 lines) was instantiated but
-    // getOptimalExecution() had zero call sites — its recommendation never
-    // reached a signal or the humans/EA acting on it. This is advisory only:
-    // this system dispatches signals (Telegram + MT5 EA polling), it doesn't
-    // place orders itself, so there is no live order to "execute" here — we
-    // attach the recommended algorithm/slicing so a human or the EA can use
-    // it. Only meaningful for symbols with real order-book data (crypto via
-    // Bybit); absent for forex symbols, so we don't fabricate a recommendation.
-    let executionPlan = null;
-    const em = getExecutionManager(symbol);
-    if (em && riskEvaluation?.positionSize > 0) {
-      try {
-        executionPlan = em.getOptimalExecution(symbol, riskEvaluation.positionSize, signal.action);
-      } catch (e) {
-        log.warn(`ExecutionManager advisory error (${symbol}): ${e.message}`);
-      }
-    }
+    let executionPlan = null; // purged: ExecutionManager was advisory-only (TWAP/VWAP never gated)
 
     // FIX: intermarket analysis (DXY/equity-index cross-confirmation) — the
     // last item from the original audit's "does not exist" list. Advisory
@@ -960,25 +937,6 @@ async function runAnalysisCycle(symbol, timeframe) {
         fullSignal.riskFlags = { ...(fullSignal.riskFlags || {}), aiAdvisorReduceSize: true };
         log.info(`${key}: AI Advisor recommends REDUCE_SIZE — ${aiAdvisorVerdict.reasoning}`);
       }
-    }
-
-    // ── Signal Explainer (free, no LLM) ──
-    // Runs unconditionally — no key, no network, no cost. This is what
-    // populates the "why did I get this signal" breakdown in the Mini App
-    // and Telegram message even when the paid AI Advisor above is disabled
-    // (which it is by default).
-    if (signalExplainer) {
-      const explanation = signalExplainer.explain({
-        signal: fullSignal,
-        regime,
-        strategyContext,
-        candleContext,
-        compressionContext,
-        abnormalMarket,
-        trapContext,
-        timeCycleContext,
-      });
-      fullSignal.explanation = explanation;
     }
 
     // ── Store in memory ──
@@ -1107,6 +1065,87 @@ function buildMTFData(symbol) {
 // could ever fire, and only if a working news fetcher was configured. This
 // builds the real object instead, including real CFTC COT data.
 const _cotCache = {}; // symbol -> { analysis, ts } — CFTC updates weekly, no need to re-fetch every cycle
+// Live insider-trading intel (SEC Form 4 via OpenInsider). Updated by feed
+// events; consumed by buildSentimentExternalData → SentimentAgent.
+// Market-wide bias: cluster buys / executive purchases = risk-on (LONG bias);
+// concentrated selling = risk-off. Applies to all symbols as macro smart-money flow.
+const insiderIntel = {
+  direction: 'NEUTRAL', // LONG | SHORT | NEUTRAL
+  score: 0,
+  note: '',
+  clusters: 0,
+  executiveBias: null,
+  updatedAt: 0,
+  recentClusters: [],
+};
+
+function updateInsiderIntelFromFeed(feed) {
+  if (!feed) return;
+  try {
+    const clusters = feed.getAllClusters?.() || [];
+    const execs = feed.getAllExecutiveActivity?.() || [];
+    const sentiment = feed.getSentiment?.(14) || null;
+
+    let buyClusters = 0, sellClusters = 0, buyVal = 0, sellVal = 0;
+    for (const c of clusters) {
+      const side = String(c.dominantSide || c.type || c.signal || '').toUpperCase();
+      const conf = Number(c.confidence) || 50;
+      if (side.includes('BUY') || side === 'LONG' || side === 'BULLISH') {
+        buyClusters++; buyVal += conf;
+      } else if (side.includes('SELL') || side === 'SHORT' || side === 'BEARISH') {
+        sellClusters++; sellVal += conf;
+      }
+    }
+    let execBuy = 0, execSell = 0;
+    for (const e of execs) {
+      const sig = String(e.signal || e.type || '').toUpperCase();
+      if (sig.includes('BUY') || sig === 'LONG' || sig === 'BULLISH') execBuy++;
+      else if (sig.includes('SELL') || sig === 'SHORT' || sig === 'BEARISH') execSell++;
+    }
+
+    // Aggregate market bias
+    let direction = 'NEUTRAL';
+    let score = 40;
+    const notes = [];
+    if (buyClusters >= 2 && buyClusters > sellClusters) {
+      direction = 'LONG';
+      score = Math.min(95, 55 + buyClusters * 8 + execBuy * 5);
+      notes.push(`${buyClusters} insider cluster buy(s)`);
+    } else if (sellClusters >= 2 && sellClusters > buyClusters) {
+      direction = 'SHORT';
+      score = Math.min(95, 55 + sellClusters * 8 + execSell * 5);
+      notes.push(`${sellClusters} insider cluster sell(s)`);
+    }
+    if (execBuy >= 2 && execBuy > execSell) {
+      if (direction !== 'SHORT') direction = 'LONG';
+      score = Math.max(score, 60 + execBuy * 6);
+      notes.push(`${execBuy} key executive purchase(s)`);
+    } else if (execSell >= 2 && execSell > execBuy) {
+      if (direction !== 'LONG') direction = 'SHORT';
+      score = Math.max(score, 60 + execSell * 6);
+      notes.push(`${execSell} key executive sale(s)`);
+    }
+    if (sentiment?.score != null && Number.isFinite(sentiment.score)) {
+      // blend soft market-wide sentiment from feed analyzer
+      const s = Number(sentiment.score);
+      if (s > 20 && direction !== 'SHORT') { direction = direction === 'NEUTRAL' ? 'LONG' : direction; score = Math.max(score, 50 + s / 5); }
+      if (s < -20 && direction !== 'LONG') { direction = direction === 'NEUTRAL' ? 'SHORT' : direction; score = Math.max(score, 50 + Math.abs(s) / 5); }
+    }
+
+    insiderIntel.direction = direction;
+    insiderIntel.score = Math.round(score);
+    insiderIntel.note = notes.join('; ') || 'no significant insider clusters';
+    insiderIntel.clusters = clusters.length;
+    insiderIntel.executiveBias = execBuy - execSell;
+    insiderIntel.updatedAt = Date.now();
+    insiderIntel.recentClusters = clusters.slice(0, 8).map(c => ({
+      ticker: c.ticker, confidence: c.confidence, side: c.dominantSide || c.type,
+    }));
+  } catch (e) {
+    log.warn(`updateInsiderIntelFromFeed error: ${e.message}`);
+  }
+}
+
 const _newsCache = {}; // category -> { articles, ts } — Finnhub free tier is rate-limited, cache by asset-class category
 
 async function buildSentimentExternalData(symbol) {
@@ -1179,6 +1218,18 @@ async function buildSentimentExternalData(symbol) {
     } catch (err) {
       log.debug(`Finnhub news fetch failed for ${symbol}: ${err.message}`);
     }
+  }
+
+  // SEC Form 4 insider flow (OpenInsider) — market-wide smart-money bias
+  if (insiderIntel && insiderIntel.updatedAt) {
+    data.insider = {
+      direction: insiderIntel.direction,
+      score: insiderIntel.score,
+      note: insiderIntel.note,
+      clusters: insiderIntel.clusters,
+      executiveBias: insiderIntel.executiveBias,
+      recentClusters: insiderIntel.recentClusters,
+    };
   }
 
   return data;
@@ -1377,15 +1428,11 @@ function onMT5Tick(symbol, price, { bid, ask, timestamp } = {}) {
 let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, institutionalGates,
     adaptiveLearning, drawdownGuard, riskEngine, sessionFilter, correlationFilter, memory,
     monteCarlo, bayesianEng, statValidator, walkForward, ensembleEng,
-    signalMonitor, institutionalRiskManager, executionManagers, myfxbookFeed, openInsiderFeed,
+    signalMonitor, institutionalRiskManager, myfxbookFeed, openInsiderFeed,
     finnhubFeed, cftcCotFeed, cotParser, executionEngine, opportunityRanker, relativeStrength,
     dataIntegrityMonitor, intermarketAnalyzer, alphaVantageFeed, fmpFeed;
 
-// FIX: ExecutionManager's MarketMicrostructureAnalyzer keeps a single shared
-// orderBookHistory/tradeHistory/spreadHistory with no per-symbol keying — one
-// shared instance across multiple crypto symbols would mix BTCUSDT's spread
-// with ETHUSDT's order flow. One ExecutionManager per symbol, created lazily.
-// FIX: several feeds (Bybit, TwelveData, Myfxbook, OpenInsider) emit errors
+// FIX: several feeds (Bybit, TwelveData, Myfxbook) emit errors
 // in two different shapes — a raw Error (has .message) from the underlying
 // connection, and a { source, error } wrapper from their own parse/poll
 // handlers (the real message is nested at .error.message). Naive
@@ -1394,18 +1441,6 @@ let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, institutionalGates,
 // Shared here so all four feeds extract it the same, correct way.
 function feedErrorMessage(err) {
   return err?.error?.message || err?.message || (typeof err === 'string' ? err : JSON.stringify(err));
-}
-
-function getExecutionManager(symbol) {
-  if (!ExecutionManager) return null;
-  if (!executionManagers) executionManagers = new Map();
-  if (!executionManagers.has(symbol)) {
-    const em = new ExecutionManager();
-    em.connect().catch(e => log.warn(`ExecutionManager connect error (${symbol}): ${e.message}`));
-    executionManagers.set(symbol, em);
-    log.info(`ExecutionManager instantiated for ${symbol}`);
-  }
-  return executionManagers.get(symbol);
 }
 
 function buildSingletons() {
@@ -1772,12 +1807,6 @@ function buildSingletons() {
     log.info('InstitutionalRiskManager created (Kelly Criterion, Correlation Analysis, Tail Risk)');
   }
 
-  // Execution Manager - TWAP/VWAP/POV execution algorithms (one per symbol — see getExecutionManager)
-  if (ExecutionManager) {
-    executionManagers = new Map();
-    log.info('ExecutionManager factory ready (TWAP, VWAP, POV algorithms) — instantiated per crypto symbol as order-book data arrives');
-  }
-
   // Myfxbook Feed - Economic calendar and community sentiment
   if (MyfxbookFeed && process.env.MYFXBOOK_EMAIL && process.env.MYFXBOOK_PASSWORD) {
     myfxbookFeed = new MyfxbookFeed({
@@ -1815,33 +1844,36 @@ function buildSingletons() {
     log.warn('MyfxbookFeed disabled - missing credentials or module');
   }
 
-  // OpenInsider Feed - SEC Form 4 insider trading data
+  // OpenInsider Feed — SEC Form 4 insider trading (cluster buys / executive flow)
+  // Infused into SentimentAgent as market-wide risk-on/risk-off smart-money bias.
   if (OpenInsiderFeed) {
-    openInsiderFeed = new OpenInsiderFeed({
-      apiKey: process.env.PARSE_API_KEY || null,
-      pollIntervalMs: 10 * 60000,
-    });
-    // FIX: same missing-listener issue as myfxbookFeed above — this feed
-    // emits 'error' (feeds/openinsider-feed.js — connection and poll
-    // failures) with nothing listening for it anywhere.
+    openInsiderFeed = new OpenInsiderFeed({});
     openInsiderFeed.on('error', (err) => log.error(`OpenInsiderFeed error: ${feedErrorMessage(err)}`));
     openInsiderFeed.on('cluster_buy', (data) => {
-      log.info(`[OpenInsider] Cluster buy detected: ${data.ticker} - ${data.insiderCount} insiders`);
-      dispatcher?.sendMessage?.(`💼 *Cluster Buy*\n${data.ticker}\n${data.insiderCount} insiders in ${data.windowDays} days\nConfidence: ${data.confidence}%`)?.catch(() => {});
-      wsBus?.emit('intel', { kind: 'cluster_buy', ...data, timestamp: Date.now() });
+      log.info(`[OpenInsider] Cluster buy: ${data.ticker} — ${data.insiderCount || data.size || '?'} insiders (conf=${data.confidence})`);
+      updateInsiderIntelFromFeed(openInsiderFeed);
+      wsBus?.emit('intel', { kind: 'insider_cluster', ...data, timestamp: Date.now() });
+      dispatcher?.sendMessage?.(
+        `🏛️ *Insider Cluster Buy*\n${data.ticker} — ${data.insiderCount || data.size || '?'} insiders\nConf: ${data.confidence || 'n/a'}`
+      )?.catch(() => {});
     });
     openInsiderFeed.on('executive_activity', (data) => {
-      log.info(`[OpenInsider] Executive activity: ${data.ticker} - ${data.signal}`);
+      log.info(`[OpenInsider] Executive activity: ${data.ticker} — ${data.signal}`);
+      updateInsiderIntelFromFeed(openInsiderFeed);
       wsBus?.emit('intel', { kind: 'executive_activity', ...data, timestamp: Date.now() });
     });
-    log.info('OpenInsiderFeed created');
+    openInsiderFeed.on('ready', () => {
+      updateInsiderIntelFromFeed(openInsiderFeed);
+      log.info('OpenInsiderFeed ready — insider intel active');
+    });
+    log.info('OpenInsiderFeed created — SEC Form 4 cluster/executive tracking active');
   }
 
   // Alpha Vantage Feed - macro news sentiment
   if (AlphaVantageFeed) {
     alphaVantageFeed = new AlphaVantageFeed({});
     if (alphaVantageFeed.enabled()) {
-      // Same convention as myfxbookFeed/openInsiderFeed above — an
+      // Same convention as myfxbookFeed above — an
       // unhandled 'error' event on an EventEmitter crashes the process.
       alphaVantageFeed.on('error', (err) => log.error(`AlphaVantageFeed error: ${feedErrorMessage(err)}`));
       alphaVantageFeed.on('sentiment_shift', (data) => {
@@ -2043,12 +2075,7 @@ function buildFeeds() {
       symbols: cryptoSymbols,
       timeframes: TIMEFRAMES_STR,
       liquidations: true,
-      // FIX: ExecutionManager (TWAP/VWAP/POV) was instantiated but never
-      // consulted — its MarketMicrostructureAnalyzer needs real L2 order book
-      // depth and a trade tape, neither of which was ever streamed anywhere
-      // in this codebase (BybitFeed supports both but they were off by
-      // default). Enabling here is what makes execution advisory real instead
-      // of permanently blind (spread=0, imbalance=0 → always "optimal").
+      // L2 order book + trade tape available for microstructure context
       orderBook: true,
       trades: true,
     });
@@ -2070,23 +2097,6 @@ function buildFeeds() {
     bybitFeed.on('liquidation_cascade', (data) => {
       log.warn(`Bybit liquidation cascade: ${data.alert}`);
       if (wsBus) wsBus.emit('liquidation_cascade', data);
-    });
-    // FIX: feed the per-symbol ExecutionManager's microstructure analyzer with
-    // real order book depth (converting Bybit's [price, qty] tuples to the
-    // {price, quantity} shape MarketMicrostructureAnalyzer expects) and the
-    // live trade tape. Without this, getOptimalExecution() has no real data.
-    bybitFeed.on('orderbook', (snapshot) => {
-      const em = getExecutionManager(snapshot.symbol);
-      if (!em) return;
-      em.updateOrderBook({
-        bids: snapshot.bids.map(([price, quantity]) => ({ price, quantity })),
-        asks: snapshot.asks.map(([price, quantity]) => ({ price, quantity })),
-      });
-    });
-    bybitFeed.on('tick', (trade) => {
-      const em = getExecutionManager(trade.symbol);
-      if (!em) return;
-      em.addTrade({ price: trade.price, quantity: trade.size, timestamp: trade.timestamp });
     });
     bybitFeed.on('error', (err) => log.error(`BybitFeed error: ${feedErrorMessage(err)}`));
     bybitFeed.on('connected', () => log.info(`BybitFeed connected for: ${cryptoSymbols.join(', ')}`));
@@ -2360,10 +2370,13 @@ async function main() {
     }
   }
 
+
+  // g0. Connect OpenInsider (SEC Form 4)
   if (openInsiderFeed) {
     try {
       await openInsiderFeed.connect();
-      log.info('OpenInsiderFeed connected');
+      updateInsiderIntelFromFeed(openInsiderFeed);
+      log.info('OpenInsiderFeed connected — insider flow infused into sentiment');
     } catch (err) {
       log.error(`OpenInsiderFeed connection failed: ${err.message}`);
     }
@@ -2388,9 +2401,6 @@ async function main() {
       log.error(`InstitutionalRiskManager connection failed: ${err.message}`);
     }
   }
-
-  // i. Execution manager instances are created lazily per crypto symbol as
-  // order-book data arrives (see getExecutionManager) — nothing to connect here.
 
   if (connected === 0 && feeds.length > 0) {
     log.error('No feeds connected — check your API keys and network connection');

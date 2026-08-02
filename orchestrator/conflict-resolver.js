@@ -55,6 +55,9 @@ class ConflictResolver {
       const momDir   = votes.momentum?.direction ? String(votes.momentum.direction).toUpperCase() : null;
       const volDir   = votes.volumeOI?.direction ? String(votes.volumeOI.direction).toUpperCase() : null;
       const macroDir = votes.macroSent?.direction ? String(votes.macroSent.direction).toUpperCase() : null;
+      const microDir = votes.microstructure?.direction ? String(votes.microstructure.direction).toUpperCase() : null;
+      const fractalDir = votes.fractal?.direction ? String(votes.fractal.direction).toUpperCase() : null;
+      const patternDir = votes.pattern?.direction ? String(votes.pattern.direction).toUpperCase() : null;
 
       // ── Rule 1: Liquidation cascade override ──
       if (context.liquidationAlert?.isCascade) {
@@ -79,17 +82,18 @@ class ConflictResolver {
         note       = `SMC/MTF conflict: ${smcDir} vs ${mtfDir}`;
       }
 
-      // ── Rule 3: Majority vote (3+ of 5 agents agree) ──
-      const dirs = [smcDir, mtfDir, momDir, volDir, macroDir].filter(Boolean);
-      // FIX: Add validation before counting
+      // ── Rule 3: Majority vote across full 8-agent book ──
+      // Require 4+ directional agreement (stricter with more agents) for profit mode
+      const dirs = [smcDir, mtfDir, momDir, volDir, macroDir, microDir, fractalDir, patternDir].filter(Boolean);
       const longCount  = dirs.filter(d => d === 'LONG').length || 0;
       const shortCount = dirs.filter(d => d === 'SHORT').length || 0;
       const waitCount  = dirs.filter(d => d === 'WAIT').length || 0;
+      const n = dirs.length || 1;
 
       if (resolution === 'PROCEED') {
-        if (longCount >= 3) { resolution = 'LONG';  note = `${longCount}/5 agents bullish`; }
-        else if (shortCount >= 3) { resolution = 'SHORT'; note = `${shortCount}/5 agents bearish`; }
-        else if (waitCount >= 4) { resolution = 'WAIT';  note = `${waitCount}/5 agents say wait`; }
+        if (longCount >= 4) { resolution = 'LONG';  note = `${longCount}/${n} agents bullish`; }
+        else if (shortCount >= 4) { resolution = 'SHORT'; note = `${shortCount}/${n} agents bearish`; }
+        else if (waitCount >= 5) { resolution = 'WAIT';  note = `${waitCount}/${n} agents say wait`; }
       }
 
       // ── Rule 4: Momentum penalty if opposing SMC strongly ──
@@ -108,6 +112,25 @@ class ConflictResolver {
               ...resVotes.smc,
               score:   Math.round(currentScore * 0.80),
               reasons: [...(votes.smc.reasons || []), '⚠️ 20% penalty: momentum opposes SMC direction'],
+            };
+          }
+        }
+      }
+
+      // ── Rule 4b: Microstructure opposes SMC (adverse selection risk) ──
+      if (smcDir && microDir && smcDir !== 'WAIT' && microDir !== 'WAIT' && smcDir !== microDir) {
+        conflicts.push({
+          type:     'MICROSTRUCTURE_OPPOSES_SMC',
+          severity: 'HIGH',
+          note:     `Order flow (${microDir}) opposes SMC (${smcDir}) — adverse selection risk`,
+        });
+        if (resVotes.smc && votes.smc) {
+          const currentScore = votes.smc.score || 0;
+          if (Number.isFinite(currentScore)) {
+            resVotes.smc = {
+              ...resVotes.smc,
+              score:   Math.round(currentScore * 0.70),
+              reasons: [...(votes.smc.reasons || []), '⚠️ 30% penalty: microstructure opposes SMC'],
             };
           }
         }

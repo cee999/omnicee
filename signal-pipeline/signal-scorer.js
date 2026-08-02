@@ -37,18 +37,24 @@ const EventEmitter = require('events');
 // (×0.92) so the total still sums to exactly 1.0 — the `margin < 0.15`
 // clear-majority check elsewhere in this file assumes weights sum to 1.0,
 // and leaving them unscaled would silently loosen that threshold.
+// Jane Street / quant-desk inspired weights (sum = 1.0)
+// Priority: order-flow & structure > multi-scale alignment > lagging indicators
+// Microstructure + Fractal were computed every cycle but previously had ZERO
+// weight — they never influenced direction or score. Wired in for profit edge.
 const AGENT_WEIGHTS = {
-  SMC:         0.322,  // Order blocks, FVG, BOS/CHoCH, sweeps        (was 0.35)
-  MTF:         0.23,   // Multi-timeframe alignment                   (was 0.25)
-  MOMENTUM:    0.184,  // RSI, MACD, EMA, Ichimoku, VWAP               (was 0.20)
-  VOLUME_OI:   0.092,  // Volume profile, CVD, OI, funding             (was 0.10)
-  MACRO_SENT:  0.092,  // News NLP, COT, DXY, intermarket              (was 0.10)
-  PATTERN:     0.08,   // Wyckoff, harmonics, H&S, divergences         (new)
+  SMC:            0.20,  // Institutional structure (OB/FVG/BOS) — still core
+  MICROSTRUCTURE: 0.18,  // Order flow, CVD, absorption, LVN — quant edge
+  MTF:            0.15,  // Multi-timeframe alignment — cuts false breaks
+  VOLUME_OI:      0.12,  // Positioning, funding, OI — crowded trade risk
+  FRACTAL:        0.10,  // Hurst / persistence regime — trade with memory
+  MOMENTUM:       0.10,  // RSI/MACD/EMA — useful but lagging
+  MACRO_SENT:     0.08,  // COT / news / fear-greed — slower signal
+  PATTERN:        0.07,  // Classic patterns — lowest priority (most lag)
 };
 
-const MIN_SCORE_TO_FIRE    = 75;
+const MIN_SCORE_TO_FIRE    = 78;
 const MIN_SCORE_GRADE_A    = 85;
-const MIN_SCORE_GRADE_B    = 75;
+const MIN_SCORE_GRADE_B    = 78;
 
 // Session windows in UTC hours
 const SESSIONS = {
@@ -504,6 +510,27 @@ class SignalScorer extends EventEmitter {
         directionVote.reason, 0);
     }
 
+    // ── Step 5b: Microstructure adverse-selection gate (Jane Street style) ──
+    // If order-flow clearly opposes the consensus direction with high
+    // conviction, do not fire — you are likely the informed flow's counterparty.
+    const micro = agentVotes.microstructure;
+    if (micro?.direction && micro.direction !== 'WAIT') {
+      const microDir = String(micro.direction).toUpperCase();
+      const microScore = Number(micro.score) || 0;
+      if (microDir !== directionVote.direction && microScore >= 70) {
+        return this._buildWaitSignal(symbol, timeframe, currentPrice,
+          `Adverse selection: microstructure ${microDir} (${microScore}) opposes ${directionVote.direction} consensus`, 0);
+      }
+    }
+
+    // Fractal chaos / anti-persistence veto: Lyapunov chaotic or strong mean-revert
+    // regime against a momentum-style consensus → stand down
+    const fractal = agentVotes.fractal;
+    if (fractal?.analysis?.lyapunov?.chaotic === true && (fractal.score || 0) >= 60) {
+      return this._buildWaitSignal(symbol, timeframe, currentPrice,
+        `Fractal chaos regime (Lyapunov) — edge unstable, no trade`, 0);
+    }
+
     // ── Step 6: Compute weighted confluence score ──
     const scoring = this._computeWeightedScore(agentVotes, directionVote.direction);
 
@@ -586,12 +613,14 @@ class SignalScorer extends EventEmitter {
     };
 
     const agentList = [
-      { key: 'smc',       weight: AGENT_WEIGHTS.SMC },
-      { key: 'mtf',       weight: AGENT_WEIGHTS.MTF },
-      { key: 'momentum',  weight: AGENT_WEIGHTS.MOMENTUM },
-      { key: 'volumeOI',  weight: AGENT_WEIGHTS.VOLUME_OI },
-      { key: 'macroSent', weight: AGENT_WEIGHTS.MACRO_SENT },
-      { key: 'pattern',   weight: AGENT_WEIGHTS.PATTERN },
+      { key: 'smc',            weight: AGENT_WEIGHTS.SMC },
+      { key: 'microstructure', weight: AGENT_WEIGHTS.MICROSTRUCTURE },
+      { key: 'mtf',            weight: AGENT_WEIGHTS.MTF },
+      { key: 'volumeOI',       weight: AGENT_WEIGHTS.VOLUME_OI },
+      { key: 'fractal',        weight: AGENT_WEIGHTS.FRACTAL },
+      { key: 'momentum',       weight: AGENT_WEIGHTS.MOMENTUM },
+      { key: 'macroSent',      weight: AGENT_WEIGHTS.MACRO_SENT },
+      { key: 'pattern',        weight: AGENT_WEIGHTS.PATTERN },
     ];
 
     const agentDirections = [];
@@ -628,8 +657,9 @@ class SignalScorer extends EventEmitter {
     const loser     = winner === 'LONG' ? 'SHORT' : 'LONG';
     const margin    = votes[winner] - (votes[loser] || 0);
 
-    // Must have clear majority (margin > 0.15 weight)
-    if (margin < 0.15 && winner !== 'WAIT') {
+    // Stricter clear-majority for profit mode (margin > 0.18 weight)
+    // Jane Street-style: only trade when the book is clearly one-sided
+    if (margin < 0.18 && winner !== 'WAIT') {
       return {
         direction: 'WAIT',
         reason:    `Direction unclear — LONG ${(votes.LONG || 0).toFixed(2)} vs SHORT ${(votes.SHORT || 0).toFixed(2)}`,
@@ -662,12 +692,14 @@ class SignalScorer extends EventEmitter {
     let totalWeight = 0;
 
     const agentMap = [
-      { key: 'smc',       label: 'SMC Agent',            weight: AGENT_WEIGHTS.SMC },
-      { key: 'mtf',       label: 'MTF Agent',            weight: AGENT_WEIGHTS.MTF },
-      { key: 'momentum',  label: 'Momentum Agent',       weight: AGENT_WEIGHTS.MOMENTUM },
-      { key: 'volumeOI',  label: 'Volume/OI Agent',      weight: AGENT_WEIGHTS.VOLUME_OI },
-      { key: 'macroSent', label: 'Macro/Sentiment Agent',weight: AGENT_WEIGHTS.MACRO_SENT },
-      { key: 'pattern',   label: 'Pattern Agent',        weight: AGENT_WEIGHTS.PATTERN },
+      { key: 'smc',            label: 'SMC Agent',              weight: AGENT_WEIGHTS.SMC },
+      { key: 'microstructure', label: 'Microstructure Agent',   weight: AGENT_WEIGHTS.MICROSTRUCTURE },
+      { key: 'mtf',            label: 'MTF Agent',              weight: AGENT_WEIGHTS.MTF },
+      { key: 'volumeOI',       label: 'Volume/OI Agent',        weight: AGENT_WEIGHTS.VOLUME_OI },
+      { key: 'fractal',        label: 'Fractal Agent',          weight: AGENT_WEIGHTS.FRACTAL },
+      { key: 'momentum',       label: 'Momentum Agent',         weight: AGENT_WEIGHTS.MOMENTUM },
+      { key: 'macroSent',      label: 'Macro/Sentiment Agent',  weight: AGENT_WEIGHTS.MACRO_SENT },
+      { key: 'pattern',        label: 'Pattern Agent',          weight: AGENT_WEIGHTS.PATTERN },
     ];
 
     for (const { key, label, weight } of agentMap) {
@@ -680,14 +712,22 @@ class SignalScorer extends EventEmitter {
       let contribution;
       let status;
 
+      // Confidence-aware weighting (quant-desk style):
+      // High-conviction confirms get a slight boost; weak confirms are not
+      // inflated. Neutrals pull less. Opposers contribute zero.
+      // Formula keeps average score near the agents' raw levels so the
+      // minScore gate (78) remains calibrated.
+      const conf = Math.max(agentScore, 0) / 100;
+      const confBoost = 0.92 + 0.08 * conf; // range ~0.92–1.00
+
       if (agentDir === direction) {
-        contribution = agentScore * weight;
+        contribution = agentScore * weight * confBoost;
         status       = 'CONFIRMS';
       } else if (agentDir === 'WAIT') {
-        contribution = agentScore * weight * 0.5; // Neutral agent = half contribution
+        contribution = agentScore * weight * 0.40; // neutral = reduced pull
         status       = 'NEUTRAL';
       } else {
-        contribution = 0; // Opposing agent = zero contribution (already blocked above for SMC/MTF)
+        contribution = 0; // Opposing agent = zero (SMC/MTF hard-block already applied)
         status       = 'OPPOSES';
         agentScore   = 0;
       }
