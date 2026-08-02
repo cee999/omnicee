@@ -964,14 +964,27 @@ function IntelTab({ now, outlook, mode }) {
   // Prefer Tier-1, fall back to Tier-2 so the panel is not blank on quiet weeks
   const calendarRows = live
     ? (() => {
-        const t1 = [...(outlook.today?.tier1Events || []), ...(outlook.week?.tier1Events || [])];
-        const t2 = [...(outlook.week?.tier2Events || [])];
-        const pool = (t1.length ? t1 : t2).slice(0, 8);
-        return pool.map(e => ({
+        const pool = [
+          ...(outlook.today?.tier1Events || []),
+          ...(outlook.week?.allEvents || []),
+          ...(outlook.week?.tier1Events || []),
+          ...(outlook.week?.tier2Events || []),
+          ...(outlook.week?.tier3Events || []),
+        ];
+        // de-dupe by name+currency
+        const seen = new Set();
+        const unique = [];
+        for (const e of pool) {
+          const k = `${e.name}|${e.currency}|${e.hoursAway}`;
+          if (seen.has(k)) continue;
+          seen.add(k);
+          unique.push(e);
+        }
+        return unique.slice(0, 10).map(e => ({
           event: `${e.name} (${e.currency})`,
-          impact: e.tier === 'TIER_1' || !e.tier ? 'high' : 'medium',
+          impact: e.tier === 'TIER_1' ? 'high' : e.tier === 'TIER_2' ? 'medium' : 'low',
           mins: Math.max(0, Math.round((e.hoursAway || 0) * 60)),
-          tier: e.tier || 'TIER_1',
+          tier: e.tier || 'TIER_3',
         }));
       })()
     : null;
@@ -1309,10 +1322,24 @@ function ValidTab({ signals, journalStats, learningProfiles, mode }) {
     ? clamp((journalStats.winRate / 100) - ((1 - journalStats.winRate / 100) / (journalStats.avgWin / journalStats.avgLoss)), 0, 1) * 100
     : null;
 
+
+  const hasValidationData = validated.length > 0;
+  const hasAnyValidContent = hasValidationData || hasJournal || (learningProfiles && learningProfiles.length > 0);
+
   const mcChartData = validated.slice(0, 20).reverse().map((s, i) => ({ label: `${s.symbol}#${i + 1}`, prob: s.validation.monteCarlo?.winProbability ?? 0 }));
 
   return (
     <div className="p-4 space-y-4">
+      {!hasAnyValidContent && (
+        <div className="omni-panel p-4">
+          <SectionHeader icon={FlaskConical} title="Validation" sub="waits on live signals + closed outcomes" />
+          <p className="text-[12px] leading-relaxed" style={{ color: 'var(--textDim)' }}>
+            This tab is empty on purpose until the pipeline scores signals and you (or the journal) record outcomes.
+            Walk-forward / Bayesian / Monte Carlo fill per scored signal; Kelly and Learned Setups need closed trades.
+            They are not broken — there is simply nothing to validate yet. Focus on Signals + MT5 candles first.
+          </p>
+        </div>
+      )}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="omni-panel p-3 flex flex-col items-center justify-center">
           {avgWfe != null ? <Gauge value={avgWfe * 100} label="Avg Walk-Forward Eff." /> : <span className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>Walk-forward: no data yet</span>}

@@ -49,8 +49,11 @@ class MarketOutlookBuilder {
     const tier1Today    = today.filter(e => e.tier === 'TIER_1');
     const tier1Week     = week.filter(e => e.tier === 'TIER_1');
     const tier2Week     = week.filter(e => e.tier === 'TIER_2');
+    const tier3Week     = week.filter(e => e.tier === 'TIER_3' || e.tier === 'TIER_4');
     const tier1NextWeek = nextWeek.filter(e => e.tier === 'TIER_1');
     const tier2NextWeek = nextWeek.filter(e => e.tier === 'TIER_2');
+    // All events this week (any tier) for the Intel calendar panel
+    const allWeekEvents = week.slice(0, 12);
 
     const perSymbol = [];
     // Prefer requested TF, then fall back so Yahoo-only / sparse FX still get a regime when any TF has bars
@@ -137,6 +140,8 @@ class MarketOutlookBuilder {
       week: {
         tier1Events: tier1Week.map(MarketOutlookBuilder._formatEvent),
         tier2Events: tier2Week.map(MarketOutlookBuilder._formatEvent),
+        tier3Events: tier3Week.map(MarketOutlookBuilder._formatEvent),
+        allEvents: allWeekEvents.map(MarketOutlookBuilder._formatEvent),
         eventCount: week.length,
       },
       nextWeek: {

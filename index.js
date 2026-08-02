@@ -1905,19 +1905,26 @@ function buildSingletons() {
             time: e.time,
             tier: TIER1_RE.test(e.name) || TIER2_RE.test(e.name) || TIER3_RE.test(e.name)
               ? undefined // let _inferTier's own regex classify it
-              : e.impact === 'high'   ? 'TIER_2'
-              : e.impact === 'medium' ? 'TIER_3'
+              : e.impact === 'high' || e.impact === 'High' ? 'TIER_1'
+              : e.impact === 'medium' || e.impact === 'Medium' ? 'TIER_2'
+              : e.impact === 'low' || e.impact === 'Low' ? 'TIER_3'
               : undefined, // stays TIER_4 via _inferTier's default
           })));
         }
-        const src = [finnhubFeed?.enabled() ? 'Finnhub' : null, fmpFeed?.enabled() ? 'FMP' : null].filter(Boolean).join('+');
-        log.info(`EconomicCalendar: ${events.length} events loaded for the next 7 days (${src})`);
+        const src = [finnhubFeed?.enabled() ? 'Finnhub' : null, fmpFeed?.enabled() ? 'FMP' : null].filter(Boolean).join('+') || 'none';
+        if (events.length) {
+          log.info(`EconomicCalendar: ${events.length} events loaded for the next 7 days (${src})`);
+        } else {
+          log.warn(`EconomicCalendar: 0 events from ${src || 'no providers'} — check FINNHUB_API_KEY/FMP_API_KEY plan supports /calendar/economic (Finnhub free tier often blocks this endpoint)`);
+        }
       } catch (err) {
         log.warn(`EconomicCalendar addNewsEvents failed: ${err.message}`);
       }
     };
     pollEconomicCalendar();
-    setInterval(pollEconomicCalendar, 4 * 3600000); // every 4 hours
+    // Retry after 2 min (boot race / cold start), then every hour
+    setTimeout(pollEconomicCalendar, 2 * 60000);
+    setInterval(pollEconomicCalendar, 1 * 3600000);
   }
   log.info(finnhubFeed?.enabled() ? 'FinnhubFeed created — economic calendar polling active' : 'FinnhubFeed disabled - missing FINNHUB_API_KEY');
   log.info(fmpFeed?.enabled() ? 'FMPFeed created — economic calendar polling active (redundant source)' : 'FMPFeed disabled - missing FMP_API_KEY');

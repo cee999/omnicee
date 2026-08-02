@@ -112,29 +112,54 @@ class FinnhubFeed extends EventEmitter {
     const result = await this._cached(`econ-cal:${start}:${end}`, async () =>
       (await this._get(`/calendar/economic?from=${start}&to=${end}`)).body
     );
-    const events = Array.isArray(result?.economicCalendar) ? result.economicCalendar : [];
+    // Finnhub shape varies by plan: { economicCalendar: [...] } or bare array
+    let events = [];
+    if (Array.isArray(result)) events = result;
+    else if (Array.isArray(result?.economicCalendar)) events = result.economicCalendar;
+    else if (Array.isArray(result?.data)) events = result.data;
+    else if (result?.error) {
+      console.warn(`[FinnhubFeed] economic calendar error: ${result.error}`);
+      return [];
+    }
+
     return events
-      .filter(e => e.time && e.country)
-      .map(e => ({
-        name: e.event || 'Economic Event',
-        currency: this._countryToCurrency(e.country),
-        time: new Date(e.time).getTime(),
-        impact: e.impact || null,
-        actual: e.actual ?? null,
-        estimate: e.estimate ?? null,
-        prev: e.prev ?? null,
-        unit: e.unit || '',
-      }))
-      .filter(e => e.currency && Number.isFinite(e.time));
+      .map(e => {
+        const rawTime = e.time || e.date || e.datetime;
+        const time = rawTime ? new Date(rawTime).getTime() : NaN;
+        const country = e.country || e.economy || e.region || '';
+        const currency = this._countryToCurrency(country) || e.currency || (country.length === 3 ? country : null) || 'USD';
+        return {
+          name: e.event || e.title || e.name || 'Economic Event',
+          currency,
+          time,
+          impact: e.impact || e.importance || null,
+          actual: e.actual ?? null,
+          estimate: e.estimate ?? e.forecast ?? null,
+          prev: e.prev ?? e.previous ?? null,
+          unit: e.unit || '',
+          country,
+        };
+      })
+      .filter(e => e.name && Number.isFinite(e.time) && e.time > 0);
   }
 
   _countryToCurrency(country) {
+    if (!country) return null;
+    const c = String(country).trim();
     const map = {
-      US: 'USD', EU: 'EUR', 'United States': 'USD', 'Euro Area': 'EUR',
-      GB: 'GBP', UK: 'GBP', JP: 'JPY', CH: 'CHF', CA: 'CAD', AU: 'AUD', NZ: 'NZD',
-      China: 'USD',
+      US: 'USD', USA: 'USD', 'United States': 'USD', 'U.S.': 'USD',
+      EU: 'EUR', 'Euro Area': 'EUR', 'Eurozone': 'EUR', EMU: 'EUR', Germany: 'EUR', France: 'EUR', Italy: 'EUR', Spain: 'EUR',
+      GB: 'GBP', UK: 'GBP', 'United Kingdom': 'GBP', Britain: 'GBP',
+      JP: 'JPY', Japan: 'JPY',
+      CH: 'CHF', Switzerland: 'CHF',
+      CA: 'CAD', Canada: 'CAD',
+      AU: 'AUD', Australia: 'AUD',
+      NZ: 'NZD', 'New Zealand': 'NZD',
+      CN: 'CNY', China: 'CNY',
+      HK: 'HKD', 'Hong Kong': 'HKD',
+      SG: 'SGD', Singapore: 'SGD',
     };
-    return map[country] || null;
+    return map[c] || map[c.toUpperCase()] || null;
   }
 
   async _cached(key, loader) {
