@@ -626,6 +626,7 @@ class TwelveDataFeed extends EventEmitter {
     this.timeframes   = config.timeframes || ['M15', 'H1', 'H4'];
     this.useWebSocket = config.useWebSocket !== false;
     this.pollIntervalMs = config.pollIntervalMs || 15000;
+    this._quotaExhausted = false;
     this.trackEarnings = config.trackEarnings ?? false;
 
     this.quota       = new QuotaManager(
@@ -699,6 +700,7 @@ class TwelveDataFeed extends EventEmitter {
           } catch (_) { /* Mongo read failed — fall through to normal API fetch */ }
         }
 
+        if (this._quotaExhausted) continue;
         if (!isFirst) await sleep(HISTORY_LOAD_DELAY_MS);
         isFirst = false;
 
@@ -710,6 +712,11 @@ class TwelveDataFeed extends EventEmitter {
           if (this.db) this.db.saveCandleHistory('twelvedata', symbol, tf, candles).catch(() => {});
         } catch (err) {
           console.error(`[TwelveDataFeed] History load failed ${symbol} ${tf}: ${err.message}`);
+          if (/out of API credits|API credits|rate limit|429/i.test(err.message || '') || err.tdCode === 'DAILY_QUOTA_EXCEEDED') {
+            this._quotaExhausted = true;
+            console.warn('[TwelveDataFeed] Daily quota hit — stopping further history/API calls until restart. Yahoo OHLC will cover candles.');
+          }
+          if (this._quotaExhausted) continue;
           this._stats.errorsCount++;
           if (err.tdCode === 'DAILY_QUOTA_EXCEEDED' || /run out of api credits for the day/i.test(err.message)) {
             // Same as above: daily budget's gone, retrying in 65s can't

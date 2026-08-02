@@ -51,6 +51,13 @@ function impactToTier(impact) {
 }
 
 class ForexFactoryCalendar {
+  constructor() {
+    this._cache = null;
+    this._cacheTs = 0;
+    this._backoffUntil = 0;
+    this.cacheMs = 60 * 60 * 1000; // 1 hour — calendar does not change often
+  }
+
   enabled() { return true; }
   isConnected() { return true; }
 
@@ -58,10 +65,24 @@ class ForexFactoryCalendar {
    * @returns {Promise<Array<{name,currency,time,impact,forecast,previous}>>}
    */
   async economicCalendar() {
-    const rows = await httpGetJSON(FF_URL);
-    if (!Array.isArray(rows)) return [];
+    const now = Date.now();
+    if (this._cache && (now - this._cacheTs) < this.cacheMs) return this._cache;
+    if (now < this._backoffUntil) return this._cache || [];
 
-    return rows
+    let rows;
+    try {
+      rows = await httpGetJSON(FF_URL);
+    } catch (err) {
+      // 429 = rate limited — wait 2 hours before trying again
+      if (String(err.message).includes('429')) {
+        this._backoffUntil = now + 2 * 3600 * 1000;
+      }
+      if (this._cache) return this._cache;
+      throw err;
+    }
+    if (!Array.isArray(rows)) return this._cache || [];
+
+    const mapped = rows
       .map(e => {
         const time = e.date ? new Date(e.date).getTime() : NaN;
         const country = e.country || '';
@@ -78,6 +99,10 @@ class ForexFactoryCalendar {
         };
       })
       .filter(e => e.name && Number.isFinite(e.time) && e.time > 0);
+
+    this._cache = mapped;
+    this._cacheTs = now;
+    return mapped;
   }
 }
 

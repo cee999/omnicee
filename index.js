@@ -2114,7 +2114,7 @@ function buildFeeds() {
   }
 
   // TwelveData feed for forex/commodities
-  if (TwelveDataFeed && fxSymbols.length && TWELVE_KEY) {
+  if (TwelveDataFeed && fxSymbols.length && TWELVE_KEY && process.env.DISABLE_TWELVE_DATA !== '1') {
     // FIX: DXY/equity-index candles must NOT go through onCandle() — it
     // early-returns for any symbol not in the tradeable SYMBOLS list, so a
     // macro symbol added there would be silently discarded, not analyzed.

@@ -168,7 +168,7 @@ function ThemeStyle() {
       .omni-scroll::-webkit-scrollbar-thumb { background: var(--borderBright); border-radius: 3px; }
       .omni-scroll::-webkit-scrollbar-track { background: transparent; }
       @keyframes omni-marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
-      .omni-marquee { animation: omni-marquee 38s linear infinite; }
+      .omni-marquee { animation: omni-marquee 16s linear infinite; }
       .omni-marquee:hover { animation-play-state: paused; }
       @keyframes omni-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
       .omni-pulse { animation: omni-pulse 1.8s ease-in-out infinite; }
@@ -635,8 +635,10 @@ function TopBar({ now, mode, socketLive, wakingBackend, onCommand }) {
 }
 
 function TickerTape({ prices, changes, flash }) {
-  const row = SYMBOLS.map(sym => (
-    <span key={sym} className={`inline-flex items-center gap-1.5 px-4 font-mono text-[11px] ${flash[sym] === 'up' ? 'omni-flash-up' : flash[sym] === 'down' ? 'omni-flash-down' : ''}`}>
+  // Unique symbols only (env can accidentally list the same pair twice)
+  const syms = [...new Set(SYMBOLS)];
+  const row = syms.map(sym => (
+    <span key={sym} className={`inline-flex items-center gap-2 px-5 font-mono text-[12px] ${flash[sym] === 'up' ? 'omni-flash-up' : flash[sym] === 'down' ? 'omni-flash-down' : ''}`}>
       <span style={{ color: 'var(--textDim)' }}>{sym}</span>
       <span style={{ color: 'var(--text)' }}>{fmtPrice(sym, prices[sym])}</span>
       <span style={{ color: (changes[sym] ?? 0) >= 0 ? 'var(--emerald)' : 'var(--coral)' }}>{fmtPct(changes[sym] ?? 0)}</span>
@@ -644,9 +646,10 @@ function TickerTape({ prices, changes, flash }) {
   ));
   return (
     <div className="overflow-hidden border-b py-1.5" style={{ borderColor: 'var(--border)', background: '#080a0d' }}>
+      {/* Two copies = smooth loop; not a bug. Animation is faster (16s). */}
       <div className="flex omni-marquee whitespace-nowrap w-max">
         <div className="flex">{row}</div>
-        <div className="flex">{row}</div>
+        <div className="flex" aria-hidden="true">{row}</div>
       </div>
     </div>
   );
@@ -1158,6 +1161,104 @@ function NewsTab({ news, mode }) {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+
+/* ── MONITOR ────────────────────────────────────────────────────────── */
+function MonitorTab({ auditLog, feedHealth, uptimeSec, mode, fetchErrors }) {
+  const liveByName = new Map();
+  for (const f of (feedHealth || [])) {
+    liveByName.set(f.name, f);
+    const short = String(f.name || '').replace(/Feed$/i, '');
+    if (short && short !== f.name) liveByName.set(short, f);
+  }
+  const feeds = FEEDS.map(f => {
+    if (f.status === 'inert') return f;
+    const live = liveByName.get(f.name);
+    if (mode !== 'live' || !live) return f;
+    const status = live.status === 'connected' ? 'live'
+      : live.status === 'disconnected' ? 'down'
+      : live.connected === true ? 'live'
+      : live.connected === false ? 'down'
+      : 'unknown';
+    return { ...f, status };
+  });
+  const uptimeLabel = mode === 'live' && uptimeSec != null
+    ? `${Math.floor(uptimeSec / 3600)}h ${Math.floor((uptimeSec % 3600) / 60)}m`
+    : null;
+  const activeErrors = Object.entries(fetchErrors || {}).filter(([, v]) => v);
+  const liveCount = feeds.filter(f => f.status === 'live').length;
+
+  return (
+    <div className="p-4 space-y-4">
+      {activeErrors.length > 0 && (
+        <div className="omni-panel p-4" style={{ borderColor: 'var(--coral)' }}>
+          <SectionHeader icon={ShieldAlert} title="Problems" sub={`${activeErrors.length} API issue(s)`} />
+          <div className="space-y-1.5">
+            {activeErrors.map(([endpoint, message]) => (
+              <div key={endpoint} className="flex items-center gap-2 font-mono text-[11px]">
+                <span className="w-28 shrink-0" style={{ color: 'var(--text)' }}>/api/{endpoint}</span>
+                <span style={{ color: 'var(--coral)' }}>{String(message)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="omni-panel p-4">
+        <SectionHeader
+          icon={Database}
+          title="Live feeds"
+          sub={`${liveCount}/${feeds.length} live${uptimeLabel ? ` · up ${uptimeLabel}` : ''}`}
+        />
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5">
+          {feeds.map(f => (
+            <div key={f.name} className="omni-panel2 p-3">
+              <div className="flex items-center justify-between mb-1">
+                <span className="font-mono text-[11px]" style={{ color: 'var(--text)' }}>{f.name}</span>
+                <Circle size={8} fill="currentColor" style={{
+                  color: f.status === 'live' ? 'var(--emerald)' : f.status === 'degraded' ? 'var(--gold)' : f.status === 'down' ? 'var(--coral)' : 'var(--textFaint)',
+                }} className={f.status === 'live' ? 'omni-pulse' : ''} />
+              </div>
+              <div className="font-mono text-[9px] uppercase" style={{ color: 'var(--textFaint)' }}>{f.kind}</div>
+              {f.note && <div className="font-mono text-[9px] mt-1" style={{ color: 'var(--gold)' }}>{f.note}</div>}
+              <div className="font-mono text-[9px] mt-1 uppercase" style={{ color: 'var(--textDim)' }}>
+                {f.status === 'live' ? 'connected' : f.status === 'down' ? 'down' : f.status === 'inert' ? 'off' : 'waiting'}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="omni-panel p-4">
+        <SectionHeader icon={ScrollText} title="What the system checked" sub="each pass — signal or no signal" />
+        {!Array.isArray(auditLog) || auditLog.length === 0 ? (
+          <div className="font-mono text-[11px] leading-relaxed" style={{ color: 'var(--textFaint)' }}>
+            No checks logged yet. This list fills when the system scores each pair (after candle data loads).
+          </div>
+        ) : (
+          <div className="space-y-1 max-h-72 overflow-y-auto omni-scroll">
+            {auditLog.map((e, idx) => {
+              const reasons = Array.isArray(e.reasons) ? e.reasons
+                : e.blockedReason ? [e.blockedReason]
+                : e.action ? [String(e.action)]
+                : ['checked'];
+              return (
+                <div key={e.id || idx} className="flex items-start gap-2 font-mono text-[10px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
+                  <span style={{ color: 'var(--textFaint)' }} className="w-10 shrink-0">{timeAgo(e.timestamp || Date.now())}</span>
+                  <span style={{ color: 'var(--text)' }} className="w-16 shrink-0">{e.symbol || '—'}</span>
+                  {e.fired || e.signalFired
+                    ? <CheckCircle2 size={11} style={{ color: 'var(--emerald)', marginTop: 1, flexShrink: 0 }} />
+                    : <XCircle size={11} style={{ color: 'var(--textFaint)', marginTop: 1, flexShrink: 0 }} />}
+                  <span style={{ color: 'var(--textDim)' }} className="min-w-0 break-words">{reasons.join(', ')}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
