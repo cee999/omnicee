@@ -15,7 +15,7 @@
 //| Input parameters                                                  |
 //+------------------------------------------------------------------+
 input string   InpServerURL   = "https://omnicee.onrender.com"; // OMNICEE Server URL (must be in MT5 WebRequest allow list)
-input string   InpEASecret    = "";                              // EA Secret (leave blank if none)
+input string   InpEASecret    = "17380504905193";                              // EA Secret (leave blank if none)
 input int      InpPollSeconds = 5;                               // Poll interval (seconds)
 input int      InpBalanceSync = 60;                              // Balance sync interval (seconds)
 input int      InpPriceSync   = 1;                                // Broker bid/ask push interval (1s = live Exness prices)
