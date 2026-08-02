@@ -186,7 +186,9 @@ function createApp() {
     if (finnhub.enabled()) {
       news = await finnhub.marketNews('general').catch(() => []);
       news = Array.isArray(news) ? news.slice(0, 8).map(n => ({
-        headline: n.headline, source: n.source, url: n.url, datetime: n.datetime * 1000,
+        headline: n.headline, source: n.source, url: n.url,
+        image: n.image || n.imageUrl || null,
+        datetime: (n.datetime ? n.datetime * 1000 : Date.now()),
       })) : [];
     }
     res.json({ ok: true, outlook: { ...outlook, news } });
@@ -333,10 +335,24 @@ function createApp() {
 
   app.get('/api/news', dashboardReadAuth, async (req, res) => {
     const symbol = req.query.symbol;
-    const news = symbol
+    let news = symbol
       ? await finnhub.companyNews(symbol).catch(err => ({ error: err.message }))
       : await finnhub.marketNews(req.query.category || 'general').catch(err => ({ error: err.message }));
-    res.json({ ok: !news.error, news });
+    if (Array.isArray(news)) {
+      news = news.slice(0, 40).map(n => ({
+        headline: n.headline || n.title || '',
+        summary: n.summary || n.description || '',
+        source: n.source || (n.source && n.source.name) || 'Unknown',
+        url: n.url || n.link || null,
+        image: n.image || n.imageUrl || n.thumbnail || null,
+        datetime: n.datetime
+          ? (n.datetime < 1e12 ? n.datetime * 1000 : n.datetime)
+          : (n.datetime || Date.now()),
+        category: n.category || req.query.category || 'general',
+        symbol: n.related || symbol || null,
+      }));
+    }
+    res.json({ ok: !news?.error, news });
   });
 
   app.get('/api/learning', dashboardReadAuth, async (req, res) => {

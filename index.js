@@ -2136,25 +2136,26 @@ function buildFeeds() {
     finnhubFeed.connectPriceStream(fxSymbols);
   }
 
-  // FreeRateFeed — no API key required. Keeps the live ticker and /api/market
-  // populated with real mid rates for major FX + gold even when TwelveData
-  // daily quota is exhausted or Finnhub WS is unavailable. Updates every
-  // few minutes (not tick-level), but far better than a permanently empty
-  // dashboard. Does NOT write to candleStores (agents still need OHLC from
-  // TwelveData / Finnhub fallback / MT5 ticks).
-  if (FreeRateFeed && fxSymbols.length) {
-    const freeRateFeed = new FreeRateFeed({ symbols: fxSymbols });
-    freeRateFeed.on('price', ({ symbol, price, change }) => {
-      onLivePrice(symbol, price, { source: 'free-rate', change });
+  // FreeRateFeed — no API key. Near-live Yahoo ticks (~20s) for FX + gold +
+  // crypto so the ticker stays fresh even when TwelveData quota is gone or
+  // Binance is geo-blocked. Does NOT write candleStores (agents still need
+  // TwelveData / Binance / Bybit / MT5 OHLC for signal analysis).
+  if (FreeRateFeed && SYMBOLS.length) {
+    const freeRateFeed = new FreeRateFeed({
+      symbols: SYMBOLS,
+      pollMs: Number(process.env.FREE_RATE_POLL_MS) || 20000,
     });
-    freeRateFeed.on('connected', () => log.info(`FreeRateFeed connected for: ${fxSymbols.join(', ')}`));
+    freeRateFeed.on('price', ({ symbol, price, change }) => {
+      onLivePrice(symbol, price, { source: 'yahoo-free', change });
+    });
+    freeRateFeed.on('connected', () => log.info(`FreeRateFeed (Yahoo ~20s) connected for: ${SYMBOLS.join(', ')}`));
     freeRateFeed.on('error', (err) => log.warn(`FreeRateFeed error: ${feedErrorMessage(err)}`));
     feeds.push({
       name: 'FreeRateFeed',
       instance: freeRateFeed,
-      symbols: fxSymbols,
+      symbols: SYMBOLS,
     });
-    log.info(`FreeRateFeed configured for: ${fxSymbols.join(', ')}`);
+    log.info(`FreeRateFeed configured for: ${SYMBOLS.join(', ')}`);
   }
 
   return feeds;
