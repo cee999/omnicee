@@ -211,7 +211,7 @@ function SectionHeader({ icon: Icon, title, sub }) {
 
 /* Shown wherever a panel's real data hasn't arrived yet — replaces every
    demo/simulated fallback that used to sit here instead. */
-function WaitingForBackend({ height = 140, label = 'Waiting for backend…' }) {
+function WaitingForBackend({ height = 140, label = 'Waiting for live data… check feeds / API keys' }) {
   return (
     <div className="flex flex-col items-center justify-center gap-2 font-mono text-[10px] uppercase tracking-wider"
       style={{ height, color: 'var(--textFaint)' }}>
@@ -1065,21 +1065,28 @@ function NewsTab({ news, mode }) {
           <div className="space-y-0.5 max-h-[560px] overflow-y-auto omni-scroll">
             {filtered.map((n, i) => (
               <a key={i} href={n.url || undefined} target={n.url ? '_blank' : undefined} rel="noreferrer"
-                className="omni-row flex items-start gap-3 px-2 py-2 rounded border-b" style={{ borderColor: 'var(--border)', textDecoration: 'none', cursor: n.url ? 'pointer' : 'default' }}>
+                className="omni-row flex items-start gap-3 px-2 py-2.5 rounded border-b" style={{ borderColor: 'var(--border)', textDecoration: 'none', cursor: n.url ? 'pointer' : 'default' }}>
                 {n.image ? (
-                  <img src={n.image} alt="" loading="lazy"
-                    className="rounded object-cover shrink-0"
-                    style={{ width: 64, height: 64, background: 'var(--panel2)' }}
-                    onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                  <img
+                    src={n.image}
+                    alt=""
+                    loading="lazy"
+                    className="rounded object-cover flex-shrink-0"
+                    style={{ width: 64, height: 48, background: 'var(--panel2)' }}
+                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                  />
                 ) : (
-                  <div className="rounded flex items-center justify-center shrink-0" style={{ width: 64, height: 64, background: 'var(--panel2)' }}>
-                    <Newspaper size={20} style={{ color: 'var(--textFaint)' }} />
+                  <div className="flex items-center justify-center rounded flex-shrink-0" style={{ width: 64, height: 48, background: 'var(--panel2)' }}>
+                    <Newspaper size={16} style={{ color: 'var(--textFaint)' }} />
                   </div>
                 )}
                 <div className="flex-1 min-w-0">
-                  <div className="text-[12px]" style={{ color: 'var(--text)' }}>{n.headline}</div>
-                  {n.summary && <div className="text-[10px] mt-0.5 line-clamp-2" style={{ color: 'var(--textFaint)' }}>{n.summary}</div>}
+                  <div className="text-[12px] leading-snug" style={{ color: 'var(--text)' }}>{n.headline}</div>
+                  {n.summary ? (
+                    <div className="text-[10px] mt-0.5 line-clamp-2" style={{ color: 'var(--textDim)' }}>{n.summary}</div>
+                  ) : null}
                   <div className="font-mono text-[9px] uppercase mt-1" style={{ color: 'var(--textFaint)' }}>
+                    {/* Finnhub's datetime is Unix seconds; timeAgo() expects milliseconds */}
                     {n.source || 'Unknown'} · {timeAgo((n.datetime || 0) * 1000)} ago{n.symbol ? ` · ${n.symbol}` : ''}
                   </div>
                 </div>

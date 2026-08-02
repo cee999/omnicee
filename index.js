@@ -52,7 +52,9 @@ function requireEnv(name, fallback) {
 const BOT_TOKEN       = requireEnv('TELEGRAM_BOT_TOKEN', '');
 const CHAT_IDS        = (requireEnv('TELEGRAM_CHAT_IDS', '') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
-const SYMBOLS         = (requireEnv('SYMBOLS', 'BTCUSDT,XAUUSD,EURUSD') || '')
+// Default matches the dashboard ticker so every tab has live prices out of
+// the box. Override via SYMBOLS env to trade a smaller/larger set.
+const SYMBOLS         = (requireEnv('SYMBOLS', 'EURUSD,GBPUSD,USDJPY,XAUUSD,BTCUSDT,ETHUSDT') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
 const TIMEFRAMES_STR  = (requireEnv('TIMEFRAMES', 'H1,H4') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
@@ -108,6 +110,7 @@ const { ExecutionEngine }    = loadModule('./signal-pipeline/manual-mode',      
 const { BinanceFeed }        = loadModule('./feeds/binance-ws',                  'BinanceFeed')        || {};
 const { BybitFeed }           = loadModule('./feeds/bybit-ws',                    'BybitFeed')          || {};
 const { TwelveDataFeed }     = loadModule('./feeds/twelve-data',                 'TwelveDataFeed')     || {};
+const { FreeRateFeed }       = loadModule('./feeds/free-rate-feed',              'FreeRateFeed')       || {};
 const { SMCAgent }           = loadModule('./agents/smc-agent',                  'SMCAgent')           || {};
 const { MTFAgent }           = loadModule('./agents/mtf-agent',                  'MTFAgent')           || {};
 const { MomentumAgent }      = loadModule('./agents/momentum-agent',             'MomentumAgent')      || {};
@@ -1150,7 +1153,7 @@ async function buildSentimentExternalData(symbol) {
       const isCrypto = symbol.endsWith('USDT') || symbol.endsWith('USDC') || symbol.endsWith('BTC');
       const category = isCrypto ? 'crypto' : 'forex';
       const cached = _newsCache[category];
-      const stale = !cached || (Date.now() - cached.ts) > 15 * 60000;
+      const stale = !cached || (Date.now() - cached.ts) > 5 * 60000; // refresh news every 5 min
       let raw = cached?.articles;
       if (stale) {
         raw = await finnhubFeed.marketNews(category);
@@ -1992,7 +1995,10 @@ function buildFeeds() {
       if (!bybitFundingOI[sym]) bybitFundingOI[sym] = {};
       bybitFundingOI[sym].openInterest = analysis.oiValue ?? analysis.value ?? null;
     });
-    bybitFeed.on('price', ({ symbol }) => {
+    bybitFeed.on('price', ({ symbol, price }) => {
+      // Live ticker — critical when Binance is geo-blocked (common on some
+      // cloud hosts). Without this, ETH/BTC only update from Binance candles.
+      if (Number.isFinite(price)) onLivePrice(symbol, price, { source: 'bybit' });
       const rate = bybitFeed.funding?._rates?.get(symbol)?.current;
       if (rate != null) {
         if (!bybitFundingOI[symbol]) bybitFundingOI[symbol] = {};
@@ -2054,11 +2060,17 @@ function buildFeeds() {
     const macroSymbols = intermarketAnalyzer ? [DXY_SYMBOL, EQUITY_INDEX_SYMBOL] : [];
     const tdSymbols = [...new Set([...fxSymbols, ...macroSymbols])];
 
+    // Free-tier survival: default 15s poll + multi-TF live checks burns the
+    // 800/day quota in a few hours. Slow the quote poll to 2–3 min and let
+    // the existing per-TF checkInterval (already ~tf/3) + Finnhub fallback
+    // + FreeRateFeed keep the ticker alive. Paid tiers can override via env.
+    const tdPollMs = Number(process.env.TWELVE_DATA_POLL_MS) || 180000; // 3 min default
     const tdFeed = new TwelveDataFeed({
       apiKey:     TWELVE_KEY,
       symbols:    tdSymbols,
       timeframes: TIMEFRAMES_STR,
       db,
+      pollIntervalMs: tdPollMs,
       // FIX: this was a fully-built, documented option (see the class
       // JSDoc example: "fallbackFeed: finnhub, // used for live candles
       // once daily quota is hit") that nothing ever actually passed in —
@@ -2122,6 +2134,28 @@ function buildFeeds() {
     finnhubFeed.on('connected', () => log.info(`FinnhubFeed price stream connected for: ${fxSymbols.join(', ')}`));
     finnhubFeed.on('error', (err) => log.warn(`FinnhubFeed price stream error: ${feedErrorMessage(err)}`));
     finnhubFeed.connectPriceStream(fxSymbols);
+  }
+
+  // FreeRateFeed — no API key. Near-live Yahoo ticks (~20s) for FX + gold +
+  // crypto so the ticker stays fresh even when TwelveData quota is gone or
+  // Binance is geo-blocked. Does NOT write candleStores (agents still need
+  // TwelveData / Binance / Bybit / MT5 OHLC for signal analysis).
+  if (FreeRateFeed && SYMBOLS.length) {
+    const freeRateFeed = new FreeRateFeed({
+      symbols: SYMBOLS,
+      pollMs: Number(process.env.FREE_RATE_POLL_MS) || 20000,
+    });
+    freeRateFeed.on('price', ({ symbol, price, change }) => {
+      onLivePrice(symbol, price, { source: 'yahoo-free', change });
+    });
+    freeRateFeed.on('connected', () => log.info(`FreeRateFeed (Yahoo ~20s) connected for: ${SYMBOLS.join(', ')}`));
+    freeRateFeed.on('error', (err) => log.warn(`FreeRateFeed error: ${feedErrorMessage(err)}`));
+    feeds.push({
+      name: 'FreeRateFeed',
+      instance: freeRateFeed,
+      symbols: SYMBOLS,
+    });
+    log.info(`FreeRateFeed configured for: ${SYMBOLS.join(', ')}`);
   }
 
   return feeds;
