@@ -3,11 +3,10 @@
 //|                         OMNICEE AI Trading System                 |
 //|                         Developed by James Yelbert                |
 //+------------------------------------------------------------------+
-#property copyright   "James Yelbert — OMNICEE"
+#property copyright   "James Yelbert - OMNICEE"
 #property link        "https://github.com/cee999/omnicee"
 #property version     "1.00"
 #property description "OMNICEE bridge: pushes Exness/MT5 bid-ask live + executes APPROVED signals only."
-#property strict
 
 #include <Trade\Trade.mqh>
 
@@ -34,11 +33,11 @@ int      pollIntervalSec;
 int      balanceSyncSec;
 int      priceSyncIntervalSec;
 
-// Symbols OMNICEE tracks for its live price ticker — kept as a parallel
+// Symbols OMNICEE tracks for its live price ticker - kept as a parallel
 // list to MapSymbol() below since MQL5 has no clean way to enumerate "every
 // key MapSymbol() knows about". Add a symbol here AND to MapSymbol() to
 // report it; a symbol your broker doesn't offer is skipped automatically
-// (see SendPriceTicks() — SymbolSelect() failing just skips it, not a $0 tick).
+// (see SendPriceTicks() - SymbolSelect() failing just skips it, not a $0 tick).
 string OmniceeSymbols[] = {"BTCUSDT", "ETHUSDT", "EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "USOIL", "UUP"};
 
 //+------------------------------------------------------------------+
@@ -51,7 +50,7 @@ string MapSymbol(string omniceeSymbol)
    if(omniceeSymbol == "BTCUSDT")   return "BTCUSDm";  // Exness crypto
    if(omniceeSymbol == "ETHUSDT")   return "ETHUSDm";
    
-   // Forex — most brokers use standard names
+   // Forex - most brokers use standard names
    if(omniceeSymbol == "EURUSD")    return "EURUSDm";
    if(omniceeSymbol == "GBPUSD")    return "GBPUSDm";
    if(omniceeSymbol == "USDJPY")    return "USDJPYm";
@@ -106,7 +105,7 @@ void OnDeinit(const int reason)
 }
 
 //+------------------------------------------------------------------+
-//| Timer — reliable 1s broker price push (does not depend on ticks)  |
+//| Timer - reliable 1s broker price push (does not depend on ticks)  |
 //+------------------------------------------------------------------+
 void OnTimer()
 {
@@ -132,7 +131,7 @@ void OnTimer()
 }
 
 //+------------------------------------------------------------------+
-//| Expert tick — kept for instant reaction; timer is the authority   |
+//| Expert tick - kept for instant reaction; timer is the authority   |
 //+------------------------------------------------------------------+
 void OnTick()
 {
@@ -261,17 +260,17 @@ bool ExecuteTrade(string symbol, string action, double sl, double tp, double ris
    // was NOT caught here. MathAbs(entryPrice - 0) == entryPrice, a large
    // positive number, which SAILED PAST the `slDistance <= 0` check below.
    // The trade would then be sent to trade.Buy()/trade.Sell() with sl=0,
-   // which MT5 interprets as "no stop loss at all" — a real, live,
+   // which MT5 interprets as "no stop loss at all" - a real, live,
    // completely unprotected position opened silently because of a parsing
    // hiccup, with no error and no warning. Reject outright instead.
    if(sl <= 0)
    {
-      Print("[OMNICEE] Refusing trade — stop loss missing or invalid (sl=", sl, ") for ", symbol);
+      Print("[OMNICEE] Refusing trade - stop loss missing or invalid (sl=", sl, ") for ", symbol);
       return false;
    }
    if(tp <= 0)
    {
-      Print("[OMNICEE] Refusing trade — take profit missing or invalid (tp=", tp, ") for ", symbol);
+      Print("[OMNICEE] Refusing trade - take profit missing or invalid (tp=", tp, ") for ", symbol);
       return false;
    }
    
@@ -286,13 +285,13 @@ bool ExecuteTrade(string symbol, string action, double sl, double tp, double ris
    }
    
    // FIX: also guard against SL being on the wrong side of entry (e.g. a
-   // stale/mismatched price feed, or an upstream direction bug) — placing a
+   // stale/mismatched price feed, or an upstream direction bug) - placing a
    // LONG with SL above entry, or a SHORT with SL below entry, would either
    // be rejected by the broker or (worse) instantly stop the position out
    // in the wrong direction with no real protection.
    if((action == "LONG" && sl >= entryPrice) || (action == "SHORT" && sl <= entryPrice))
    {
-      Print("[OMNICEE] Refusing trade — SL is on the wrong side of entry for ", action, " ", symbol,
+      Print("[OMNICEE] Refusing trade - SL is on the wrong side of entry for ", action, " ", symbol,
             " (entry=", entryPrice, ", sl=", sl, ")");
       return false;
    }
@@ -403,13 +402,13 @@ void SyncBalance()
    if(res == 200)
       Print("[OMNICEE] Balance synced: $", DoubleToString(balance, 2));
    else if(res == -1)
-      Print("[OMNICEE] Balance sync failed — add URL to allowed list");
+      Print("[OMNICEE] Balance sync failed - add URL to allowed list");
 }
 
 //+------------------------------------------------------------------+
 //| Push live bid/ask ticks for every OMNICEE-tracked symbol         |
 //| SymbolInfoDouble() works for any symbol in Market Watch, not just|
-//| the chart this EA is attached to — one EA instance can report    |
+//| the chart this EA is attached to - one EA instance can report    |
 //| the whole watchlist this way.                                    |
 //+------------------------------------------------------------------+
 void SendPriceTicks()
@@ -424,7 +423,7 @@ void SendPriceTicks()
 
       // SymbolSelect() failing (broker doesn't offer this symbol, or the
       // name mapping in MapSymbol() is wrong for your broker) means skip
-      // it — SymbolInfoDouble() on an unselected symbol silently returns 0,
+      // it - SymbolInfoDouble() on an unselected symbol silently returns 0,
       // which would otherwise send a fake $0 price instead of just omitting
       // a symbol your broker doesn't carry.
       if(!SymbolSelect(mt5Symbol, true)) continue;
@@ -436,12 +435,12 @@ void SendPriceTicks()
       if(sent > 0) body += ",";
       body += "{\"symbol\":\"" + omniceeSymbol + "\",\"bid\":" + DoubleToString(bid, 5) +
               ",\"ask\":" + DoubleToString(ask, 5) +
-              ",\"timestamp\":" + IntegerToString(TimeGMT() * 1000) + "}";
+              ",\"timestamp\":" + IntegerToString((long)TimeGMT() * 1000) + "}";
       sent++;
    }
 
    body += "]}";
-   if(sent == 0) return; // nothing selectable this cycle — try again next tick
+   if(sent == 0) return; // nothing selectable this cycle - try again next tick
 
    string url = InpServerURL + "/api/ea/prices";
    string headers = "Content-Type: application/json\r\n";
@@ -458,15 +457,14 @@ void SendPriceTicks()
    int res = WebRequest("POST", url, headers, 5000, postData, result, resultHeaders);
 
    // Log failures always (throttled success so Experts is readable)
-   static datetime lastPriceLog = 0;
    if(res == -1)
-      Print("[OMNICEE] Price sync failed — add URL to Tools→Options→Expert Advisors allowed list");
+      Print("[OMNICEE] Price sync failed - add URL to Tools→Options→Expert Advisors allowed list");
    else if(res != 200)
-      Print("[OMNICEE] Price sync HTTP ", res, " (sent ", sent, " symbols) — check EA_SECRET / server");
+      Print("[OMNICEE] Price sync HTTP ", res, " (sent ", sent, " symbols) - check EA_SECRET / server");
    else if(TimeCurrent() - lastPriceLog >= 30)
    {
       lastPriceLog = TimeCurrent();
-      Print("[OMNICEE] Broker prices OK — ", sent, " symbols pushed (e.g. XAUUSD bid live)");
+      Print("[OMNICEE] Broker prices OK - ", sent, " symbols pushed (e.g. XAUUSD bid live)");
    }
 }
 
@@ -532,7 +530,7 @@ double ExtractNestedDouble(string &json, string outerKey, string innerKey, int s
    // that landed on the right number by construction, but for a
    // double-nested structure like targets:{tp1:{price:X}} it only "worked"
    // because price is currently serialized as the FIRST key inside the tp1
-   // object (see sl-tp-engine.js's _resolveTarget) — with zero validation
+   // object (see sl-tp-engine.js's _resolveTarget) - with zero validation
    // that it found the right field. If that field order ever changed, this
    // would silently feed a wrong SL/TP price into a live trade with no error
    // at all. Now explicitly distinguishes double-nested lookups (find
@@ -555,7 +553,7 @@ double ExtractNestedDouble(string &json, string outerKey, string innerKey, int s
    }
    else
    {
-      // Flat case, e.g. stopLoss.price — innerKey IS the field name itself
+      // Flat case, e.g. stopLoss.price - innerKey IS the field name itself
       string flatSearch = "\"" + innerKey + "\":";
       int flatPos = StringFind(sub, flatSearch, 0);
       if(flatPos < 0) return 0;
