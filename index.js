@@ -52,7 +52,9 @@ function requireEnv(name, fallback) {
 const BOT_TOKEN       = requireEnv('TELEGRAM_BOT_TOKEN', '');
 const CHAT_IDS        = (requireEnv('TELEGRAM_CHAT_IDS', '') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
-const SYMBOLS         = (requireEnv('SYMBOLS', 'BTCUSDT,XAUUSD,EURUSD') || '')
+// Default matches the dashboard ticker so every tab has live prices out of
+// the box. Override via SYMBOLS env to trade a smaller/larger set.
+const SYMBOLS         = (requireEnv('SYMBOLS', 'EURUSD,GBPUSD,USDJPY,XAUUSD,BTCUSDT,ETHUSDT') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
 const TIMEFRAMES_STR  = (requireEnv('TIMEFRAMES', 'H1,H4') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
@@ -1993,7 +1995,10 @@ function buildFeeds() {
       if (!bybitFundingOI[sym]) bybitFundingOI[sym] = {};
       bybitFundingOI[sym].openInterest = analysis.oiValue ?? analysis.value ?? null;
     });
-    bybitFeed.on('price', ({ symbol }) => {
+    bybitFeed.on('price', ({ symbol, price }) => {
+      // Live ticker — critical when Binance is geo-blocked (common on some
+      // cloud hosts). Without this, ETH/BTC only update from Binance candles.
+      if (Number.isFinite(price)) onLivePrice(symbol, price, { source: 'bybit' });
       const rate = bybitFeed.funding?._rates?.get(symbol)?.current;
       if (rate != null) {
         if (!bybitFundingOI[symbol]) bybitFundingOI[symbol] = {};
