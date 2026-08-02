@@ -144,6 +144,7 @@ const { OpenInsiderFeed }    = loadModule('./feeds/openinsider-feed',           
 const { AlphaVantageFeed }   = loadModule('./feeds/alpha-vantage-feed',          'AlphaVantageFeed')  || {};
 const { FinnhubFeed }        = loadModule('./feeds/finnhub-feed',                'FinnhubFeed')       || {};
 const { FMPFeed }            = loadModule('./feeds/fmp-feed',                    'FMPFeed')           || {};
+const { ForexFactoryCalendar } = loadModule('./feeds/forex-factory-calendar',   'ForexFactoryCalendar') || {};
 const { CFTCCotFeed }        = loadModule('./feeds/cftc-cot-feed',               'CFTCCotFeed')       || {};
 const { COTReportParser }    = loadModule('./feeds/cot-report-parser',           'COTReportParser')   || {};
 const { OpportunityRanker }  = loadModule('./signal-pipeline/opportunity-ranker', 'OpportunityRanker') || {};
@@ -1867,9 +1868,20 @@ function buildSingletons() {
   if (FinnhubFeed) finnhubFeed = new FinnhubFeed({ apiKey: process.env.FINNHUB_API_KEY || '' });
   if (FMPFeed)     fmpFeed     = new FMPFeed({ apiKey: process.env.FMP_API_KEY || '' });
 
-  if (finnhubFeed?.enabled() || fmpFeed?.enabled()) {
+  // Always poll calendar: Forex Factory JSON is free (no key). Finnhub/FMP
+  // only add redundancy when their paid/plan endpoints work.
+  {
+    let ffCalendar = null;
+    if (ForexFactoryCalendar) {
+      ffCalendar = new ForexFactoryCalendar();
+      log.info('ForexFactoryCalendar enabled — free weekly economic calendar (no API key)');
+    }
     const pollEconomicCalendar = async () => {
       const raw = [];
+      if (ffCalendar) {
+        try { raw.push(...await ffCalendar.economicCalendar()); }
+        catch (err) { log.warn(`ForexFactory calendar poll failed: ${err.message}`); }
+      }
       if (finnhubFeed?.enabled()) {
         try { raw.push(...await finnhubFeed.economicCalendar()); }
         catch (err) { log.warn(`Finnhub economic calendar poll failed: ${err.message}`); }
@@ -1905,13 +1917,14 @@ function buildSingletons() {
             time: e.time,
             tier: TIER1_RE.test(e.name) || TIER2_RE.test(e.name) || TIER3_RE.test(e.name)
               ? undefined // let _inferTier's own regex classify it
-              : e.impact === 'high' || e.impact === 'High' ? 'TIER_1'
-              : e.impact === 'medium' || e.impact === 'Medium' ? 'TIER_2'
-              : e.impact === 'low' || e.impact === 'Low' ? 'TIER_3'
-              : undefined, // stays TIER_4 via _inferTier's default
+              : e.tierHint
+                || (e.impact === 'high' || e.impact === 'High' ? 'TIER_1'
+                : e.impact === 'medium' || e.impact === 'Medium' ? 'TIER_2'
+                : e.impact === 'low' || e.impact === 'Low' ? 'TIER_3'
+                : undefined),
           })));
         }
-        const src = [finnhubFeed?.enabled() ? 'Finnhub' : null, fmpFeed?.enabled() ? 'FMP' : null].filter(Boolean).join('+') || 'none';
+        const src = [ffCalendar ? 'ForexFactory' : null, finnhubFeed?.enabled() ? 'Finnhub' : null, fmpFeed?.enabled() ? 'FMP' : null].filter(Boolean).join('+') || 'none';
         if (events.length) {
           log.info(`EconomicCalendar: ${events.length} events loaded for the next 7 days (${src})`);
         } else {
@@ -1926,8 +1939,8 @@ function buildSingletons() {
     setTimeout(pollEconomicCalendar, 2 * 60000);
     setInterval(pollEconomicCalendar, 1 * 3600000);
   }
-  log.info(finnhubFeed?.enabled() ? 'FinnhubFeed created — economic calendar polling active' : 'FinnhubFeed disabled - missing FINNHUB_API_KEY');
-  log.info(fmpFeed?.enabled() ? 'FMPFeed created — economic calendar polling active (redundant source)' : 'FMPFeed disabled - missing FMP_API_KEY');
+  log.info(finnhubFeed?.enabled() ? 'FinnhubFeed created' : 'FinnhubFeed disabled - missing FINNHUB_API_KEY');
+  log.info(fmpFeed?.enabled() ? 'FMPFeed created' : 'FMPFeed disabled - missing FMP_API_KEY');
 
   // FIX: real COT (Commitment of Traders) data — CFTCCotFeed and
   // COTReportParser were fully built but nothing anywhere fetched real CFTC
