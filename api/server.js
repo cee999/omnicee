@@ -14,6 +14,9 @@ const { bus, getDispatcher, getEngines } = require('./realtime');
 const db = require('../db');
 const { telegramAuthMiddleware, validateTelegramInitData, validateAppToken } = require('./telegram-auth');
 const { FinnhubFeed } = require('../feeds/finnhub-feed');
+const { YahooNewsFeed } = require('../feeds/yahoo-news-feed');
+const { FearGreedFeed } = require('../feeds/fear-greed-feed');
+const { CoinGeckoFeed } = require('../feeds/coingecko-feed');
 const { AdaptiveLearningEngine } = require('../signal-pipeline/adaptive-learning-engine');
 const { MarketOutlookBuilder } = require('../signal-pipeline/market-outlook');
 const { recordOutcomeEverywhere } = require('../signal-pipeline/outcome-recorder');
@@ -37,6 +40,9 @@ if (!fs.existsSync(path.join(STATIC_ROOT, 'index.html'))) {
   console.warn(`[API] ${STATIC_ROOT} has no index.html — did the webapp-react build step run? (npm run build --prefix webapp-react)`);
 }
 const finnhub = new FinnhubFeed();
+const yahooNews = new YahooNewsFeed();
+const fearGreed = new FearGreedFeed();
+const coinGecko = new CoinGeckoFeed();
 const learningEngine = new AdaptiveLearningEngine({ store: db });
 
 // In-memory ring buffer of recent signals, fed by the live 'signal' bus
@@ -335,24 +341,67 @@ function createApp() {
 
   app.get('/api/news', dashboardReadAuth, async (req, res) => {
     const symbol = req.query.symbol;
-    let news = symbol
-      ? await finnhub.companyNews(symbol).catch(err => ({ error: err.message }))
-      : await finnhub.marketNews(req.query.category || 'general').catch(err => ({ error: err.message }));
-    if (Array.isArray(news)) {
-      news = news.slice(0, 40).map(n => ({
-        headline: n.headline || n.title || '',
-        summary: n.summary || n.description || '',
-        source: n.source || (n.source && n.source.name) || 'Unknown',
-        url: n.url || n.link || null,
-        image: n.image || n.imageUrl || n.thumbnail || null,
-        datetime: n.datetime
-          ? (n.datetime < 1e12 ? n.datetime * 1000 : n.datetime)
-          : (n.datetime || Date.now()),
-        category: n.category || req.query.category || 'general',
-        symbol: n.related || symbol || null,
-      }));
+    const normalize = (n, fallbackSource = 'Unknown') => ({
+      headline: n.headline || n.title || '',
+      summary: n.summary || n.description || '',
+      source: n.source || fallbackSource,
+      url: n.url || n.link || null,
+      image: n.image || n.imageUrl || n.thumbnail || null,
+      datetime: n.datetime
+        ? (n.datetime < 1e12 ? n.datetime * 1000 : n.datetime)
+        : (n.datetime || Date.now()),
+      category: n.category || req.query.category || 'general',
+      symbol: n.symbol || n.related || symbol || null,
+    });
+
+    let news = [];
+    // Yahoo Finance news first (free, no key, images)
+    try {
+      const y = await yahooNews.getNews({ limit: 25 });
+      if (Array.isArray(y)) news.push(...y.map(n => normalize(n, 'Yahoo Finance')));
+    } catch (err) {
+      console.warn('[API] Yahoo news failed:', err.message);
     }
-    res.json({ ok: !news?.error, news });
+
+    // Finnhub when key works (extra coverage)
+    try {
+      let fh = symbol
+        ? await finnhub.companyNews(symbol)
+        : await finnhub.marketNews(req.query.category || 'general');
+      if (Array.isArray(fh)) {
+        news.push(...fh.map(n => normalize({
+          headline: n.headline || n.title,
+          summary: n.summary,
+          source: n.source || 'Finnhub',
+          url: n.url,
+          image: n.image,
+          datetime: n.datetime,
+          category: n.category,
+          symbol: n.related || symbol,
+        }, 'Finnhub')));
+      }
+    } catch (err) {
+      console.warn('[API] Finnhub news failed:', err.message);
+    }
+
+    // De-dupe by headline prefix
+    const seen = new Set();
+    news = news.filter(n => {
+      const k = String(n.headline || '').toLowerCase().slice(0, 60);
+      if (!k || seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    }).sort((a, b) => (b.datetime || 0) - (a.datetime || 0)).slice(0, 40);
+
+    res.json({ ok: true, news, sources: ['yahoo', finnhub.enabled() ? 'finnhub' : null].filter(Boolean) });
+  });
+
+  // Crypto mood + simple market snapshot (free)
+  app.get('/api/sentiment', dashboardReadAuth, async (_req, res) => {
+    const out = { ok: true, fearGreed: null, crypto: null };
+    try { out.fearGreed = await fearGreed.getLatest(); } catch (e) { out.fearGreedError = e.message; }
+    try { out.crypto = await coinGecko.getSnapshot(); } catch (e) { out.cryptoError = e.message; }
+    res.json(out);
   });
 
   app.get('/api/learning', dashboardReadAuth, async (req, res) => {

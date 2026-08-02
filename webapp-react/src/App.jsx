@@ -345,6 +345,7 @@ function useLiveFeed() {
   // the UI can show whether it's on tick-by-tick push or 5s-poll fallback.
   const [socketLive, setSocketLive] = useState(false);
   const [news, setNews] = useState(null);
+  const [sentiment, setSentiment] = useState(null);
   const [journalStats, setJournalStats] = useState(null);
   const [learningProfiles, setLearningProfiles] = useState(null);
   const [relativeStrength, setRelativeStrength] = useState(null);
@@ -470,6 +471,7 @@ function useLiveFeed() {
         }
       } catch (_) {}
       try { const r = await recordFetch('news', omniFetch('/api/news')); if (!cancelled && r.ok) setNews(Array.isArray(r.news) ? r.news : []); } catch (_) {}
+      try { const r = await recordFetch('sentiment', omniFetch('/api/sentiment')); if (!cancelled && r.ok) setSentiment(r); } catch (_) {}
       try { const r = await recordFetch('journal', omniFetch('/api/journal')); if (!cancelled && r.ok) setJournalStats(r.stats); } catch (_) {}
       try { const r = await recordFetch('learning', omniFetch('/api/learning?limit=20')); if (!cancelled && r.ok) setLearningProfiles(r.profiles); } catch (_) {}
       try { const r = await recordFetch('watchlist', omniFetch('/api/watchlist')); if (!cancelled && r.ok) setRelativeStrength(r.relativeStrength); } catch (_) {}
@@ -561,7 +563,7 @@ function useLiveFeed() {
   return {
     now, prices, changes, flash, signals, auditLog, equityCurve, equityCurveLive,
     stats, outlook, heatmapTiles, feedHealth, uptimeSec, accountBalance, socketLive,
-    news, journalStats, learningProfiles, relativeStrength, fetchErrors,
+    news, sentiment, journalStats, learningProfiles, relativeStrength, fetchErrors,
     mode, connected: mode === 'live', wakingBackend,
   };
 }
@@ -1093,7 +1095,7 @@ function NewsTab({ news, mode }) {
   return (
     <div className="p-4 space-y-3">
       <div className="flex items-center gap-2 flex-wrap">
-        <SectionHeader icon={Newspaper} title="Headlines" sub={live ? 'live · Finnhub' : undefined} />
+        <SectionHeader icon={Newspaper} title="Headlines" sub={live ? 'Yahoo Finance + Finnhub' : undefined} />
         <div className="ml-auto flex gap-1 flex-wrap">
           {['ALL', ...SYMBOLS].map(s => (
             <button key={s} onClick={() => setSymFilter(s)}
@@ -1235,16 +1237,44 @@ function tileBiasSign(bias) {
   return 0;
 }
 
-function HeatTab({ heatmapTiles, mode }) {
+function biasPlain(bias) {
+  if (bias === 'BUY' || bias === 'LONG' || bias === 'LONG_LEANING') return 'Buy lean';
+  if (bias === 'SELL' || bias === 'SHORT' || bias === 'SHORT_LEANING') return 'Sell lean';
+  return 'Wait';
+}
+
+function HeatTab({ heatmapTiles, mode, sentiment }) {
   const live = mode === 'live' && Array.isArray(heatmapTiles);
+  const fg = sentiment?.fearGreed;
 
   if (live) {
     return (
       <div className="p-4 space-y-4">
+        {fg && (
+          <div className="omni-panel p-4 flex items-center justify-between gap-4 flex-wrap">
+            <div>
+              <SectionHeader icon={Flame} title="Crypto mood" sub="Fear & Greed index · free data" />
+              <p className="text-[12px] mt-1" style={{ color: 'var(--textDim)' }}>
+                A low number means traders are scared. A high number means they are greedy.
+              </p>
+            </div>
+            <div className="text-right">
+              <div className="font-mono text-3xl font-bold" style={{ color: fg.value <= 40 ? 'var(--coral)' : fg.value >= 60 ? 'var(--emerald)' : 'var(--gold)' }}>
+                {fg.value}
+              </div>
+              <div className="font-mono text-[11px] uppercase" style={{ color: 'var(--textFaint)' }}>{fg.label}</div>
+            </div>
+          </div>
+        )}
         <div className="omni-panel p-4">
-          <SectionHeader icon={Flame} title="Market Heat Map" sub="live · opportunity + relative-strength blend, ranked" />
+          <SectionHeader icon={Flame} title="Market heat" sub="Which pairs look hot or cold right now" />
+          <p className="text-[11px] mb-3" style={{ color: 'var(--textFaint)' }}>
+            Higher score = more interesting setup or stronger move. Needs live candles to fill in.
+          </p>
           {heatmapTiles.length === 0 ? (
-            <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No tiles yet — waiting on the opportunity ranker to warm up.</div>
+            <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
+              Nothing to show yet. Heat fills in after the system has candle data and ranks each symbol.
+            </div>
           ) : (
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5">
               {heatmapTiles.map(t => {
@@ -1253,19 +1283,19 @@ function HeatTab({ heatmapTiles, mode }) {
                   <div key={t.symbol} className="omni-panel2 p-3">
                     <div className="flex items-center justify-between mb-1">
                       <span className="font-mono text-[11px]" style={{ color: 'var(--text)' }}>{t.symbol}</span>
-                      <span className="font-mono text-[9px]" style={{ color: 'var(--textFaint)' }}>#{t.overallRank}</span>
+                      <span className="font-mono text-[9px]" style={{ color: 'var(--textFaint)' }}>rank #{t.overallRank}</span>
                     </div>
                     <div className="rounded px-2 py-2 mb-2 flex items-center justify-between" style={{ background: heatColor(sign * (t.heatScore / 100)) }}>
                       <span className="font-mono text-lg font-bold" style={{ color: 'var(--text)' }}>{Math.round(t.heatScore)}</span>
-                      <span className="font-mono text-[9px] uppercase" style={{ color: 'var(--textDim)' }}>{t.bucket}</span>
+                      <span className="font-mono text-[9px] uppercase" style={{ color: 'var(--textDim)' }}>{t.bucket || '—'}</span>
                     </div>
                     <div className="font-mono text-[10px] flex items-center justify-between" style={{ color: 'var(--textDim)' }}>
-                      <span>{t.bias}</span>
+                      <span>{biasPlain(t.bias)}</span>
                       {t.opportunity && <Pill tone={t.opportunity.fired ? 'up' : 'neutral'}>{t.opportunity.grade || '—'}</Pill>}
                     </div>
                     {t.relativeStrength && (
                       <div className="font-mono text-[9px] mt-1" style={{ color: 'var(--textFaint)' }}>
-                        RS rank #{t.relativeStrength.rank} · {fmtPct(t.relativeStrength.changePct)}
+                        Strength #{t.relativeStrength.rank} · {fmtPct(t.relativeStrength.changePct)}
                       </div>
                     )}
                   </div>
@@ -1589,7 +1619,7 @@ export default function OmniceeDashboard() {
           {activeTab === 'INTEL' && <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} />}
           {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}
           {activeTab === 'MONITOR' && <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} fetchErrors={feed.fetchErrors} />}
-          {activeTab === 'HEAT' && <HeatTab heatmapTiles={feed.heatmapTiles} mode={feed.mode} />}
+          {activeTab === 'HEAT' && <HeatTab heatmapTiles={feed.heatmapTiles} mode={feed.mode} sentiment={feed.sentiment} />}
           {activeTab === 'VALID' && <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} />}
           {activeTab === 'TAPE' && <TapeTab signals={feed.signals} prices={feed.prices} />}
           {activeTab === 'RISK' && <RiskTab prices={feed.prices} changes={feed.changes} stats={feed.stats} accountBalance={feed.accountBalance} relativeStrength={feed.relativeStrength} mode={feed.mode} />}
