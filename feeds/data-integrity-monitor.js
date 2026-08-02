@@ -41,12 +41,21 @@ class DataIntegrityMonitor {
     const now = Date.now();
 
     // 1. Feed connection status
+    // FIX: instance.isConnected() returning `null` (no such method — true for
+    // REST/poll feeds like Finnhub/AlphaVantage/FMP/CFTC-COT/Myfxbook/
+    // OpenInsider, none of which implement it) was being treated identically
+    // to `false` (a WS feed that positively reports itself disconnected) by
+    // every caller. That's the difference between "we don't track this" and
+    // "this is actually broken" — conflating them meant those 6 feeds always
+    // rendered as red/down in the Monitor tab no matter their real state,
+    // and inflated `feedsDisconnected`/`ok` as if they'd failed.
     const feeds = [...this._feeds.entries()].map(([name, { instance, symbols }]) => {
       let connected = null;
       try {
         connected = typeof instance.isConnected === 'function' ? instance.isConnected() : null;
       } catch (_) { connected = null; }
-      return { name, connected, symbols };
+      const status = connected === true ? 'connected' : connected === false ? 'disconnected' : 'unknown';
+      return { name, connected, status, symbols };
     });
 
     // 2. Per symbol/timeframe staleness against the candles actually flowing
@@ -68,7 +77,7 @@ class DataIntegrityMonitor {
       }
     }
 
-    const disconnectedFeeds = feeds.filter(f => f.connected === false);
+    const disconnectedFeeds = feeds.filter(f => f.status === 'disconnected');
     const ok = disconnectedFeeds.length === 0 && staleSeries.length === 0;
 
     return {

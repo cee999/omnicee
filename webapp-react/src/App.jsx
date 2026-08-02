@@ -1109,7 +1109,8 @@ function MonitorTab({ auditLog, feedHealth, uptimeSec, mode, fetchErrors }) {
   const feeds = FEEDS.map(f => {
     const live = liveByName.get(f.name);
     if (mode !== 'live' || !live) return f;
-    return { ...f, status: live.connected ? 'live' : 'down' };
+    const status = live.status === 'connected' ? 'live' : live.status === 'disconnected' ? 'down' : 'unknown';
+    return { ...f, status };
   });
   const uptimeLabel = mode === 'live' && uptimeSec != null
     ? `${Math.floor(uptimeSec / 3600)}h ${Math.floor((uptimeSec % 3600) / 60)}m`

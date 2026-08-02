@@ -73,8 +73,16 @@ envVarGroups:
         value: "7"
 
       # ── Trading config ────────────────────────────────────
-      - key: SYMBOLS
-        value: BTCUSDT,XAUUSD,EURUSD
+      # FIX: was hardcoded here to "BTCUSDT,XAUUSD,EURUSD" — the original
+      # 3-symbol default — which silently overrode index.js's own default
+      # (already updated to all 6 tracked symbols) on every deploy. That's
+      # the actual reason GBPUSD/USDJPY/ETHUSDT showed no live price data:
+      # the backend was never told to track them at all, regardless of
+      # what the frontend expected. Removed rather than re-hardcoded to
+      # avoid this exact class of drift recurring — index.js's own
+      # requireEnv('SYMBOLS', ...) default is the single source of truth.
+      # Set an explicit value here only if you deliberately want this
+      # deployment tracking a different symbol set than the code default.
       - key: TIMEFRAMES
         # FIX: was "15m,H1,H4,D1" — lowercase "15m" doesn't match the
         # codebase's uppercase-only timeframe codes (agents/mtf-agent.js

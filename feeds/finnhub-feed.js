@@ -66,6 +66,7 @@ class FinnhubFeed extends EventEmitter {
     this._wsReconnectAttempts = 0;
     this._wsBackoffMs = 2000;
     this._wsClosedByUser = false;
+    this._wsConnected = false;
     this._reverseMap = null;
   }
 
@@ -284,10 +285,20 @@ class FinnhubFeed extends EventEmitter {
 
   disconnectPriceStream() {
     this._wsClosedByUser = true;
+    this._wsConnected = false;
     if (this._ws) {
       try { this._ws.close(); } catch (_) { /* already closed */ }
       this._ws = null;
     }
+  }
+
+  /** DataIntegrityMonitor calls this (see feeds/data-integrity-monitor.js) —
+   * without it, this feed's status was indistinguishable from "not tracked"
+   * and always rendered as an ambiguous unknown/down state regardless of
+   * whether the price stream was actually up. */
+  isConnected() {
+    if (!this.apiKey) return false;
+    return this._wsConnected === true;
   }
 
   _openWs() {
@@ -296,6 +307,7 @@ class FinnhubFeed extends EventEmitter {
     this._ws.on('open', () => {
       this._wsReconnectAttempts = 0;
       this._wsBackoffMs = 2000;
+      this._wsConnected = true;
       for (const sym of this._wsSymbols) {
         this._ws.send(JSON.stringify({ type: 'subscribe', symbol: this.forexSymbolMap[sym] }));
       }
@@ -323,6 +335,7 @@ class FinnhubFeed extends EventEmitter {
     });
 
     this._ws.on('close', () => {
+      this._wsConnected = false;
       if (this._wsClosedByUser) return;
       this._wsBackoffMs = Math.min(this._wsBackoffMs * 1.6, 60000);
       this._wsReconnectAttempts++;
