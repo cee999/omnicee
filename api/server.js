@@ -13,6 +13,7 @@ const { Server } = require('socket.io');
 const { bus, getDispatcher, getEngines } = require('./realtime');
 const db = require('../db');
 const { telegramAuthMiddleware, validateTelegramInitData, validateAppToken } = require('./telegram-auth');
+const { createEmailAuthRouter, emailSessionMiddleware, requireEmailAuth, ensureAuthIndexes } = require('./email-auth');
 const { FinnhubFeed } = require('../feeds/finnhub-feed');
 const { YahooNewsFeed } = require('../feeds/yahoo-news-feed');
 const { ForexFactoryCalendar } = require('../feeds/forex-factory-calendar');
@@ -59,6 +60,16 @@ const MARKET_SNAPSHOT_CACHE = new Map();
 let serverState = null;
 
 function dashboardReadAuth(req, res, next) {
+  // Email session (OTP login) — preferred when present
+  if (req.emailSession?.email) {
+    req.authMethod = 'email';
+    req.telegramUser = { id: req.emailSession.email, username: req.emailSession.email };
+    return next();
+  }
+  // When EMAIL_AUTH_REQUIRED is on, block public read (friends must log in)
+  if (process.env.EMAIL_AUTH_REQUIRED === 'true') {
+    return res.status(401).json({ ok: false, error: 'Login required', code: 'AUTH_REQUIRED' });
+  }
   if (req.method === 'GET' && process.env.PUBLIC_DASHBOARD_READ !== 'false') {
     req.telegramUser = { id: 'public-dashboard', username: 'public-dashboard' };
     req.authMethod = 'public-dashboard-read';
@@ -128,6 +139,9 @@ function createApp() {
   }));
   app.use(compression());
   app.use(express.json({ limit: '512kb' }));
+  app.use(emailSessionMiddleware(db));
+  app.use('/api/auth/email', createEmailAuthRouter(express, db));
+  ensureAuthIndexes(db).catch(err => console.warn('[AUTH] indexes:', err.message));
   // Global limit for dashboard/public API. EA price ticks are 1/sec and must
   // not share this budget or broker prices never land and Yahoo wins.
   const publicLimiter = rateLimit({
@@ -137,7 +151,7 @@ function createApp() {
     legacyHeaders: false,
     skip: (req) => {
       const p = req.path || '';
-      return p.startsWith('/api/ea/') || p.startsWith('/api/webhooks/');
+      return p.startsWith('/api/ea/') || p.startsWith('/api/webhooks/') || p.startsWith('/api/auth/');
     },
   });
   app.use(publicLimiter);

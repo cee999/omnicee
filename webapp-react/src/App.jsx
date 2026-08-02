@@ -305,27 +305,163 @@ function getTelegramInitData() {
   try { return window.Telegram?.WebApp?.initData || ''; } catch (_) { return ''; }
 }
 
+const SESSION_KEY = 'omnicee_session_v1';
+
+function getSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw);
+    if (!s?.token || !s?.email) return null;
+    if (s.expiresAt && Date.parse(s.expiresAt) < Date.now()) {
+      localStorage.removeItem(SESSION_KEY);
+      return null;
+    }
+    return s;
+  } catch (_) { return null; }
+}
+
+function setSession(s) {
+  if (!s) localStorage.removeItem(SESSION_KEY);
+  else localStorage.setItem(SESSION_KEY, JSON.stringify(s));
+}
+
 function authHeaders() {
-  const h = {};
+  const h = { 'Content-Type': 'application/json' };
   if (APP_TOKEN) h['x-app-token'] = APP_TOKEN;
   const initData = getTelegramInitData();
   if (initData) h['x-telegram-init-data'] = initData;
+  const session = getSession();
+  if (session?.token) {
+    h['Authorization'] = `Bearer ${session.token}`;
+    h['x-session-token'] = session.token;
+  }
   return h;
 }
 
-async function omniFetch(path, timeoutMs = 4000) {
+async function omniFetch(path, timeoutMs = 4000, options = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(API_BASE + path, {
+      method: options.method || 'GET',
       headers: authHeaders(),
+      body: options.body ? JSON.stringify(options.body) : undefined,
       signal: ctrl.signal,
     });
+    if (res.status === 401) {
+      const err = new Error('AUTH_REQUIRED');
+      err.code = 'AUTH_REQUIRED';
+      throw err;
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
   } finally {
     clearTimeout(timer);
   }
+}
+
+function LoginGate({ onAuthed }) {
+  const [email, setEmail] = useState('');
+  const [code, setCode] = useState('');
+  const [step, setStep] = useState('email'); // email | code
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+
+  const requestCode = async () => {
+    setBusy(true); setErr(''); setMsg('');
+    try {
+      const r = await fetch(API_BASE + '/api/auth/email/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim() }),
+      });
+      const data = await r.json();
+      if (!r.ok || !data.ok) throw new Error(data.error || 'Could not send code');
+      setStep('code');
+      setMsg(data.devCode ? `Dev code: ${data.devCode}` : 'Check your email for a 6-digit code.');
+    } catch (e) {
+      setErr(e.message || 'Failed');
+    } finally { setBusy(false); }
+  };
+
+  const verifyCode = async () => {
+    setBusy(true); setErr('');
+    try {
+      const r = await fetch(API_BASE + '/api/auth/email/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim(), code: code.trim() }),
+      });
+      const data = await r.json();
+      if (!r.ok || !data.ok) throw new Error(data.error || 'Invalid code');
+      setSession({ token: data.token, email: data.email, expiresAt: data.expiresAt });
+      onAuthed({ email: data.email });
+    } catch (e) {
+      setErr(e.message || 'Failed');
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4" style={{ background: 'var(--bg)' }}>
+      <div className="omni-panel w-full max-w-md p-6 space-y-4">
+        <div className="flex items-center gap-2 mb-2">
+          <div className="w-8 h-8 rounded flex items-center justify-center font-display text-sm font-bold"
+            style={{ background: 'var(--emerald)', color: '#05070a' }}>Ω</div>
+          <div>
+            <div className="font-display text-sm tracking-[0.15em]" style={{ color: 'var(--text)' }}>OMNICEE</div>
+            <div className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>Email code login</div>
+          </div>
+        </div>
+        <p className="font-mono text-[11px] leading-relaxed" style={{ color: 'var(--textDim)' }}>
+          Enter your email. We send a one-time 6-digit code — that is your password. No permanent password to remember.
+        </p>
+        <label className="block font-mono text-[10px] uppercase" style={{ color: 'var(--textFaint)' }}>
+          Email
+          <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+            className="w-full mt-1 px-3 py-2 rounded font-mono text-[13px] outline-none"
+            style={{ background: 'var(--panel2)', border: '1px solid var(--border)', color: 'var(--text)' }}
+            placeholder="you@email.com" autoComplete="email" />
+        </label>
+        {step === 'code' && (
+          <label className="block font-mono text-[10px] uppercase" style={{ color: 'var(--textFaint)' }}>
+            6-digit code
+            <input type="text" inputMode="numeric" maxLength={6} value={code} onChange={e => setCode(e.target.value.replace(/\D/g, ''))}
+              className="w-full mt-1 px-3 py-2 rounded font-mono text-[18px] tracking-[0.3em] outline-none"
+              style={{ background: 'var(--panel2)', border: '1px solid var(--border)', color: 'var(--text)' }}
+              placeholder="000000" />
+          </label>
+        )}
+        {msg && <div className="font-mono text-[11px]" style={{ color: 'var(--emerald)' }}>{msg}</div>}
+        {err && <div className="font-mono text-[11px]" style={{ color: 'var(--coral)' }}>{err}</div>}
+        <div className="flex gap-2">
+          {step === 'email' ? (
+            <button type="button" disabled={busy || !email.includes('@')} onClick={requestCode}
+              className="flex-1 py-2.5 rounded font-mono text-[12px] font-semibold"
+              style={{ background: 'var(--emerald)', color: '#05070a', opacity: busy ? 0.6 : 1 }}>
+              {busy ? 'Sending…' : 'Send code'}
+            </button>
+          ) : (
+            <>
+              <button type="button" disabled={busy} onClick={() => setStep('email')}
+                className="px-3 py-2.5 rounded font-mono text-[12px]"
+                style={{ background: 'var(--panel2)', color: 'var(--textDim)' }}>Back</button>
+              <button type="button" disabled={busy || code.length !== 6} onClick={verifyCode}
+                className="flex-1 py-2.5 rounded font-mono text-[12px] font-semibold"
+                style={{ background: 'var(--emerald)', color: '#05070a', opacity: busy ? 0.6 : 1 }}>
+                {busy ? 'Checking…' : 'Log in'}
+              </button>
+            </>
+          )}
+        </div>
+        <div className="font-mono text-[10px] leading-relaxed pt-2 border-t" style={{ borderColor: 'var(--border)', color: 'var(--textFaint)' }}>
+          Install on phone: browser menu → Add to Home Screen.<br />
+          Desktop (Chrome/Edge): install icon in the address bar.
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /* ── Live-feed hook — probes the real API once; on success it polls the
@@ -1939,12 +2075,17 @@ function RiskTab({ prices, changes, accountBalance, relativeStrength, mode }) {
 export default function OmniceeDashboard() {
   const [activeTab, setActiveTab] = useState('DASH');
   const [installEvt, setInstallEvt] = useState(null);
+  const [user, setUser] = useState(() => getSession());
   useEffect(() => {
     const h = (e) => { e.preventDefault(); setInstallEvt(e); };
     window.addEventListener('beforeinstallprompt', h);
     return () => window.removeEventListener('beforeinstallprompt', h);
   }, []);
   const feed = useLiveFeed();
+
+  if (!user) {
+    return <LoginGate onAuthed={(u) => setUser(u)} />;
+  }
 
   const handleCommand = useCallback((raw) => {
     const val = raw.toUpperCase();
