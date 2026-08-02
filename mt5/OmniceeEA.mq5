@@ -6,7 +6,7 @@
 #property copyright   "James Yelbert — OMNICEE"
 #property link        "https://github.com/cee999/omnicee"
 #property version     "1.00"
-#property description "Connects to OMNICEE cloud. Executes APPROVED signals only."
+#property description "OMNICEE bridge: pushes Exness/MT5 bid-ask live + executes APPROVED signals only."
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -14,11 +14,11 @@
 //+------------------------------------------------------------------+
 //| Input parameters                                                  |
 //+------------------------------------------------------------------+
-input string   InpServerURL   = "https://omnicee.onrender.com"; // OMNICEE Server URL
+input string   InpServerURL   = "https://omnicee.onrender.com"; // OMNICEE Server URL (must be in MT5 WebRequest allow list)
 input string   InpEASecret    = "";                              // EA Secret (leave blank if none)
 input int      InpPollSeconds = 5;                               // Poll interval (seconds)
 input int      InpBalanceSync = 60;                              // Balance sync interval (seconds)
-input int      InpPriceSync   = 1;                                // Live price sync interval (seconds)
+input int      InpPriceSync   = 1;                                // Broker bid/ask push interval (1s = live Exness prices)
 input int      InpSlippage    = 10;                              // Max slippage (points)
 input int      InpMagicNumber = 777888;                          // EA Magic Number
 input bool     InpShowAlerts  = true;                            // Show alerts on execution

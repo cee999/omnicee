@@ -1243,6 +1243,18 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
   if (!SYMBOLS.includes(symbol)) return;
   if (!TIMEFRAMES_STR.includes(timeframe)) return;
 
+  // Broker (Exness/MT5) is the price authority. Reject Yahoo/free/third-party
+  // candle updates for a symbol that has a recent broker tick so charts and
+  // signals stay on broker OHLC, not Yahoo mid.
+  const src = candle?.source || '';
+  const isBroker = src === 'mt5_ea';
+  if (!isBroker) {
+    const last = lastPriceBySymbol[symbol];
+    if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < BROKER_PRICE_HOLD_MS) {
+      return;
+    }
+  }
+
   const store = candleStores[symbol];
   if (!store) return;
 
@@ -1316,7 +1328,7 @@ const PRICE_SOURCE_RANK = {
   'free-rate-daily': 5,
   unknown: 0,
 };
-const BROKER_PRICE_HOLD_MS = Number(process.env.BROKER_PRICE_HOLD_MS) || 8000; // keep broker price for 8s
+const BROKER_PRICE_HOLD_MS = Number(process.env.BROKER_PRICE_HOLD_MS) || 15000; // keep Exness/MT5 price for 15s — Yahoo/free cannot overwrite
 const lastPriceBySymbol = {}; // symbol -> { price, source, rank, ts }
 
 function onLivePrice(symbol, price, { change = null, bias = null, source = 'candle' } = {}) {
@@ -2005,6 +2017,8 @@ function buildSingletons() {
       // candle building — see onMT5Tick()'s own comment for why broker
       // ticks now drive candleStores directly instead of only the ticker.
       onLivePrice, onMT5Tick,
+      // Live price authority map (source=mt5_ea when Exness EA is connected)
+      lastPriceBySymbol,
     });
     log.info('Live engine singletons published for outcome-feedback wiring');
   } catch (err) {
@@ -2220,7 +2234,7 @@ function buildFeeds() {
     freeRateFeed.on('price', ({ symbol, price, change }) => {
       onLivePrice(symbol, price, { source: 'yahoo-free', change });
     });
-    freeRateFeed.on('connected', () => log.info(`FreeRateFeed (Yahoo ~20s) connected for: ${SYMBOLS.join(', ')}`));
+    freeRateFeed.on('connected', () => log.info(`FreeRateFeed (Yahoo fallback ~20s) — overridden by MT5/Exness when EA is connected`));
     freeRateFeed.on('error', (err) => log.warn(`FreeRateFeed error: ${feedErrorMessage(err)}`));
     feeds.push({
       name: 'FreeRateFeed',
@@ -2231,30 +2245,42 @@ function buildFeeds() {
     log.info(`FreeRateFeed configured for: ${SYMBOLS.join(', ')}`);
   }
 
-  // Yahoo OHLC history — free candles so analysis can run without Twelve Data / MT5
+  // Yahoo OHLC — BOOTSTRAP ONLY when broker (Exness/MT5) is not feeding.
+  // Live prices and live candles come from OmniceeEA → POST /api/ea/prices.
+  // Yahoo never overwrites a symbol that has a recent mt5_ea tick.
   if (YahooOhlcFeed && SYMBOLS.length) {
     const yahooOhlc = new YahooOhlcFeed({ symbols: SYMBOLS, interval: '1h', range: '10d' });
     yahooOhlc.on('candles', ({ symbol, timeframe, candles }) => {
       if (!candleStores[symbol]) candleStores[symbol] = {};
       const prev = candleStores[symbol][timeframe] || [];
-      // Prefer longer history; keep last 500
-      candleStores[symbol][timeframe] = candles.slice(-500);
-      if (candles.length >= 40 && candles.length !== prev.length) {
-        log.info(`YahooOhlc: ${symbol} ${timeframe} loaded ${candles.length} bars (last close ${candles[candles.length - 1]?.close})`);
+      // Seed only if we have little/no history — do not clobber broker-built bars
+      if (prev.length >= 50) {
+        const last = lastPriceBySymbol[symbol];
+        if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < BROKER_PRICE_HOLD_MS * 4) {
+          return; // broker is live — keep its OHLC
+        }
+      }
+      if (prev.length < 40 && candles.length > prev.length) {
+        candleStores[symbol][timeframe] = candles.slice(-500);
+        log.info(`YahooOhlc seed: ${symbol} ${timeframe} ${candles.length} bars (fallback until MT5/Exness EA connects)`);
       }
     });
     yahooOhlc.on('candle', ({ symbol, timeframe, candle, isClosed }) => {
-      // Drive the same pipeline as live WS closed candles
+      // Skip Yahoo live bar updates when Exness/MT5 is the authority
+      const last = lastPriceBySymbol[symbol];
+      if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < BROKER_PRICE_HOLD_MS * 4) {
+        return;
+      }
       try {
         if (typeof onCandle === 'function') {
-          onCandle({ symbol, timeframe, candle, isClosed: true });
+          onCandle({ symbol, timeframe, candle: { ...candle, source: 'yahoo-free' }, isClosed: true });
         }
       } catch (err) {
         log.warn(`YahooOhlc onCandle ${symbol}: ${err.message}`);
       }
     });
     yahooOhlc.on('error', (err) => log.warn(`YahooOhlc: ${err.symbol || ''} ${err.error || err.message || err}`));
-    yahooOhlc.on('connected', () => log.info(`YahooOhlcFeed connected — seeding H1 candles for ${SYMBOLS.join(', ')}`));
+    yahooOhlc.on('connected', () => log.info(`YahooOhlcFeed connected — bootstrap only; attach OmniceeEA for Exness/MT5 live prices`));
     yahooOhlc.start();
     feeds.push({ name: 'YahooOhlcFeed', instance: yahooOhlc, symbols: SYMBOLS });
     if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('YahooOHLC', yahooOhlc, SYMBOLS);

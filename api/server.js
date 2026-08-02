@@ -70,6 +70,21 @@ function latestMarketRows(symbols = []) {
   const rowsBySymbol = new Map(MARKET_SNAPSHOT_CACHE);
   const live = getEngines();
 
+  // Prefer live broker (Exness/MT5) ticks when EA is connected
+  const livePrices = live?.lastPriceBySymbol || {};
+  for (const [symbol, tick] of Object.entries(livePrices)) {
+    if (wanted.size && !wanted.has(symbol)) continue;
+    if (!tick || !Number.isFinite(tick.price)) continue;
+    rowsBySymbol.set(symbol, {
+      symbol,
+      price: tick.price,
+      change: null,
+      bias: null,
+      source: tick.source || 'unknown',
+      timestamp: tick.ts || Date.now(),
+    });
+  }
+
   if (live?.candleStores) {
     const sourceSymbols = wanted.size ? [...wanted] : (live.symbols || Object.keys(live.candleStores));
     for (const symbol of sourceSymbols) {
@@ -85,7 +100,7 @@ function latestMarketRows(symbols = []) {
         price: Number(last.close),
         change: last.open ? ((Number(last.close) - Number(last.open)) / Number(last.open)) * 100 : null,
         bias: null,
-        source: `candle:${preferredTf}`,
+        source: last.source || `candle:${preferredTf}`,
         timestamp: last.timestamp || Date.now(),
       });
     }
