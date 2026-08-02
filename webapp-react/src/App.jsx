@@ -210,7 +210,7 @@ function SectionHeader({ icon: Icon, title, sub }) {
 
 /* Shown wherever a panel's real data hasn't arrived yet — replaces every
    demo/simulated fallback that used to sit here instead. */
-function WaitingForBackend({ height = 140, label = 'Waiting for backend…' }) {
+function WaitingForBackend({ height = 140, label = 'Waiting for live data… check feeds / API keys' }) {
   return (
     <div className="flex flex-col items-center justify-center gap-2 font-mono text-[10px] uppercase tracking-wider"
       style={{ height, color: 'var(--textFaint)' }}>

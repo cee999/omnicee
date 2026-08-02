@@ -108,6 +108,7 @@ const { ExecutionEngine }    = loadModule('./signal-pipeline/manual-mode',      
 const { BinanceFeed }        = loadModule('./feeds/binance-ws',                  'BinanceFeed')        || {};
 const { BybitFeed }           = loadModule('./feeds/bybit-ws',                    'BybitFeed')          || {};
 const { TwelveDataFeed }     = loadModule('./feeds/twelve-data',                 'TwelveDataFeed')     || {};
+const { FreeRateFeed }       = loadModule('./feeds/free-rate-feed',              'FreeRateFeed')       || {};
 const { SMCAgent }           = loadModule('./agents/smc-agent',                  'SMCAgent')           || {};
 const { MTFAgent }           = loadModule('./agents/mtf-agent',                  'MTFAgent')           || {};
 const { MomentumAgent }      = loadModule('./agents/momentum-agent',             'MomentumAgent')      || {};
@@ -1150,7 +1151,7 @@ async function buildSentimentExternalData(symbol) {
       const isCrypto = symbol.endsWith('USDT') || symbol.endsWith('USDC') || symbol.endsWith('BTC');
       const category = isCrypto ? 'crypto' : 'forex';
       const cached = _newsCache[category];
-      const stale = !cached || (Date.now() - cached.ts) > 15 * 60000;
+      const stale = !cached || (Date.now() - cached.ts) > 5 * 60000; // refresh news every 5 min
       let raw = cached?.articles;
       if (stale) {
         raw = await finnhubFeed.marketNews(category);
@@ -2054,11 +2055,17 @@ function buildFeeds() {
     const macroSymbols = intermarketAnalyzer ? [DXY_SYMBOL, EQUITY_INDEX_SYMBOL] : [];
     const tdSymbols = [...new Set([...fxSymbols, ...macroSymbols])];
 
+    // Free-tier survival: default 15s poll + multi-TF live checks burns the
+    // 800/day quota in a few hours. Slow the quote poll to 2–3 min and let
+    // the existing per-TF checkInterval (already ~tf/3) + Finnhub fallback
+    // + FreeRateFeed keep the ticker alive. Paid tiers can override via env.
+    const tdPollMs = Number(process.env.TWELVE_DATA_POLL_MS) || 180000; // 3 min default
     const tdFeed = new TwelveDataFeed({
       apiKey:     TWELVE_KEY,
       symbols:    tdSymbols,
       timeframes: TIMEFRAMES_STR,
       db,
+      pollIntervalMs: tdPollMs,
       // FIX: this was a fully-built, documented option (see the class
       // JSDoc example: "fallbackFeed: finnhub, // used for live candles
       // once daily quota is hit") that nothing ever actually passed in —
@@ -2122,6 +2129,27 @@ function buildFeeds() {
     finnhubFeed.on('connected', () => log.info(`FinnhubFeed price stream connected for: ${fxSymbols.join(', ')}`));
     finnhubFeed.on('error', (err) => log.warn(`FinnhubFeed price stream error: ${feedErrorMessage(err)}`));
     finnhubFeed.connectPriceStream(fxSymbols);
+  }
+
+  // FreeRateFeed — no API key required. Keeps the live ticker and /api/market
+  // populated with real mid rates for major FX + gold even when TwelveData
+  // daily quota is exhausted or Finnhub WS is unavailable. Updates every
+  // few minutes (not tick-level), but far better than a permanently empty
+  // dashboard. Does NOT write to candleStores (agents still need OHLC from
+  // TwelveData / Finnhub fallback / MT5 ticks).
+  if (FreeRateFeed && fxSymbols.length) {
+    const freeRateFeed = new FreeRateFeed({ symbols: fxSymbols });
+    freeRateFeed.on('price', ({ symbol, price, change }) => {
+      onLivePrice(symbol, price, { source: 'free-rate', change });
+    });
+    freeRateFeed.on('connected', () => log.info(`FreeRateFeed connected for: ${fxSymbols.join(', ')}`));
+    freeRateFeed.on('error', (err) => log.warn(`FreeRateFeed error: ${feedErrorMessage(err)}`));
+    feeds.push({
+      name: 'FreeRateFeed',
+      instance: freeRateFeed,
+      symbols: fxSymbols,
+    });
+    log.info(`FreeRateFeed configured for: ${fxSymbols.join(', ')}`);
   }
 
   return feeds;
