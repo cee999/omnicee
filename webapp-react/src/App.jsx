@@ -364,7 +364,7 @@ async function omniFetch(path, timeoutMs = 4000, options = {}) {
 function LoginGate({ onAuthed }) {
   const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
-  const [step, setStep] = useState('email'); // email | code
+  const [step, setStep] = useState('email');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
@@ -377,13 +377,15 @@ function LoginGate({ onAuthed }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email.trim() }),
       });
-      const data = await r.json();
+      const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) throw new Error(data.error || 'Could not send code');
       setStep('code');
-      setMsg(data.devCode ? `Dev code: ${data.devCode}` : 'Check your email for a 6-digit code.');
+      setMsg(data.devCode ? `Dev code: ${data.devCode}` : 'Code sent — check your inbox and spam folder.');
     } catch (e) {
-      setErr(e.message || 'Failed');
-    } finally { setBusy(false); }
+      setErr(e.message || 'Failed to send code');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const verifyCode = async () => {
@@ -394,70 +396,156 @@ function LoginGate({ onAuthed }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email.trim(), code: code.trim() }),
       });
-      const data = await r.json();
+      const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) throw new Error(data.error || 'Invalid code');
       setSession({ token: data.token, email: data.email, expiresAt: data.expiresAt });
       onAuthed({ email: data.email });
     } catch (e) {
-      setErr(e.message || 'Failed');
-    } finally { setBusy(false); }
+      setErr(e.message || 'Login failed');
+    } finally {
+      setBusy(false);
+    }
   };
 
+  const bg = '#05070a';
+  const panel = '#10151c';
+  const panel2 = '#161d27';
+  const border = '#1c232d';
+  const text = '#e8eef7';
+  const dim = '#8b9bb4';
+  const faint = '#526078';
+  const green = '#1fe3a8';
+  const red = '#ff5470';
+
   return (
-    <div className="min-h-screen flex items-center justify-center p-4" style={{ background: 'var(--bg)' }}>
-      <div className="omni-panel w-full max-w-md p-6 space-y-4">
-        <div className="flex items-center gap-2 mb-2">
-          <div className="w-8 h-8 rounded flex items-center justify-center font-display text-sm font-bold"
-            style={{ background: 'var(--emerald)', color: '#05070a' }}>Ω</div>
+    <div style={{
+      minHeight: '100vh',
+      width: '100%',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 16,
+      background: bg,
+      color: text,
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+      boxSizing: 'border-box',
+    }}>
+      <div style={{
+        width: '100%',
+        maxWidth: 420,
+        background: panel,
+        border: `1px solid ${border}`,
+        borderRadius: 12,
+        padding: 24,
+        boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+          <div style={{
+            width: 36, height: 36, borderRadius: 8,
+            background: green, color: bg,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontWeight: 800, fontSize: 16,
+          }}>Ω</div>
           <div>
-            <div className="font-display text-sm tracking-[0.15em]" style={{ color: 'var(--text)' }}>OMNICEE</div>
-            <div className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>Email code login</div>
+            <div style={{ fontSize: 15, letterSpacing: '0.15em', fontWeight: 700, color: text }}>OMNICEE</div>
+            <div style={{ fontSize: 11, color: faint, marginTop: 2 }}>Sign in with email code</div>
           </div>
         </div>
-        <p className="font-mono text-[11px] leading-relaxed" style={{ color: 'var(--textDim)' }}>
-          Enter your email. We send a one-time 6-digit code — that is your password. No permanent password to remember.
+
+        <p style={{ fontSize: 12, lineHeight: 1.55, color: dim, margin: '0 0 18px' }}>
+          Enter your email. We send a one-time 6-digit code — that is your password.
+          First time and next times use the same simple flow.
         </p>
-        <label className="block font-mono text-[10px] uppercase" style={{ color: 'var(--textFaint)' }}>
+
+        <label style={{ display: 'block', fontSize: 10, textTransform: 'uppercase', color: faint, marginBottom: 12 }}>
           Email
-          <input type="email" value={email} onChange={e => setEmail(e.target.value)}
-            className="w-full mt-1 px-3 py-2 rounded font-mono text-[13px] outline-none"
-            style={{ background: 'var(--panel2)', border: '1px solid var(--border)', color: 'var(--text)' }}
-            placeholder="you@email.com" autoComplete="email" />
+          <input
+            type="email"
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+            placeholder="you@email.com"
+            autoComplete="email"
+            style={{
+              display: 'block', width: '100%', marginTop: 6,
+              padding: '12px 14px', borderRadius: 8,
+              border: `1px solid ${border}`, background: panel2, color: text,
+              fontSize: 14, outline: 'none', boxSizing: 'border-box',
+            }}
+          />
         </label>
+
         {step === 'code' && (
-          <label className="block font-mono text-[10px] uppercase" style={{ color: 'var(--textFaint)' }}>
+          <label style={{ display: 'block', fontSize: 10, textTransform: 'uppercase', color: faint, marginBottom: 12 }}>
             6-digit code
-            <input type="text" inputMode="numeric" maxLength={6} value={code} onChange={e => setCode(e.target.value.replace(/\D/g, ''))}
-              className="w-full mt-1 px-3 py-2 rounded font-mono text-[18px] tracking-[0.3em] outline-none"
-              style={{ background: 'var(--panel2)', border: '1px solid var(--border)', color: 'var(--text)' }}
-              placeholder="000000" />
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={6}
+              value={code}
+              onChange={e => setCode(e.target.value.replace(/\D/g, ''))}
+              placeholder="000000"
+              style={{
+                display: 'block', width: '100%', marginTop: 6,
+                padding: '12px 14px', borderRadius: 8,
+                border: `1px solid ${border}`, background: panel2, color: text,
+                fontSize: 20, letterSpacing: '0.35em', outline: 'none', boxSizing: 'border-box',
+              }}
+            />
           </label>
         )}
-        {msg && <div className="font-mono text-[11px]" style={{ color: 'var(--emerald)' }}>{msg}</div>}
-        {err && <div className="font-mono text-[11px]" style={{ color: 'var(--coral)' }}>{err}</div>}
-        <div className="flex gap-2">
+
+        {msg ? <div style={{ fontSize: 12, color: green, marginBottom: 10 }}>{msg}</div> : null}
+        {err ? <div style={{ fontSize: 12, color: red, marginBottom: 10 }}>{err}</div> : null}
+
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           {step === 'email' ? (
-            <button type="button" disabled={busy || !email.includes('@')} onClick={requestCode}
-              className="flex-1 py-2.5 rounded font-mono text-[12px] font-semibold"
-              style={{ background: 'var(--emerald)', color: '#05070a', opacity: busy ? 0.6 : 1 }}>
+            <button
+              type="button"
+              disabled={busy || !email.includes('@')}
+              onClick={requestCode}
+              style={{
+                flex: 1, padding: '12px 14px', borderRadius: 8, border: 'none',
+                background: green, color: bg, fontWeight: 700, fontSize: 13,
+                cursor: busy ? 'wait' : 'pointer', opacity: (busy || !email.includes('@')) ? 0.55 : 1,
+              }}
+            >
               {busy ? 'Sending…' : 'Send code'}
             </button>
           ) : (
             <>
-              <button type="button" disabled={busy} onClick={() => setStep('email')}
-                className="px-3 py-2.5 rounded font-mono text-[12px]"
-                style={{ background: 'var(--panel2)', color: 'var(--textDim)' }}>Back</button>
-              <button type="button" disabled={busy || code.length !== 6} onClick={verifyCode}
-                className="flex-1 py-2.5 rounded font-mono text-[12px] font-semibold"
-                style={{ background: 'var(--emerald)', color: '#05070a', opacity: busy ? 0.6 : 1 }}>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => { setStep('email'); setErr(''); setMsg(''); }}
+                style={{
+                  padding: '12px 14px', borderRadius: 8, border: `1px solid ${border}`,
+                  background: panel2, color: dim, fontSize: 13, cursor: 'pointer',
+                }}
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                disabled={busy || code.length !== 6}
+                onClick={verifyCode}
+                style={{
+                  flex: 1, padding: '12px 14px', borderRadius: 8, border: 'none',
+                  background: green, color: bg, fontWeight: 700, fontSize: 13,
+                  cursor: busy ? 'wait' : 'pointer', opacity: (busy || code.length !== 6) ? 0.55 : 1,
+                }}
+              >
                 {busy ? 'Checking…' : 'Log in'}
               </button>
             </>
           )}
         </div>
-        <div className="font-mono text-[10px] leading-relaxed pt-2 border-t" style={{ borderColor: 'var(--border)', color: 'var(--textFaint)' }}>
-          Install on phone: browser menu → Add to Home Screen.<br />
-          Desktop (Chrome/Edge): install icon in the address bar.
+
+        <div style={{
+          marginTop: 18, paddingTop: 14, borderTop: `1px solid ${border}`,
+          fontSize: 11, lineHeight: 1.5, color: faint,
+        }}>
+          <div style={{ marginBottom: 6 }}><strong style={{ color: dim }}>Install on phone:</strong> browser menu → Add to Home Screen</div>
+          <div><strong style={{ color: dim }}>Install on desktop:</strong> Chrome/Edge → install icon in the address bar</div>
         </div>
       </div>
     </div>
@@ -2084,7 +2172,12 @@ export default function OmniceeDashboard() {
   const feed = useLiveFeed();
 
   if (!user) {
-    return <LoginGate onAuthed={(u) => setUser(u)} />;
+    return (
+      <>
+        <ThemeStyle />
+        <LoginGate onAuthed={(u) => setUser({ email: u.email })} />
+      </>
+    );
   }
 
   const handleCommand = useCallback((raw) => {
