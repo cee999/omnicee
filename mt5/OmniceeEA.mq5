@@ -1,415 +1,87 @@
 //+------------------------------------------------------------------+
-//|                                                  OmniceeEA.mq5   |
-//|                         OMNICEE AI Trading System                 |
-//|                         Developed by James Yelbert                |
+//| OmniceeEA.mq5                                                    |
+//| OMNICEE AI Trading System                                        |
+//| Developed by James Yelbert                                       |
 //+------------------------------------------------------------------+
-#property copyright   "James Yelbert - OMNICEE"
-#property link        "https://github.com/cee999/omnicee"
-#property version     "1.00"
-#property description "OMNICEE bridge: pushes Exness/MT5 bid-ask live + executes APPROVED signals only."
+#property copyright "James Yelbert - OMNICEE"
+#property link      "https://github.com/cee999/omnicee"
+#property version   "1.10"
+#property description "OMNICEE bridge: live Exness/MT5 prices + approved signal execution"
 
-#include <Trade\Trade.mqh>
+#include <Trade/Trade.mqh>
 
-//+------------------------------------------------------------------+
-//| Input parameters                                                  |
-//+------------------------------------------------------------------+
-input string   InpServerURL   = "https://omnicee.onrender.com"; // OMNICEE Server URL (must be in MT5 WebRequest allow list)
-input string   InpEASecret    = "17380504905193";                              // EA Secret (leave blank if none)
-input int      InpPollSeconds = 5;                               // Poll interval (seconds)
-input int      InpBalanceSync = 60;                              // Balance sync interval (seconds)
-input int      InpPriceSync   = 1;                                // Broker bid/ask push interval (1s = live Exness prices)
-input int      InpSlippage    = 10;                              // Max slippage (points)
-input int      InpMagicNumber = 777888;                          // EA Magic Number
-input bool     InpShowAlerts  = true;                            // Show alerts on execution
+//--- inputs
+input string InpServerURL   = "https://omnicee.onrender.com";
+input string InpEASecret    = "17380504905193";
+input int    InpPollSeconds = 5;
+input int    InpBalanceSync = 60;
+input int    InpPriceSync   = 1;
+input int    InpSlippage    = 10;
+input int    InpMagicNumber = 777888;
+input bool   InpShowAlerts  = true;
 
-//+------------------------------------------------------------------+
-//| Global variables                                                  |
-//+------------------------------------------------------------------+
-CTrade trade;
-datetime lastPollTime   = 0;
-datetime lastBalanceSync = 0;
-datetime lastPriceSync  = 0;
-int      pollIntervalSec;
-int      balanceSyncSec;
-int      priceSyncIntervalSec;
+//--- globals
+CTrade   trade;
+datetime lastPollTime     = 0;
+datetime lastBalanceSync  = 0;
+datetime lastPriceSync    = 0;
+datetime lastPriceLog     = 0;
+int      pollIntervalSec  = 5;
+int      balanceSyncSec   = 60;
+int      priceSyncIntervalSec = 1;
 
-// Symbols OMNICEE tracks for its live price ticker - kept as a parallel
-// list to MapSymbol() below since MQL5 has no clean way to enumerate "every
-// key MapSymbol() knows about". Add a symbol here AND to MapSymbol() to
-// report it; a symbol your broker doesn't offer is skipped automatically
-// (see SendPriceTicks() - SymbolSelect() failing just skips it, not a $0 tick).
-string OmniceeSymbols[] = {"BTCUSDT", "ETHUSDT", "EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "USOIL", "UUP"};
+string OmniceeSymbols[] = {"BTCUSDT","ETHUSDT","EURUSD","GBPUSD","USDJPY","XAUUSD","USOIL","UUP"};
 
-//+------------------------------------------------------------------+
-//| Symbol name mapping: OMNICEE symbol → MT5 broker symbol           |
-//| Adjust the right side to match your Exness symbol names           |
 //+------------------------------------------------------------------+
 string MapSymbol(string omniceeSymbol)
 {
-   // Crypto
-   if(omniceeSymbol == "BTCUSDT")   return "BTCUSDm";  // Exness crypto
-   if(omniceeSymbol == "ETHUSDT")   return "ETHUSDm";
-   
-   // Forex - most brokers use standard names
-   if(omniceeSymbol == "EURUSD")    return "EURUSDm";
-   if(omniceeSymbol == "GBPUSD")    return "GBPUSDm";
-   if(omniceeSymbol == "USDJPY")    return "USDJPYm";
-   
-   // Commodities
-   if(omniceeSymbol == "XAUUSD")    return "XAUUSDm";
-   if(omniceeSymbol == "USOIL")     return "USOILm";
-   if(omniceeSymbol == "UUP")       return "USDXm";  // Exness dollar index if available
-   
-   // Default: try the symbol as-is
+   if(omniceeSymbol == "BTCUSDT") return "BTCUSDm";
+   if(omniceeSymbol == "ETHUSDT") return "ETHUSDm";
+   if(omniceeSymbol == "EURUSD")  return "EURUSDm";
+   if(omniceeSymbol == "GBPUSD")  return "GBPUSDm";
+   if(omniceeSymbol == "USDJPY")  return "USDJPYm";
+   if(omniceeSymbol == "XAUUSD")  return "XAUUSDm";
+   if(omniceeSymbol == "USOIL")   return "USOILm";
+   if(omniceeSymbol == "UUP")     return "USDXm";
    return omniceeSymbol;
 }
 
 //+------------------------------------------------------------------+
-//| Expert initialization                                             |
-//+------------------------------------------------------------------+
-int OnInit()
-{
-   trade.SetExpertMagicNumber(InpMagicNumber);
-   trade.SetDeviationInPoints(InpSlippage);
-   trade.SetTypeFilling(ORDER_FILLING_IOC);
-   
-   pollIntervalSec  = MathMax(InpPollSeconds, 3);
-   balanceSyncSec   = MathMax(InpBalanceSync, 30);
-   priceSyncIntervalSec = MathMax(InpPriceSync, 1);
-   
-   Print("=== OMNICEE EA Initialized ===");
-   Print("Server: ", InpServerURL);
-   Print("Poll interval: ", pollIntervalSec, "s");
-   Print("Balance sync: ", balanceSyncSec, "s");
-   Print("Price sync: ", priceSyncIntervalSec, "s (", ArraySize(OmniceeSymbols), " symbols)");
-   Print("Magic: ", InpMagicNumber);
-   
-   // Timer drives price/balance/signal poll even when the chart has no ticks.
-   // OnTick alone is unreliable for steady 1s broker price push.
-   EventSetTimer(1);
-   
-   // Sync balance + prices immediately
-   SyncBalance();
-   SendPriceTicks();
-   
-   return INIT_SUCCEEDED;
-}
-
-//+------------------------------------------------------------------+
-//| Expert deinitialization                                           |
-//+------------------------------------------------------------------+
-void OnDeinit(const int reason)
-{
-   EventKillTimer();
-   Print("=== OMNICEE EA Stopped ===");
-}
-
-//+------------------------------------------------------------------+
-//| Timer - reliable 1s broker price push (does not depend on ticks)  |
-//+------------------------------------------------------------------+
-void OnTimer()
-{
-   datetime now = TimeCurrent();
-   
-   if(now - lastPollTime >= pollIntervalSec)
-   {
-      lastPollTime = now;
-      PollApprovedSignals();
-   }
-   
-   if(now - lastBalanceSync >= balanceSyncSec)
-   {
-      lastBalanceSync = now;
-      SyncBalance();
-   }
-   
-   if(now - lastPriceSync >= priceSyncIntervalSec)
-   {
-      lastPriceSync = now;
-      SendPriceTicks();
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Expert tick - kept for instant reaction; timer is the authority   |
-//+------------------------------------------------------------------+
-void OnTick()
-{
-   // Prices are pushed on the timer. Optional extra push on busy ticks:
-   if(TimeCurrent() - lastPriceSync >= priceSyncIntervalSec)
-   {
-      lastPriceSync = TimeCurrent();
-      SendPriceTicks();
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Poll the OMNICEE API for approved signals                        |
-//+------------------------------------------------------------------+
-void PollApprovedSignals()
-{
-   string url = InpServerURL + "/api/ea/signals";
-   if(InpEASecret != "")
-      url += "?secret=" + InpEASecret;
-   
-   string headers = "Content-Type: application/json\r\n";
-   if(InpEASecret != "")
-      headers += "X-EA-Secret: " + InpEASecret + "\r\n";
-   
-   char   postData[];
-   char   result[];
-   string resultHeaders;
-   
-   int res = WebRequest("GET", url, headers, 5000, postData, result, resultHeaders);
-   
-   if(res != 200)
-   {
-      if(res == -1)
-         Print("[OMNICEE] WebRequest failed. Add ", InpServerURL, " to Tools → Options → Expert Advisors → Allowed URLs");
-      else
-         Print("[OMNICEE] API error, HTTP ", res);
-      return;
-   }
-   
-   string json = CharArrayToString(result);
-   
-   // Parse signals from JSON response
-   // Expected: {"ok":true,"signals":[{...}]}
-   if(StringFind(json, "\"signals\":[]") >= 0)
-      return; // No pending signals
-   
-   // Extract each signal
-   int signalStart = 0;
-   while(true)
-   {
-      signalStart = StringFind(json, "\"id\":\"", signalStart);
-      if(signalStart < 0) break;
-      
-      string signalId = ExtractJsonString(json, "id", signalStart);
-      string symbol   = ExtractJsonString(json, "symbol", signalStart);
-      string action   = ExtractJsonString(json, "action", signalStart);
-      double slPrice  = ExtractNestedDouble(json, "stopLoss", "price", signalStart);
-      double tp1Price = ExtractNestedDouble(json, "targets", "tp1", signalStart);
-      double riskPct  = ExtractJsonDouble(json, "riskPct", signalStart);
-      
-      if(signalId == "" || symbol == "" || action == "")
-      {
-         signalStart++;
-         continue;
-      }
-      
-      // Map to broker symbol
-      string brokerSymbol = MapSymbol(symbol);
-      
-      // Check if symbol exists on this broker
-      if(!SymbolSelect(brokerSymbol, true))
-      {
-         Print("[OMNICEE] Symbol not available: ", brokerSymbol, " (from ", symbol, ")");
-         // Try without suffix
-         brokerSymbol = symbol;
-         if(!SymbolSelect(brokerSymbol, true))
-         {
-            Print("[OMNICEE] Symbol also not available as: ", brokerSymbol);
-            signalStart++;
-            continue;
-         }
-      }
-      
-      // Execute the trade
-      bool executed = ExecuteTrade(brokerSymbol, action, slPrice, tp1Price, riskPct);
-      
-      if(executed)
-      {
-         // Report execution back to OMNICEE
-         ReportExecution(signalId, brokerSymbol, trade.ResultPrice(),
-                         slPrice, tp1Price, trade.ResultVolume(), (long)trade.ResultOrder());
-         
-         if(InpShowAlerts)
-            Alert("[OMNICEE] Trade executed: ", action, " ", brokerSymbol);
-      }
-      
-      signalStart++;
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Execute a trade with proper lot sizing                           |
-//+------------------------------------------------------------------+
-bool ExecuteTrade(string symbol, string action, double sl, double tp, double riskPct)
-{
-   double balance   = AccountInfoDouble(ACCOUNT_BALANCE);
-   double riskUSD   = balance * (riskPct / 100.0);
-   double point     = SymbolInfoDouble(symbol, SYMBOL_POINT);
-   double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
-   double tickSize  = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
-   double minLot    = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
-   double maxLot    = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
-   double lotStep   = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
-   
-   double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
-   double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
-   
-   if(ask == 0 || bid == 0)
-   {
-      Print("[OMNICEE] Cannot get price for ", symbol);
-      return false;
-   }
-   
-   // FIX: sl==0 (e.g. from a JSON parse failure upstream in
-   // ExtractNestedDouble, or a malformed/missing field in the API response)
-   // was NOT caught here. MathAbs(entryPrice - 0) == entryPrice, a large
-   // positive number, which SAILED PAST the `slDistance <= 0` check below.
-   // The trade would then be sent to trade.Buy()/trade.Sell() with sl=0,
-   // which MT5 interprets as "no stop loss at all" - a real, live,
-   // completely unprotected position opened silently because of a parsing
-   // hiccup, with no error and no warning. Reject outright instead.
-   if(sl <= 0)
-   {
-      Print("[OMNICEE] Refusing trade - stop loss missing or invalid (sl=", sl, ") for ", symbol);
-      return false;
-   }
-   if(tp <= 0)
-   {
-      Print("[OMNICEE] Refusing trade - take profit missing or invalid (tp=", tp, ") for ", symbol);
-      return false;
-   }
-   
-   // Calculate lot size based on risk
-   double entryPrice = (action == "LONG") ? ask : bid;
-   double slDistance  = MathAbs(entryPrice - sl);
-   
-   if(slDistance <= 0 || tickValue <= 0 || tickSize <= 0)
-   {
-      Print("[OMNICEE] Invalid SL distance or tick info for ", symbol);
-      return false;
-   }
-   
-   // FIX: also guard against SL being on the wrong side of entry (e.g. a
-   // stale/mismatched price feed, or an upstream direction bug) - placing a
-   // LONG with SL above entry, or a SHORT with SL below entry, would either
-   // be rejected by the broker or (worse) instantly stop the position out
-   // in the wrong direction with no real protection.
-   if((action == "LONG" && sl >= entryPrice) || (action == "SHORT" && sl <= entryPrice))
-   {
-      Print("[OMNICEE] Refusing trade - SL is on the wrong side of entry for ", action, " ", symbol,
-            " (entry=", entryPrice, ", sl=", sl, ")");
-      return false;
-   }
-   
-   double slTicks = slDistance / tickSize;
-   double lotSize = riskUSD / (slTicks * tickValue);
-   
-   // Normalize lot size
-   lotSize = MathFloor(lotSize / lotStep) * lotStep;
-   lotSize = MathMax(lotSize, minLot);
-   lotSize = MathMin(lotSize, maxLot);
-   lotSize = NormalizeDouble(lotSize, 2);
-   
-   Print("[OMNICEE] ", action, " ", symbol, " | Lot: ", lotSize, 
-         " | Entry: ", entryPrice, " | SL: ", sl, " | TP: ", tp,
-         " | Risk: $", DoubleToString(riskUSD, 2));
-   
-   bool result = false;
-   
-   if(action == "LONG")
-   {
-      result = trade.Buy(lotSize, symbol, ask, sl, tp, "OMNICEE Signal");
-   }
-   else if(action == "SHORT")
-   {
-      result = trade.Sell(lotSize, symbol, bid, sl, tp, "OMNICEE Signal");
-   }
-   
-   if(!result)
-   {
-      Print("[OMNICEE] Trade failed: ", trade.ResultRetcodeDescription());
-      return false;
-   }
-   
-   Print("[OMNICEE] Trade placed! Ticket: ", trade.ResultOrder());
-   return true;
-}
-
-//+------------------------------------------------------------------+
-//| Report trade execution back to OMNICEE server                    |
-//+------------------------------------------------------------------+
-void ReportExecution(string signalId, string symbol, double entryPrice,
-                     double sl, double tp, double lotSize, long ticket)
-{
-   string url = InpServerURL + "/api/ea/executed";
-   
-   string headers = "Content-Type: application/json\r\n";
-   if(InpEASecret != "")
-      headers += "X-EA-Secret: " + InpEASecret + "\r\n";
-   
-   string body = "{" +
-      "\"signalId\":\"" + signalId + "\"," +
-      "\"lotSize\":" + DoubleToString(lotSize, 2) + "," +
-      "\"entryPrice\":" + DoubleToString(entryPrice, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)) + "," +
-      "\"sl\":" + DoubleToString(sl, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)) + "," +
-      "\"tp\":" + DoubleToString(tp, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)) + "," +
-      "\"ticket\":" + IntegerToString(ticket) +
-   "}";
-   
-   char postData[];
-   StringToCharArray(body, postData, 0, WHOLE_ARRAY, CP_UTF8);
-   // Remove null terminator
-   ArrayResize(postData, ArraySize(postData) - 1);
-   
-   char   result[];
-   string resultHeaders;
-   
-   int res = WebRequest("POST", url, headers, 5000, postData, result, resultHeaders);
-   
-   if(res == 200)
-      Print("[OMNICEE] Execution reported for signal: ", signalId);
-   else
-      Print("[OMNICEE] Failed to report execution, HTTP ", res);
-}
-
-//+------------------------------------------------------------------+
-//| Sync account balance to OMNICEE server                           |
-//+------------------------------------------------------------------+
 void SyncBalance()
 {
    string url = InpServerURL + "/api/ea/balance";
-   
    string headers = "Content-Type: application/json\r\n";
    if(InpEASecret != "")
       headers += "X-EA-Secret: " + InpEASecret + "\r\n";
-   
+
    double balance    = AccountInfoDouble(ACCOUNT_BALANCE);
    double equity     = AccountInfoDouble(ACCOUNT_EQUITY);
    double margin     = AccountInfoDouble(ACCOUNT_MARGIN);
    double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
-   
-   string body = "{" +
-      "\"balance\":"    + DoubleToString(balance, 2)    + "," +
-      "\"equity\":"     + DoubleToString(equity, 2)     + "," +
-      "\"margin\":"     + DoubleToString(margin, 2)     + "," +
-      "\"freeMargin\":" + DoubleToString(freeMargin, 2) +
-   "}";
-   
+
+   string body = "{"
+      + "\"balance\":"    + DoubleToString(balance, 2)    + ","
+      + "\"equity\":"     + DoubleToString(equity, 2)     + ","
+      + "\"margin\":"     + DoubleToString(margin, 2)     + ","
+      + "\"freeMargin\":" + DoubleToString(freeMargin, 2)
+      + "}";
+
    char postData[];
    StringToCharArray(body, postData, 0, WHOLE_ARRAY, CP_UTF8);
    ArrayResize(postData, ArraySize(postData) - 1);
-   
-   char   result[];
+
+   char result[];
    string resultHeaders;
-   
    int res = WebRequest("POST", url, headers, 5000, postData, result, resultHeaders);
-   
+
    if(res == 200)
       Print("[OMNICEE] Balance synced: $", DoubleToString(balance, 2));
    else if(res == -1)
       Print("[OMNICEE] Balance sync failed - add URL to allowed list");
+   else
+      Print("[OMNICEE] Balance sync HTTP ", res);
 }
 
-//+------------------------------------------------------------------+
-//| Push live bid/ask ticks for every OMNICEE-tracked symbol         |
-//| SymbolInfoDouble() works for any symbol in Market Watch, not just|
-//| the chart this EA is attached to - one EA instance can report    |
-//| the whole watchlist this way.                                    |
 //+------------------------------------------------------------------+
 void SendPriceTicks()
 {
@@ -421,26 +93,29 @@ void SendPriceTicks()
       string omniceeSymbol = OmniceeSymbols[i];
       string mt5Symbol     = MapSymbol(omniceeSymbol);
 
-      // SymbolSelect() failing (broker doesn't offer this symbol, or the
-      // name mapping in MapSymbol() is wrong for your broker) means skip
-      // it - SymbolInfoDouble() on an unselected symbol silently returns 0,
-      // which would otherwise send a fake $0 price instead of just omitting
-      // a symbol your broker doesn't carry.
-      if(!SymbolSelect(mt5Symbol, true)) continue;
+      if(!SymbolSelect(mt5Symbol, true))
+      {
+         // try without suffix
+         mt5Symbol = omniceeSymbol;
+         if(!SymbolSelect(mt5Symbol, true))
+            continue;
+      }
 
       double bid = SymbolInfoDouble(mt5Symbol, SYMBOL_BID);
       double ask = SymbolInfoDouble(mt5Symbol, SYMBOL_ASK);
-      if(bid <= 0) continue;
+      if(bid <= 0.0) continue;
 
       if(sent > 0) body += ",";
-      body += "{\"symbol\":\"" + omniceeSymbol + "\",\"bid\":" + DoubleToString(bid, 5) +
-              ",\"ask\":" + DoubleToString(ask, 5) +
-              ",\"timestamp\":" + IntegerToString((long)TimeGMT() * 1000) + "}";
+      body += "{\"symbol\":\"" + omniceeSymbol
+         + "\",\"bid\":" + DoubleToString(bid, 5)
+         + ",\"ask\":" + DoubleToString(ask, 5)
+         + ",\"timestamp\":" + IntegerToString((long)TimeGMT() * 1000)
+         + "}";
       sent++;
    }
 
    body += "]}";
-   if(sent == 0) return; // nothing selectable this cycle - try again next tick
+   if(sent == 0) return;
 
    string url = InpServerURL + "/api/ea/prices";
    string headers = "Content-Type: application/json\r\n";
@@ -451,128 +126,245 @@ void SendPriceTicks()
    StringToCharArray(body, postData, 0, WHOLE_ARRAY, CP_UTF8);
    ArrayResize(postData, ArraySize(postData) - 1);
 
-   char   result[];
+   char result[];
    string resultHeaders;
-
    int res = WebRequest("POST", url, headers, 5000, postData, result, resultHeaders);
 
-   // Log failures always (throttled success so Experts is readable)
    if(res == -1)
-      Print("[OMNICEE] Price sync failed - add URL to Tools→Options→Expert Advisors allowed list");
+      Print("[OMNICEE] Price sync failed - add URL to Tools -> Options -> Expert Advisors allowed list");
    else if(res != 200)
-      Print("[OMNICEE] Price sync HTTP ", res, " (sent ", sent, " symbols) - check EA_SECRET / server");
+      Print("[OMNICEE] Price sync HTTP ", res, " (sent ", sent, " symbols)");
    else if(TimeCurrent() - lastPriceLog >= 30)
    {
       lastPriceLog = TimeCurrent();
-      Print("[OMNICEE] Broker prices OK - ", sent, " symbols pushed (e.g. XAUUSD bid live)");
+      Print("[OMNICEE] Broker prices OK - ", sent, " symbols pushed");
    }
 }
 
 //+------------------------------------------------------------------+
-//| JSON string extraction helper                                     |
-//+------------------------------------------------------------------+
-string ExtractJsonString(string &json, string key, int startPos)
+string ExtractJsonString(string json, string key, int startPos)
 {
    string search = "\"" + key + "\":\"";
    int pos = StringFind(json, search, startPos);
    if(pos < 0) return "";
-   
    int valStart = pos + StringLen(search);
    int valEnd   = StringFind(json, "\"", valStart);
    if(valEnd < 0) return "";
-   
    return StringSubstr(json, valStart, valEnd - valStart);
 }
 
 //+------------------------------------------------------------------+
-//| JSON double extraction helper                                     |
-//+------------------------------------------------------------------+
-double ExtractJsonDouble(string &json, string key, int startPos)
+double ExtractJsonNumber(string json, string key, int startPos)
 {
    string search = "\"" + key + "\":";
    int pos = StringFind(json, search, startPos);
-   if(pos < 0) return 0;
-   
-   int valStart = pos + StringLen(search);
-   string rest  = StringSubstr(json, valStart, 20);
-   
-   // Find end of number
-   string numStr = "";
-   for(int i = 0; i < StringLen(rest); i++)
+   if(pos < 0)
    {
-      ushort ch = StringGetCharacter(rest, i);
-      if((ch >= '0' && ch <= '9') || ch == '.' || ch == '-')
-         numStr += CharToString((uchar)ch);
-      else
-         break;
+      search = "\"" + key + "\": ";
+      pos = StringFind(json, search, startPos);
+      if(pos < 0) return 0;
    }
-   
-   if(numStr == "") return 0;
-   return StringToDouble(numStr);
+   int valStart = pos + StringLen(search);
+   while(valStart < StringLen(json) && (StringGetCharacter(json, valStart) == ' ' || StringGetCharacter(json, valStart) == '\t'))
+      valStart++;
+   int valEnd = valStart;
+   while(valEnd < StringLen(json))
+   {
+      ushort ch = StringGetCharacter(json, valEnd);
+      if((ch < '0' || ch > '9') && ch != '.' && ch != '-' && ch != '+')
+         break;
+      valEnd++;
+   }
+   if(valEnd <= valStart) return 0;
+   return StringToDouble(StringSubstr(json, valStart, valEnd - valStart));
 }
 
 //+------------------------------------------------------------------+
-//| Extract nested double like "stopLoss":{"price":1234.56}          |
-//+------------------------------------------------------------------+
-double ExtractNestedDouble(string &json, string outerKey, string innerKey, int startPos)
+bool PlaceTrade(string symbol, string action, double sl, double tp)
 {
-   string search = "\"" + outerKey + "\":{";
-   int pos = StringFind(json, search, startPos);
-   if(pos < 0) return 0;
-
-   int searchEnd = MathMin(pos + 400, StringLen(json));
-   string sub = StringSubstr(json, pos, searchEnd - pos);
-
-   // FIX: this previously searched for "innerKey": and then greedily skipped
-   // every non-digit character (including innerKey's own opening brace and
-   // the literal word "price") until it happened to land on the first digit
-   // it found anywhere after. For a flat structure like stopLoss:{price:X}
-   // that landed on the right number by construction, but for a
-   // double-nested structure like targets:{tp1:{price:X}} it only "worked"
-   // because price is currently serialized as the FIRST key inside the tp1
-   // object (see sl-tp-engine.js's _resolveTarget) - with zero validation
-   // that it found the right field. If that field order ever changed, this
-   // would silently feed a wrong SL/TP price into a live trade with no error
-   // at all. Now explicitly distinguishes double-nested lookups (find
-   // innerKey's own "{", then "price": specifically inside that scope) from
-   // flat lookups (innerKey IS the field name, e.g. stopLoss.price).
-   string innerObjSearch = "\"" + innerKey + "\":{";
-   int innerObjPos = StringFind(sub, innerObjSearch, 0);
-
-   int valStart = -1;
-   if(innerObjPos >= 0)
+   string mt5Symbol = MapSymbol(symbol);
+   if(!SymbolSelect(mt5Symbol, true))
    {
-      // Double-nested case, e.g. targets.tp1.price
-      int scopeStart   = innerObjPos + StringLen(innerObjSearch);
-      string priceSearch = "\"price\":";
-      int pricePos = StringFind(sub, priceSearch, scopeStart);
-      // Sanity bound: "price" must appear reasonably close to where the
-      // inner object started, or we've likely run into a sibling/unrelated field.
-      if(pricePos < 0 || pricePos - scopeStart > 150) return 0;
-      valStart = pricePos + StringLen(priceSearch);
-   }
-   else
-   {
-      // Flat case, e.g. stopLoss.price - innerKey IS the field name itself
-      string flatSearch = "\"" + innerKey + "\":";
-      int flatPos = StringFind(sub, flatSearch, 0);
-      if(flatPos < 0) return 0;
-      valStart = flatPos + StringLen(flatSearch);
+      mt5Symbol = symbol;
+      if(!SymbolSelect(mt5Symbol, true))
+      {
+         Print("[OMNICEE] Symbol not available: ", symbol);
+         return false;
+      }
    }
 
-   string numStr = "";
-   for(int i = valStart; i < StringLen(sub); i++)
+   double ask = SymbolInfoDouble(mt5Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(mt5Symbol, SYMBOL_BID);
+   double tickSize  = SymbolInfoDouble(mt5Symbol, SYMBOL_TRADE_TICK_SIZE);
+   double tickValue = SymbolInfoDouble(mt5Symbol, SYMBOL_TRADE_TICK_VALUE);
+   double minLot    = SymbolInfoDouble(mt5Symbol, SYMBOL_VOLUME_MIN);
+   double maxLot    = SymbolInfoDouble(mt5Symbol, SYMBOL_VOLUME_MAX);
+   double lotStep   = SymbolInfoDouble(mt5Symbol, SYMBOL_VOLUME_STEP);
+   double balance   = AccountInfoDouble(ACCOUNT_BALANCE);
+   double riskUSD   = balance * 0.01;
+
+   if(sl <= 0.0)
    {
-      ushort ch = StringGetCharacter(sub, i);
-      if((ch >= '0' && ch <= '9') || ch == '.' || ch == '-')
-         numStr += CharToString((uchar)ch);
-      else if(numStr != "")
-         break;
+      Print("[OMNICEE] Refusing trade - stop loss missing for ", symbol);
+      return false;
+   }
+   if(tp <= 0.0)
+   {
+      Print("[OMNICEE] Refusing trade - take profit missing for ", symbol);
+      return false;
+   }
+
+   double entryPrice = (action == "LONG") ? ask : bid;
+   double slDistance = MathAbs(entryPrice - sl);
+   if(slDistance <= 0.0 || tickValue <= 0.0 || tickSize <= 0.0)
+   {
+      Print("[OMNICEE] Invalid SL distance or tick info for ", symbol);
+      return false;
+   }
+   if((action == "LONG" && sl >= entryPrice) || (action == "SHORT" && sl <= entryPrice))
+   {
+      Print("[OMNICEE] Refusing trade - SL on wrong side for ", action, " ", symbol);
+      return false;
+   }
+
+   double slTicks = slDistance / tickSize;
+   double lotSize = riskUSD / (slTicks * tickValue);
+   lotSize = MathFloor(lotSize / lotStep) * lotStep;
+   lotSize = MathMax(lotSize, minLot);
+   lotSize = MathMin(lotSize, maxLot);
+   lotSize = NormalizeDouble(lotSize, 2);
+
+   Print("[OMNICEE] ", action, " ", mt5Symbol, " lot=", lotSize, " entry=", entryPrice, " sl=", sl, " tp=", tp);
+
+   bool ok = false;
+   if(action == "LONG")
+      ok = trade.Buy(lotSize, mt5Symbol, ask, sl, tp, "OMNICEE Signal");
+   else if(action == "SHORT")
+      ok = trade.Sell(lotSize, mt5Symbol, bid, sl, tp, "OMNICEE Signal");
+
+   if(!ok)
+   {
+      Print("[OMNICEE] Trade failed: ", trade.ResultRetcodeDescription());
+      return false;
+   }
+   Print("[OMNICEE] Trade placed ticket=", trade.ResultOrder());
+   if(InpShowAlerts)
+      Alert("OMNICEE ", action, " ", mt5Symbol);
+   return true;
+}
+
+//+------------------------------------------------------------------+
+void PollApprovedSignals()
+{
+   string url = InpServerURL + "/api/ea/signals";
+   if(InpEASecret != "")
+      url += "?secret=" + InpEASecret;
+
+   string headers = "Content-Type: application/json\r\n";
+   if(InpEASecret != "")
+      headers += "X-EA-Secret: " + InpEASecret + "\r\n";
+
+   char postData[];
+   char result[];
+   string resultHeaders;
+   int res = WebRequest("GET", url, headers, 5000, postData, result, resultHeaders);
+
+   if(res != 200)
+   {
+      if(res == -1)
+         Print("[OMNICEE] WebRequest failed. Add ", InpServerURL, " to allowed URLs");
       else
-         break; // no leading whitespace/garbage expected from Express's compact JSON
+         Print("[OMNICEE] API error, HTTP ", res);
+      return;
    }
 
-   if(numStr == "") return 0;
-   return StringToDouble(numStr);
+   string json = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
+   if(StringFind(json, "\"signals\"") < 0) return;
+
+   // simple scan for signal objects
+   int pos = 0;
+   while(true)
+   {
+      int obj = StringFind(json, "\"symbol\"", pos);
+      if(obj < 0) break;
+      string symbol = ExtractJsonString(json, "symbol", obj);
+      string action = ExtractJsonString(json, "action", obj);
+      if(action == "")
+         action = ExtractJsonString(json, "direction", obj);
+      if(action == "BUY")  action = "LONG";
+      if(action == "SELL") action = "SHORT";
+
+      double sl = ExtractJsonNumber(json, "stopLoss", obj);
+      if(sl <= 0.0) sl = ExtractJsonNumber(json, "sl", obj);
+      double tp = ExtractJsonNumber(json, "takeProfit", obj);
+      if(tp <= 0.0) tp = ExtractJsonNumber(json, "tp", obj);
+      if(tp <= 0.0) tp = ExtractJsonNumber(json, "tp1", obj);
+
+      if(symbol != "" && (action == "LONG" || action == "SHORT") && sl > 0.0 && tp > 0.0)
+         PlaceTrade(symbol, action, sl, tp);
+
+      pos = obj + 8;
+   }
+}
+
+//+------------------------------------------------------------------+
+int OnInit()
+{
+   trade.SetExpertMagicNumber(InpMagicNumber);
+   trade.SetDeviationInPoints(InpSlippage);
+   trade.SetTypeFilling(ORDER_FILLING_IOC);
+
+   pollIntervalSec        = MathMax(InpPollSeconds, 3);
+   balanceSyncSec         = MathMax(InpBalanceSync, 30);
+   priceSyncIntervalSec   = MathMax(InpPriceSync, 1);
+
+   Print("=== OMNICEE EA Initialized ===");
+   Print("Server: ", InpServerURL);
+   Print("Poll: ", pollIntervalSec, "s | Balance: ", balanceSyncSec, "s | Price: ", priceSyncIntervalSec, "s");
+   Print("Symbols: ", ArraySize(OmniceeSymbols), " | Magic: ", InpMagicNumber);
+
+   EventSetTimer(1);
+   SyncBalance();
+   SendPriceTicks();
+   return INIT_SUCCEEDED;
+}
+
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+   EventKillTimer();
+   Print("=== OMNICEE EA Stopped ===");
+}
+
+//+------------------------------------------------------------------+
+void OnTimer()
+{
+   datetime now = TimeCurrent();
+
+   if(now - lastPollTime >= pollIntervalSec)
+   {
+      lastPollTime = now;
+      PollApprovedSignals();
+   }
+   if(now - lastBalanceSync >= balanceSyncSec)
+   {
+      lastBalanceSync = now;
+      SyncBalance();
+   }
+   if(now - lastPriceSync >= priceSyncIntervalSec)
+   {
+      lastPriceSync = now;
+      SendPriceTicks();
+   }
+}
+
+//+------------------------------------------------------------------+
+void OnTick()
+{
+   if(TimeCurrent() - lastPriceSync >= priceSyncIntervalSec)
+   {
+      lastPriceSync = TimeCurrent();
+      SendPriceTicks();
+   }
 }
 //+------------------------------------------------------------------+
