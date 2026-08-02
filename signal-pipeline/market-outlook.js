@@ -159,52 +159,71 @@ class MarketOutlookBuilder {
     };
   }
 
+  /**
+   * Build a short, actionable briefing — only facts we actually have.
+   * No filler about "quiet next week" or empty calendar padding.
+   */
   static _narrative({ tier1Today, tier1Week, tier2Week, tier1NextWeek, tier2NextWeek, perSymbol }) {
     const lines = [];
+    const utcHour = new Date().getUTCHours();
+    let sessionName = 'Off-hours';
+    if (utcHour >= 0 && utcHour < 8) sessionName = 'Asia';
+    else if (utcHour >= 8 && utcHour < 13) sessionName = 'London';
+    else if (utcHour >= 13 && utcHour < 21) sessionName = 'New York / London overlap→NY';
+    else sessionName = 'Late NY / thin liquidity';
+    lines.push(`Session context: ${sessionName} (${String(utcHour).padStart(2, '0')}:00 UTC).`);
 
+    // Calendar — only mention if there is something real
     if (tier1Today.length > 0) {
       const names = tier1Today.map(e => `${e.name} (${e.currency}, ${e.hoursAway.toFixed(1)}h)`).join(', ');
-      lines.push(`Today has ${tier1Today.length} market-moving release${tier1Today.length > 1 ? 's' : ''}: ${names}. Expect size reductions or blackouts around these windows.`);
-    } else {
-      lines.push('No Tier-1 economic releases scheduled today.');
+      lines.push(`Tier-1 today: ${names}. Expect size cuts or blackouts into those windows.`);
+    }
+    const weekEvents = tier1Week.length + tier2Week.length;
+    if (weekEvents > 0) {
+      lines.push(`This week: ${tier1Week.length} Tier-1, ${tier2Week.length} Tier-2 on the calendar.`);
     }
 
-    if (tier1Week.length > 0 || tier2Week.length > 0) {
-      lines.push(`This week: ${tier1Week.length} Tier-1 and ${tier2Week.length} Tier-2 release${(tier1Week.length + tier2Week.length) === 1 ? '' : 's'} ahead.`);
-    }
-
-    if (tier1NextWeek.length > 0 || tier2NextWeek.length > 0) {
-      const names = tier1NextWeek.slice(0, 3).map(e => `${e.name} (${e.currency})`).join(', ');
-      lines.push(`Next week: ${tier1NextWeek.length} Tier-1 and ${tier2NextWeek.length} Tier-2 release${(tier1NextWeek.length + tier2NextWeek.length) === 1 ? '' : 's'} on the calendar${names ? ` — ${names}` : ''}. Positions held into next week should account for these.`);
-    } else {
-      lines.push('Calendar is quiet for the week after next — nothing Tier-1/2 flagged yet, though the calendar does get updated as new events are confirmed.');
-    }
-
-    const tradeable = perSymbol.filter(s => s.tradeability != null).sort((a, b) => (b.tradeability || 0) - (a.tradeability || 0));
-    if (tradeable.length > 0) {
-      const best = tradeable[0];
-      const worst = tradeable[tradeable.length - 1];
-      lines.push(`${best.symbol} shows the strongest regime right now (${best.regime}, tradeability ${best.tradeability}).`);
-      if (worst.symbol !== best.symbol && worst.tradeability < 40) {
-        lines.push(`${worst.symbol} looks choppiest (${worst.regime}, tradeability ${worst.tradeability}) — reduced conviction expected there.`);
-      }
-    }
-
+    // Per-symbol stance from real data only
+    const withRegime = perSymbol.filter(s => s.regime && s.regime !== 'UNKNOWN');
     const blocked = perSymbol.filter(s => s.sessionStatus && s.sessionStatus !== 'CLEAR');
-    if (blocked.length > 0) {
-      lines.push(`Session gate is currently restricting: ${blocked.map(s => `${s.symbol} (${s.sessionStatus})`).join(', ')}.`);
+    const noData = perSymbol.filter(s => !s.regime || s.dataNote);
+
+    if (withRegime.length > 0) {
+      const ranked = [...withRegime].sort((a, b) => (Number(b.tradeability) || 0) - (Number(a.tradeability) || 0));
+      const bits = ranked.map(s => {
+        const tb = s.tradeability != null ? `, tradeability ${Math.round(Number(s.tradeability))}` : '';
+        return `${s.symbol}=${s.regime}${tb}`;
+      });
+      lines.push(`Regimes: ${bits.join(' · ')}.`);
     }
 
-    // Real institutional positioning (CFTC Commitment of Traders) — this is
-    // the honest answer to "what are hedge funds/corporations doing", not a
-    // prediction. Only surfaced when a symbol's positioning is actually at
-    // a historical extreme, since normal-range positioning isn't news.
+    if (blocked.length > 0) {
+      lines.push(`Session gate blocking signals: ${blocked.map(s => `${s.symbol} (${s.sessionReason || s.sessionStatus})`).join('; ')}.`);
+    }
+
+    if (noData.length > 0 && withRegime.length < perSymbol.length) {
+      lines.push(
+        `Awaiting OHLC for regime on: ${noData.map(s => s.symbol).join(', ')} ` +
+        `(need ≥40 bars from MT5 EA or Twelve Data — ticker price alone is not enough).`
+      );
+    }
+
     const extremePositioning = perSymbol.filter(s => s.institutionalPositioning?.isExtreme);
     if (extremePositioning.length > 0) {
       for (const s of extremePositioning) {
         const p = s.institutionalPositioning;
-        lines.push(`${s.symbol}: large speculators (hedge funds) are at the ${Math.round(p.largeSpecPercentile)}th percentile of 3-year positioning as of ${p.date} — ${p.note}.`);
+        lines.push(`${s.symbol} COT extreme: large specs ${Math.round(p.largeSpecPercentile)}th percentile (${p.date}) — ${p.note}.`);
       }
+    }
+
+    // Bottom line for signal mode
+    if (blocked.length === perSymbol.length && perSymbol.length > 0) {
+      lines.push('Bottom line: all tracked symbols are session-restricted right now — signal pipeline will not fire new FX setups until the gate clears.');
+    } else if (withRegime.length > 0) {
+      const best = [...withRegime].sort((a, b) => (Number(b.tradeability) || 0) - (Number(a.tradeability) || 0))[0];
+      lines.push(`Bottom line: focus watchlist on ${best.symbol} (${best.regime}); treat low-tradeability or gated symbols as stand-aside.`);
+    } else {
+      lines.push('Bottom line: no regime scores yet — system is in price-ticker mode only. Attach MT5 EA or enable Twelve Data for analysis-grade candles.');
     }
 
     return lines.join(' ');

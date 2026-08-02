@@ -979,8 +979,17 @@ function IntelTab({ now, outlook, mode }) {
   return (
     <div className="p-4 space-y-4">
       <div className="omni-panel p-4">
-        <SectionHeader icon={Globe2} title="Market Outlook" sub={live ? 'live · signal-pipeline/market-outlook' : undefined} />
-        {narrative ? <p className="text-[12px] leading-relaxed" style={{ color: 'var(--textDim)' }}>{narrative}</p> : <WaitingForBackend height={60} />}
+        <SectionHeader icon={Globe2} title="Market Outlook" sub={live ? 'live briefing · regime + session + calendar' : undefined} />
+        {narrative ? (
+          <ul className="space-y-1.5 list-none p-0 m-0">
+            {String(narrative).split(/(?<=\.)\s+/).filter(Boolean).map((line, i) => (
+              <li key={i} className="text-[12px] leading-relaxed flex gap-2" style={{ color: 'var(--textDim)' }}>
+                <span style={{ color: 'var(--emerald)', flexShrink: 0 }}>▸</span>
+                <span>{line}</span>
+              </li>
+            ))}
+          </ul>
+        ) : <WaitingForBackend height={60} />}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
