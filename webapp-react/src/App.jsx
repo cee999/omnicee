@@ -99,6 +99,7 @@ function normalizeSignal(s) {
 
 const FEEDS = [
   { name: 'Yahoo',        kind: 'free ticks', status: 'unknown' },
+  { name: 'YahooOHLC',    kind: 'free candles', status: 'unknown' },
   { name: 'Binance',      kind: 'crypto ws',  status: 'unknown' },
   { name: 'Bybit',        kind: 'crypto ws',  status: 'unknown' },
   { name: 'TwelveData',   kind: 'fx/commod',  status: 'unknown' },
@@ -1086,146 +1087,77 @@ function IntelTab({ now, outlook, mode }) {
 
 /* ── NEWS ───────────────────────────────────────────────────────────── */
 function NewsTab({ news, mode }) {
-  const [symFilter, setSymFilter] = useState('ALL');
   const live = mode === 'live' && Array.isArray(news);
-
   const items = live ? news : null;
-  const filtered = items === null ? null : symFilter === 'ALL' ? items : items.filter(n => n.symbol === symFilter);
+
+  // Biggest / most recent story first as the main headline
+  const major = items && items.length ? items[0] : null;
+  const rest = items && items.length > 1 ? items.slice(1) : [];
+
+  const when = (dt) => {
+    if (!dt) return '';
+    // support both seconds and milliseconds
+    const ms = dt < 1e12 ? dt * 1000 : dt;
+    return timeAgo(ms);
+  };
 
   return (
     <div className="p-4 space-y-3">
-      <div className="flex items-center gap-2 flex-wrap">
-        <SectionHeader icon={Newspaper} title="Headlines" sub={live ? 'Yahoo Finance + Finnhub' : undefined} />
-        <div className="ml-auto flex gap-1 flex-wrap">
-          {['ALL', ...SYMBOLS].map(s => (
-            <button key={s} onClick={() => setSymFilter(s)}
-              className="font-mono text-[10px] px-2 py-1 rounded uppercase"
-              style={{ background: symFilter === s ? 'var(--emerald)' : 'var(--panel2)', color: symFilter === s ? '#05070a' : 'var(--textDim)' }}>
-              {s}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="omni-panel p-4">
-        {filtered === null ? <WaitingForBackend height={200} /> : filtered.length === 0 ? (
-          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No headlines for this filter yet.</div>
-        ) : (
-          <div className="space-y-0.5 max-h-[560px] overflow-y-auto omni-scroll">
-            {filtered.map((n, i) => (
-              <a key={i} href={n.url || undefined} target={n.url ? '_blank' : undefined} rel="noreferrer"
-                className="omni-row flex items-start gap-3 px-2 py-2.5 rounded border-b" style={{ borderColor: 'var(--border)', textDecoration: 'none', cursor: n.url ? 'pointer' : 'default' }}>
-                {n.image ? (
-                  <img
-                    src={n.image}
-                    alt=""
-                    loading="lazy"
-                    className="rounded object-cover flex-shrink-0"
-                    style={{ width: 64, height: 48, background: 'var(--panel2)' }}
-                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
-                  />
-                ) : (
-                  <div className="flex items-center justify-center rounded flex-shrink-0" style={{ width: 64, height: 48, background: 'var(--panel2)' }}>
-                    <Newspaper size={16} style={{ color: 'var(--textFaint)' }} />
-                  </div>
-                )}
-                <div className="flex-1 min-w-0">
-                  <div className="text-[12px] leading-snug" style={{ color: 'var(--text)' }}>{n.headline}</div>
-                  {n.summary ? (
-                    <div className="text-[10px] mt-0.5 line-clamp-2" style={{ color: 'var(--textDim)' }}>{n.summary}</div>
-                  ) : null}
-                  <div className="font-mono text-[9px] uppercase mt-1" style={{ color: 'var(--textFaint)' }}>
-                    {/* Finnhub's datetime is Unix seconds; timeAgo() expects milliseconds */}
-                    {n.source || 'Unknown'} · {timeAgo((n.datetime || 0) * 1000)} ago{n.symbol ? ` · ${n.symbol}` : ''}
+      <SectionHeader icon={Newspaper} title="Headlines" sub={live ? 'Yahoo Finance + Finnhub · live' : undefined} />
+
+      {items === null ? (
+        <div className="omni-panel p-4"><WaitingForBackend height={200} /></div>
+      ) : items.length === 0 ? (
+        <div className="omni-panel p-4 font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No news yet — wait a few seconds for Yahoo to load.</div>
+      ) : (
+        <>
+          {major && (
+            <a href={major.url || undefined} target={major.url ? '_blank' : undefined} rel="noreferrer"
+              className="omni-panel p-4 block" style={{ textDecoration: 'none', borderColor: 'var(--emerald)' }}>
+              <div className="font-mono text-[9px] uppercase mb-2" style={{ color: 'var(--emerald)' }}>Major story</div>
+              <div className="flex gap-4 items-start">
+                {major.image ? (
+                  <img src={major.image} alt="" className="rounded object-cover flex-shrink-0"
+                    style={{ width: 120, height: 80, background: 'var(--panel2)' }}
+                    onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                ) : null}
+                <div className="min-w-0 flex-1">
+                  <div className="text-[16px] font-semibold leading-snug" style={{ color: 'var(--text)' }}>{major.headline}</div>
+                  {major.summary ? <div className="text-[12px] mt-2 line-clamp-3" style={{ color: 'var(--textDim)' }}>{major.summary}</div> : null}
+                  <div className="font-mono text-[10px] mt-2 uppercase" style={{ color: 'var(--textFaint)' }}>
+                    {major.source || 'News'} · {when(major.datetime)} ago
                   </div>
                 </div>
-              </a>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ── MONITOR ────────────────────────────────────────────────────────── */
-function MonitorTab({ auditLog, feedHealth, uptimeSec, mode, fetchErrors }) {
-  // In live mode, layer the real DataIntegrityMonitor report (name/connected
-  // from /api/health) over the known feed list; feeds it doesn't mention
-  // (e.g. OpenInsider, which is inert without a paid key) keep their static
-  // description rather than disappearing.
-  const liveByName = new Map();
-  for (const f of (feedHealth || [])) {
-    liveByName.set(f.name, f);
-    // backend used to register as BinanceFeed / TwelveDataFeed
-    const short = String(f.name || '').replace(/Feed$/i, '');
-    if (short && short !== f.name) liveByName.set(short, f);
-  }
-  const feeds = FEEDS.map(f => {
-    if (f.status === 'inert') return f;
-    const live = liveByName.get(f.name);
-    if (mode !== 'live' || !live) return f;
-    const status = live.status === 'connected' ? 'live'
-      : live.status === 'disconnected' ? 'down'
-      : live.connected === true ? 'live'
-      : live.connected === false ? 'down'
-      : 'unknown';
-    return { ...f, status };
-  });
-  const uptimeLabel = mode === 'live' && uptimeSec != null
-    ? `${Math.floor(uptimeSec / 3600)}h ${Math.floor((uptimeSec % 3600) / 60)}m`
-    : null;
-  const activeErrors = Object.entries(fetchErrors || {}).filter(([, v]) => v);
-
-  return (
-    <div className="p-4 space-y-4">
-      {activeErrors.length > 0 && (
-        <div className="omni-panel p-4" style={{ borderColor: 'var(--coral)' }}>
-          <SectionHeader icon={ShieldAlert} title="API Diagnostics" sub={`${activeErrors.length} endpoint${activeErrors.length > 1 ? 's' : ''} failing — real reason, not a generic "waiting"`} />
-          <div className="space-y-1.5">
-            {activeErrors.map(([endpoint, message]) => (
-              <div key={endpoint} className="flex items-center gap-2 font-mono text-[11px]">
-                <span className="w-28 shrink-0" style={{ color: 'var(--text)' }}>/api/{endpoint}</span>
-                <span style={{ color: 'var(--coral)' }}>{message}</span>
               </div>
-            ))}
-          </div>
-        </div>
-      )}
-      <div className="omni-panel p-4">
-        <SectionHeader icon={Database} title="Feed Health" sub={`${feeds.filter(f => f.status === 'live').length}/${feeds.length} live${uptimeLabel ? ` · up ${uptimeLabel}` : ''}`} />
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5">
-          {feeds.map(f => (
-            <div key={f.name} className="omni-panel2 p-3">
-              <div className="flex items-center justify-between mb-1">
-                <span className="font-mono text-[11px]" style={{ color: 'var(--text)' }}>{f.name}</span>
-                <Circle size={8} fill="currentColor" style={{
-                  color: f.status === 'live' ? 'var(--emerald)' : f.status === 'degraded' ? 'var(--gold)' : f.status === 'down' ? 'var(--coral)' : 'var(--textFaint)',
-                }} className={f.status === 'live' ? 'omni-pulse' : ''} />
-              </div>
-              <div className="font-mono text-[9px] uppercase" style={{ color: 'var(--textFaint)' }}>{f.kind}</div>
-              {f.note && <div className="font-mono text-[9px] mt-1" style={{ color: 'var(--gold)' }}>{f.note}</div>}
+            </a>
+          )}
+
+          <div className="omni-panel p-4">
+            <div className="space-y-0.5 max-h-[520px] overflow-y-auto omni-scroll">
+              {rest.map((n, i) => (
+                <a key={i} href={n.url || undefined} target={n.url ? '_blank' : undefined} rel="noreferrer"
+                  className="omni-row flex items-start gap-3 px-2 py-2.5 rounded border-b" style={{ borderColor: 'var(--border)', textDecoration: 'none', cursor: n.url ? 'pointer' : 'default' }}>
+                  {n.image ? (
+                    <img src={n.image} alt="" loading="lazy" className="rounded object-cover flex-shrink-0"
+                      style={{ width: 64, height: 48, background: 'var(--panel2)' }}
+                      onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                  ) : (
+                    <div className="flex items-center justify-center rounded flex-shrink-0" style={{ width: 64, height: 48, background: 'var(--panel2)' }}>
+                      <Newspaper size={16} style={{ color: 'var(--textFaint)' }} />
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[12px] leading-snug" style={{ color: 'var(--text)' }}>{n.headline}</div>
+                    <div className="font-mono text-[9px] uppercase mt-1" style={{ color: 'var(--textFaint)' }}>
+                      {n.source || 'News'} · {when(n.datetime)} ago
+                    </div>
+                  </div>
+                </a>
+              ))}
             </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="omni-panel p-4">
-        <SectionHeader icon={ScrollText} title="Audit Trail" sub="every cycle, fired or not" />
-        {auditLog.length === 0 ? <WaitingForBackend height={140} label="No audit entries yet" /> : (
-          <div className="space-y-1 max-h-72 overflow-y-auto omni-scroll">
-            {auditLog.map(e => (
-              <div key={e.id} className="flex items-start gap-2 font-mono text-[10px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
-                <span style={{ color: 'var(--textFaint)' }} className="w-10 shrink-0">{timeAgo(e.timestamp)}</span>
-                <span style={{ color: 'var(--text)' }} className="w-16 shrink-0">{e.symbol}</span>
-                {e.fired
-                  ? <CheckCircle2 size={11} style={{ color: 'var(--emerald)', marginTop: 1, flexShrink: 0 }} />
-                  : <XCircle size={11} style={{ color: 'var(--textFaint)', marginTop: 1, flexShrink: 0 }} />}
-                <span style={{ color: 'var(--textDim)' }}>{e.reasons.join(', ')}</span>
-              </div>
-            ))}
           </div>
-        )}
-      </div>
+        </>
+      )}
     </div>
   );
 }

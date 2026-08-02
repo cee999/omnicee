@@ -145,6 +145,7 @@ const { AlphaVantageFeed }   = loadModule('./feeds/alpha-vantage-feed',         
 const { FinnhubFeed }        = loadModule('./feeds/finnhub-feed',                'FinnhubFeed')       || {};
 const { FMPFeed }            = loadModule('./feeds/fmp-feed',                    'FMPFeed')           || {};
 const { ForexFactoryCalendar } = loadModule('./feeds/forex-factory-calendar',   'ForexFactoryCalendar') || {};
+const { YahooOhlcFeed }        = loadModule('./feeds/yahoo-ohlc-feed',          'YahooOhlcFeed')        || {};
 const { CFTCCotFeed }        = loadModule('./feeds/cftc-cot-feed',               'CFTCCotFeed')       || {};
 const { COTReportParser }    = loadModule('./feeds/cot-report-parser',           'COTReportParser')   || {};
 const { OpportunityRanker }  = loadModule('./signal-pipeline/opportunity-ranker', 'OpportunityRanker') || {};
@@ -420,6 +421,9 @@ async function runAnalysisCycle(symbol, timeframe) {
       sessionQuality = sessionFilter.check(symbol, Date.now());
       if (!sessionQuality.allowed) {
         log.debug(`${key}: session filter blocked — ${sessionQuality.reason}`);
+        try {
+          auditTrail?.record?.({ symbol, timeframe, signalFired: false, blockedReason: `session: ${sessionQuality.reason}`, score: 0 });
+        } catch (_) {}
         return;
       }
     }
@@ -2215,6 +2219,35 @@ function buildFeeds() {
     });
     if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('Yahoo', freeRateFeed, SYMBOLS);
     log.info(`FreeRateFeed configured for: ${SYMBOLS.join(', ')}`);
+  }
+
+  // Yahoo OHLC history — free candles so analysis can run without Twelve Data / MT5
+  if (YahooOhlcFeed && SYMBOLS.length) {
+    const yahooOhlc = new YahooOhlcFeed({ symbols: SYMBOLS, interval: '1h', range: '10d' });
+    yahooOhlc.on('candles', ({ symbol, timeframe, candles }) => {
+      if (!candleStores[symbol]) candleStores[symbol] = {};
+      const prev = candleStores[symbol][timeframe] || [];
+      // Prefer longer history; keep last 500
+      candleStores[symbol][timeframe] = candles.slice(-500);
+      if (candles.length >= 40 && candles.length !== prev.length) {
+        log.info(`YahooOhlc: ${symbol} ${timeframe} loaded ${candles.length} bars (last close ${candles[candles.length - 1]?.close})`);
+      }
+    });
+    yahooOhlc.on('candle', ({ symbol, timeframe, candle, isClosed }) => {
+      // Drive the same pipeline as live WS closed candles
+      try {
+        if (typeof onCandle === 'function') {
+          onCandle({ symbol, timeframe, candle, isClosed: true });
+        }
+      } catch (err) {
+        log.warn(`YahooOhlc onCandle ${symbol}: ${err.message}`);
+      }
+    });
+    yahooOhlc.on('error', (err) => log.warn(`YahooOhlc: ${err.symbol || ''} ${err.error || err.message || err}`));
+    yahooOhlc.on('connected', () => log.info(`YahooOhlcFeed connected — seeding H1 candles for ${SYMBOLS.join(', ')}`));
+    yahooOhlc.start();
+    feeds.push({ name: 'YahooOhlcFeed', instance: yahooOhlc, symbols: SYMBOLS });
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('YahooOHLC', yahooOhlc, SYMBOLS);
   }
 
   // Surface Finnhub in Monitor when a key is present (news + optional FX stream)

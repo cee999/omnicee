@@ -277,9 +277,23 @@ function createApp() {
     if (!live.auditTrail) {
       return res.status(503).json({ ok: false, error: 'Audit trail unavailable — trading engine not yet initialized' });
     }
-    const entries = req.query.symbol
+    const raw = req.query.symbol
       ? live.auditTrail.getBySymbol(req.query.symbol, req.query.limit ? Number(req.query.limit) : 10)
       : live.auditTrail.getRecent(req.query.limit ? Number(req.query.limit) : 20);
+    const entries = (raw || []).map((e, i) => ({
+      id: e.id || `${e.symbol}-${e.recordedAt || i}`,
+      symbol: e.symbol,
+      timeframe: e.timeframe,
+      timestamp: e.recordedAt || e.timestamp || Date.now(),
+      fired: !!(e.signalFired || e.fired),
+      signalFired: !!(e.signalFired || e.fired),
+      action: e.action,
+      score: e.score,
+      reasons: Array.isArray(e.reasons) ? e.reasons
+        : e.blockedReason ? [e.blockedReason]
+        : e.action ? [`${e.action}${e.score != null ? ` score ${e.score}` : ''}`]
+        : ['checked'],
+    }));
     res.json({ ok: true, entries, total: live.auditTrail.size() });
   });
 
