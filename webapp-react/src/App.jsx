@@ -943,14 +943,38 @@ function IntelTab({ now, outlook, mode }) {
   const live = mode === 'live' && outlook;
 
   const narrative = live ? (outlook.narrative || 'No narrative generated yet.') : null;
-  const regimeRows = live ? (outlook.symbols || []).map(s => ({ symbol: s.symbol, regime: s.regime || '—', tradeability: s.tradeability || '—' })) : null;
+  const regimeRows = live ? (outlook.symbols || []).map(s => ({
+    symbol: s.symbol,
+    regime: s.regime || '—',
+    tradeability: s.tradeability,
+    sessionStatus: s.sessionStatus,
+    sessionReason: s.sessionReason || s.sessionStatus,
+    dataNote: s.dataNote,
+    candleCount: s.candleCount,
+    regimeTimeframe: s.regimeTimeframe,
+  })) : null;
   const cotRows = live
-    ? (outlook.symbols || []).filter(s => s.institutionalPositioning).map(s => ({ currency: s.symbol, nonComm: s.institutionalPositioning.largeSpecNet ?? 0, signal: s.institutionalPositioning.signal }))
+    ? (outlook.symbols || []).filter(s => s.institutionalPositioning).map(s => ({
+        currency: s.symbol,
+        nonComm: s.institutionalPositioning.largeSpecNet ?? 0,
+        signal: s.institutionalPositioning.signal,
+        note: s.institutionalPositioning.note,
+      }))
     : null;
+  // Prefer Tier-1, fall back to Tier-2 so the panel is not blank on quiet weeks
   const calendarRows = live
-    ? [...(outlook.today?.tier1Events || []), ...(outlook.week?.tier1Events || [])].slice(0, 6).map(e => ({ event: `${e.name} (${e.currency})`, impact: 'high', mins: Math.max(0, Math.round((e.hoursAway || 0) * 60)) }))
+    ? (() => {
+        const t1 = [...(outlook.today?.tier1Events || []), ...(outlook.week?.tier1Events || [])];
+        const t2 = [...(outlook.week?.tier2Events || [])];
+        const pool = (t1.length ? t1 : t2).slice(0, 8);
+        return pool.map(e => ({
+          event: `${e.name} (${e.currency})`,
+          impact: e.tier === 'TIER_1' || !e.tier ? 'high' : 'medium',
+          mins: Math.max(0, Math.round((e.hoursAway || 0) * 60)),
+          tier: e.tier || 'TIER_1',
+        }));
+      })()
     : null;
-  const newsRows = live ? (outlook.news || []).slice(0, 6).map(n => n.headline) : null;
 
   return (
     <div className="p-4 space-y-4">
@@ -961,41 +985,52 @@ function IntelTab({ now, outlook, mode }) {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="omni-panel p-4">
-          <SectionHeader icon={Activity} title="Regime & Tradeability" sub={live ? 'per symbol' : undefined} />
+          <SectionHeader icon={Activity} title="Regime & Tradeability" sub={live ? 'per symbol · needs OHLC candles' : undefined} />
           {regimeRows === null ? <WaitingForBackend /> : regimeRows.length === 0 ? (
             <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No symbol data yet.</div>
           ) : (
             <div className="space-y-2">
-              {regimeRows.map(r => (
-                <div key={r.symbol} className="flex items-center justify-between font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
-                  <span style={{ color: 'var(--text)' }}>{r.symbol}</span>
-                  <span style={{ color: 'var(--textDim)' }}>{r.regime}</span>
-                  <Pill tone={r.tradeability === 'high' ? 'up' : r.tradeability === 'low' ? 'down' : 'neutral'}>{r.tradeability}</Pill>
-                </div>
-              ))}
+              {regimeRows.map(r => {
+                const tb = r.tradeability;
+                const tbNum = Number(tb);
+                const tbLabel = Number.isFinite(tbNum) ? String(Math.round(tbNum))
+                  : (tb === 'high' || tb === 'low' || tb === 'medium' ? tb : (r.regime === '—' ? '—' : '—'));
+                const tone = Number.isFinite(tbNum)
+                  ? (tbNum >= 65 ? 'up' : tbNum <= 35 ? 'down' : 'neutral')
+                  : (tb === 'high' ? 'up' : tb === 'low' ? 'down' : 'neutral');
+                return (
+                  <div key={r.symbol} className="py-1.5 border-b" style={{ borderColor: 'var(--border)' }}>
+                    <div className="flex items-center justify-between font-mono text-[11px]">
+                      <span style={{ color: 'var(--text)' }}>{r.symbol}</span>
+                      <span style={{ color: 'var(--textDim)' }}>{r.regime}{r.regimeTimeframe ? ` · ${r.regimeTimeframe}` : ''}</span>
+                      <Pill tone={tone}>{tbLabel}</Pill>
+                    </div>
+                    {r.regime === '—' && r.dataNote ? (
+                      <div className="font-mono text-[9px] mt-0.5" style={{ color: 'var(--gold)' }}>{r.dataNote}</div>
+                    ) : null}
+                    {r.sessionStatus && r.sessionStatus !== 'CLEAR' ? (
+                      <div className="font-mono text-[9px] mt-0.5" style={{ color: 'var(--textFaint)' }}>Session: {r.sessionReason || r.sessionStatus}</div>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
 
         <div className="omni-panel p-4">
-          <SectionHeader icon={ShieldAlert} title="CFTC COT Positioning" sub={live ? 'large-spec net, per symbol' : undefined} />
+          <SectionHeader icon={ShieldAlert} title="CFTC COT Positioning" sub={live ? 'large-spec net · FX futures only' : undefined} />
           {cotRows === null ? <WaitingForBackend /> : cotRows.length === 0 ? (
-            <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No COT data available for tracked symbols.</div>
+            <div className="font-mono text-[11px] leading-relaxed" style={{ color: 'var(--textFaint)' }}>
+              No COT rows for current symbols. COT covers CME FX/commodity futures (e.g. EUR, GBP, gold contracts) when the CFTC feed has ingested a weekly report — not crypto spot pairs.
+            </div>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-2">
               {cotRows.map(c => (
-                <div key={c.currency} className="font-mono text-[11px]">
-                  <div className="flex justify-between mb-1">
-                    <span style={{ color: 'var(--text)' }}>{c.currency}</span>
-                    {c.signal && <span style={{ color: 'var(--textFaint)' }}>{c.signal}</span>}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="w-16" style={{ color: 'var(--textFaint)' }}>Large spec</span>
-                    <div className="flex-1 h-1.5 rounded-full" style={{ background: 'var(--border)' }}>
-                      <div className="h-full rounded-full" style={{ width: `${Math.min(100, Math.abs(c.nonComm) / 600)}%`, background: c.nonComm >= 0 ? 'var(--emerald)' : 'var(--coral)' }} />
-                    </div>
-                    <span className="w-14 text-right" style={{ color: 'var(--textDim)' }}>{c.nonComm.toLocaleString()}</span>
-                  </div>
+                <div key={c.currency} className="flex items-center justify-between font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
+                  <span style={{ color: 'var(--text)' }}>{c.currency}</span>
+                  <span style={{ color: 'var(--textDim)' }}>{c.nonComm}</span>
+                  <Pill tone={String(c.signal || '').toLowerCase().includes('long') ? 'up' : String(c.signal || '').toLowerCase().includes('short') ? 'down' : 'neutral'}>{c.signal || '—'}</Pill>
                 </div>
               ))}
             </div>
@@ -1003,35 +1038,23 @@ function IntelTab({ now, outlook, mode }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="omni-panel p-4">
-          <SectionHeader icon={Clock} title="Economic Calendar" sub={live ? 'Myfxbook · tier-1' : undefined} />
-          {calendarRows === null ? <WaitingForBackend /> : calendarRows.length === 0 ? (
-            <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No tier-1 events on the horizon.</div>
-          ) : (
-            <div className="space-y-1.5">
-              {calendarRows.map((e, i) => (
-                <div key={i} className="flex items-center gap-2 font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
-                  <Pill tone={e.impact === 'high' ? 'down' : e.impact === 'medium' ? 'warn' : 'neutral'}>{e.impact}</Pill>
-                  <span className="flex-1" style={{ color: 'var(--textDim)' }}>{e.event}</span>
-                  <span style={{ color: 'var(--textFaint)' }}>in {Math.floor(e.mins / 60)}h{e.mins % 60}m</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="omni-panel p-4">
-          <SectionHeader icon={Newspaper} title="Headlines" sub={live ? 'Finnhub' : undefined} />
-          {newsRows === null ? <WaitingForBackend /> : newsRows.length === 0 ? (
-            <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No headlines returned.</div>
-          ) : (
-            <div className="space-y-1.5">
-              {newsRows.map((n, i) => (
-                <div key={i} className="font-mono text-[11px] py-1 border-b" style={{ color: 'var(--textDim)', borderColor: 'var(--border)' }}>{n}</div>
-              ))}
-            </div>
-          )}
-        </div>
+      <div className="omni-panel p-4">
+        <SectionHeader icon={Clock} title="Economic Calendar" sub={live ? 'Tier-1 / Tier-2 · session filter' : undefined} />
+        {calendarRows === null ? <WaitingForBackend /> : calendarRows.length === 0 ? (
+          <div className="font-mono text-[11px] leading-relaxed" style={{ color: 'var(--textFaint)' }}>
+            No upcoming Tier-1/2 events in the loaded calendar. Events appear after Finnhub/FMP/Myfxbook calendar poll succeeds (needs API keys where required).
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            {calendarRows.map((e, i) => (
+              <div key={i} className="flex items-center gap-2 font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
+                <Pill tone={e.impact === 'high' ? 'down' : e.impact === 'medium' ? 'warn' : 'neutral'}>{e.impact}</Pill>
+                <span className="flex-1" style={{ color: 'var(--textDim)' }}>{e.event}</span>
+                <span style={{ color: 'var(--textFaint)' }}>in {Math.floor(e.mins / 60)}h{e.mins % 60}m</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

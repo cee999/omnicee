@@ -53,17 +53,43 @@ class MarketOutlookBuilder {
     const tier2NextWeek = nextWeek.filter(e => e.tier === 'TIER_2');
 
     const perSymbol = [];
-    for (const symbol of symbols) {
-      const candles = candleStores?.[symbol]?.[timeframe];
-      const entry = { symbol };
+    // Prefer requested TF, then fall back so Yahoo-only / sparse FX still get a regime when any TF has bars
+    const tfOrder = [timeframe, 'H1', 'H4', 'M15', 'M5', 'D1'].filter((v, i, a) => v && a.indexOf(v) === i);
 
-      if (candles && candles.length >= 50 && regimeEngine?.classify) {
+    for (const symbol of symbols) {
+      const entry = { symbol };
+      let candles = null;
+      let usedTf = null;
+      for (const tf of tfOrder) {
+        const arr = candleStores?.[symbol]?.[tf];
+        if (arr && arr.length >= 40) {
+          candles = arr;
+          usedTf = tf;
+          break;
+        }
+      }
+      // Track how much data we have (helps UI explain empty regime)
+      const allCounts = {};
+      for (const tf of tfOrder) {
+        const n = candleStores?.[symbol]?.[tf]?.length || 0;
+        if (n) allCounts[tf] = n;
+      }
+      entry.candleCount = candles?.length || 0;
+      entry.regimeTimeframe = usedTf;
+      entry.candleCounts = allCounts;
+
+      if (candles && candles.length >= 40 && regimeEngine?.classify) {
         try {
           const regime = regimeEngine.classify(candles);
-          entry.regime = regime.regime;
-          entry.tradeability = regime.tradeability;
+          entry.regime = regime.regime || regime.state || 'UNKNOWN';
+          entry.tradeability = regime.tradeability ?? regime.score ?? null;
           entry.reasons = regime.reasons?.slice(0, 2) || [];
         } catch (_) { /* leave regime fields absent if classification fails */ }
+      } else {
+        entry.regime = entry.regime || null;
+        entry.dataNote = Object.keys(allCounts).length
+          ? `Need ≥40 bars (have ${JSON.stringify(allCounts)})`
+          : 'No OHLC candles yet — attach MT5 EA or set TWELVE_DATA_API_KEY';
       }
 
       if (sessionFilter?.check) {
