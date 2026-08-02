@@ -1344,7 +1344,7 @@ function onLivePrice(symbol, price, { change = null, bias = null, source = 'cand
     return;
   }
   // Same rank throttle: broker ticks can be faster (100ms); others 400ms
-  const sameRankMin = source === 'mt5_ea' ? 100 : 400;
+  const sameRankMin = source === 'mt5_ea' ? 50 : 400;
   if (prev && prev.rank === rank && (now - prev.ts) < sameRankMin) {
     return;
   }
@@ -1359,7 +1359,7 @@ function onLivePrice(symbol, price, { change = null, bias = null, source = 'cand
   }
 
   if (wsBus) {
-    const emitMin = source === 'mt5_ea' ? 100 : 400;
+    const emitMin = source === 'mt5_ea' ? 50 : 350;
     if (!lastMarketEmit[symbol] || now - lastMarketEmit[symbol] >= emitMin) {
       lastMarketEmit[symbol] = now;
       wsBus.emit('market_update', {

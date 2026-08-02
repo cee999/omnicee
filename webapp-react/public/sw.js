@@ -24,7 +24,7 @@
  *  invalidated — the 'activate' handler purges anything not matching.
  */
 
-const CACHE_VERSION = 'omnicee-shell-v1';
+const CACHE_VERSION = 'omnicee-shell-v2';
 const SHELL_ASSETS = [
   '/',
   '/manifest.json',
@@ -92,4 +92,14 @@ self.addEventListener('fetch', (event) => {
       return cached || networkFetch;
     })
   );
+});
+
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = event.notification?.data?.url || '/';
+  event.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+    for (const c of list) { if (c.url.includes(self.location.origin) && 'focus' in c) return c.focus(); }
+    if (clients.openWindow) return clients.openWindow(url);
+  }));
 });

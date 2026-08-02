@@ -406,6 +406,9 @@ function useLiveFeed() {
     if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      setTimeout(() => { try { Notification.requestPermission(); } catch (_) {} }, 4000);
+    }
   }, []);
 
   /* Live polling — real backend. Fast loop covers signals/stats (the
@@ -592,7 +595,19 @@ function useLiveFeed() {
       // once Mongo (or the server's memory cache) has it.
       socket.on('signal', payload => {
         if (cancelled || !payload?.id) return;
-        setSignals(prev => prev.some(s => s.id === payload.id) ? prev : [normalizeSignal(payload), ...prev].slice(0, 200));
+        const norm = normalizeSignal(payload);
+        setSignals(prev => prev.some(s => s.id === payload.id) ? prev : [norm, ...prev].slice(0, 200));
+        // Browser push when a real signal arrives
+        try {
+          if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+            const title = `OMNICEE ${norm.symbol} ${norm.action}`;
+            const body = `Score ${norm.score} · ${norm.timeframe || ''} · entry ${norm.entry ?? '—'}`;
+            navigator.serviceWorker?.getRegistration?.().then(reg => {
+              if (reg?.showNotification) reg.showNotification(title, { body, icon: '/icons/icon-192.png', tag: norm.id, data: { url: '/' } });
+              else new Notification(title, { body, icon: '/icons/icon-192.png' });
+            }).catch(() => new Notification(title, { body }));
+          }
+        } catch (_) { /* notification optional */ }
       });
 
       // Complements the /api/stats poll above with push updates the
@@ -623,14 +638,13 @@ function useLiveFeed() {
 
 /* ── Navigation model ───────────────────────────────────────────────── */
 const TABS = [
-  { key: 'DASH', label: 'Dashboard', fkey: 'F1', icon: LayoutDashboard },
+  { key: 'DASH', label: 'Home', fkey: 'F1', icon: LayoutDashboard },
   { key: 'SIGNALS', label: 'Signals', fkey: 'F2', icon: Radio },
   { key: 'INTEL', label: 'Intel', fkey: 'F3', icon: Globe2 },
   { key: 'NEWS', label: 'News', fkey: 'F4', icon: Newspaper },
-  { key: 'MONITOR', label: 'Monitor', fkey: 'F5', icon: Activity },
-  { key: 'HEAT', label: 'Heat', fkey: 'F6', icon: Flame },
-  { key: 'VALID', label: 'Valid', fkey: 'F7', icon: FlaskConical },
-  { key: 'DESK', label: 'Desk', fkey: 'F8', icon: ShieldAlert },
+  { key: 'DESK', label: 'Desk', fkey: 'F5', icon: ShieldAlert },
+  { key: 'VALID', label: 'Valid', fkey: 'F6', icon: FlaskConical },
+  { key: 'MONITOR', label: 'System', fkey: 'F7', icon: Activity },
 ];
 
 function TopBar({ now, mode, socketLive, wakingBackend, onCommand }) {
@@ -752,156 +766,193 @@ function NavBar({ active, onSelect }) {
   );
 }
 
-/* ── DASH ───────────────────────────────────────────────────────────── */
-function DashTab({ signals, equityCurve, equityCurveLive, accountBalance, journalStats, prices, changes, mode }) {
-  const approved = signals.filter(s => s.gate.status === 'approved');
-  const hasJournal = journalStats && journalStats.total > 0;
-  const avgScore = signals.length ? Math.round(signals.reduce((a, s) => a + s.score, 0) / signals.length) : 0;
-  const consensus = AGENTS.map(agent => {
-    const votes = signals.slice(0, 12).flatMap(s => s.agents.filter(a => a.agent === agent));
-    const bull = votes.filter(v => v.direction === 'BUY').length;
-    const total = votes.length || 1;
-    return { agent, bullPct: Math.round((bull / total) * 100) };
-  });
-  // FIX: was `61 + (weird modulo of signal scores)` — a formula that looks
-  // like a real percentage but isn't derived from any actual outcome, and
-  // ran unconditionally regardless of mode. Now uses the real journal win
-  // rate (SignalJournal.getStats(), the same source VALID uses) and is
-  // honest about there being nothing to show until trades have closed.
-  const displayBalance = accountBalance ?? (equityCurveLive ? equityCurve[equityCurve.length - 1]?.equity : null);
 
-  // Live price chart: every real tick (socket 'market' in live mode)
-  // already lands in `prices` — this just keeps a rolling client-side
-  // window of it per symbol instead of discarding it, so there's an
-  // actual chart instead of only a snapshot number. No new backend
-  // endpoint needed; this is the same tick stream the ticker uses.
+function sessionNameUtc(hour) {
+  if (hour >= 0 && hour < 8) return { name: 'Asia', note: 'Typically thinner liquidity — wait for clearer structure.' };
+  if (hour >= 8 && hour < 13) return { name: 'London', note: 'Strong session for FX & gold — look for continuation after London open.' };
+  if (hour >= 13 && hour < 16) return { name: 'London/NY overlap', note: 'Highest activity window — best liquidity for most pairs.' };
+  if (hour >= 16 && hour < 21) return { name: 'New York', note: 'US session — watch USD drivers and gold reaction.' };
+  return { name: 'Off-peak', note: 'Lower volume — fewer high-quality setups expected.' };
+}
+
+function MarketVoice({ now, signals, quotes, outlook, mode }) {
+  const hour = new Date(now).getUTCHours();
+  const sess = sessionNameUtc(hour);
+  const recent = signals.slice(0, 8);
+  const bull = recent.filter(s => s.action === 'BUY' || s.action === 'LONG').length;
+  const bear = recent.filter(s => s.action === 'SELL' || s.action === 'SHORT').length;
+  const liveCount = Object.values(quotes || {}).filter(q => q?.source === 'mt5_ea').length;
+  const lines = [];
+  lines.push(`${sess.name} session (UTC ${String(hour).padStart(2, '0')}:00). ${sess.note}`);
+  if (liveCount > 0) lines.push(`Broker feed live on ${liveCount}/${SYMBOLS.length} symbols — prices are Exness/MT5 based.`);
+  else lines.push('Waiting for MT5 EA ticks — attach OmniceeEA for broker-accurate prices.');
+  if (recent.length === 0) lines.push('No signals fired yet this window. System is scanning; it only speaks when confluence clears the gate.');
+  else lines.push(`Recent book: ${bull} bullish / ${bear} bearish of last ${recent.length} signals.`);
+  if (outlook?.narrative) lines.push(String(outlook.narrative).slice(0, 220));
+  const dayBias = bull > bear + 1 ? 'Day lean: buyers have been more active in recent signals.'
+    : bear > bull + 1 ? 'Day lean: sellers have been more active in recent signals.'
+    : 'Day lean: mixed — no strong one-sided pressure from recent signals.';
+  lines.push(dayBias);
+  return (
+    <div className="omni-panel p-3 md:p-4">
+      <SectionHeader icon={Globe2} title="Market voice" sub="session · day · what the desk is seeing" />
+      <ul className="space-y-2 mt-1">
+        {lines.map((line, i) => (
+          <li key={i} className="font-mono text-[11px] md:text-[12px] leading-relaxed flex gap-2" style={{ color: i === 0 ? 'var(--text)' : 'var(--textDim)' }}>
+            <span style={{ color: 'var(--emerald)' }}>▸</span>
+            <span>{line}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/* ── DASH ───────────────────────────────────────────────────────────── */
+function DashTab({ signals, accountBalance, journalStats, prices, quotes, changes, mode, outlook, now }) {
+  const approved = signals.filter(s => s.gate?.status === 'approved' || s.gate?.status === 'APPROVED');
+  const recent = signals.slice(0, 12);
   const [chartSymbol, setChartSymbol] = useState('XAUUSD');
+  const [ticksOpen, setTicksOpen] = useState(true);
   const [priceHistory, setPriceHistory] = useState(() => Object.fromEntries(SYMBOLS.map(s => [s, []])));
+
   useEffect(() => {
     setPriceHistory(prev => {
       const next = { ...prev };
-      let changed = false;
       SYMBOLS.forEach(sym => {
-        if (prices[sym] == null) return;
-        const arr = prev[sym] || [];
-        if (arr.length && arr[arr.length - 1].price === prices[sym]) return;
-        next[sym] = [...arr, { t: Date.now(), price: prices[sym] }].slice(-180);
-        changed = true;
+        const px = quotes?.[sym]?.price ?? prices?.[sym];
+        if (px == null || !Number.isFinite(Number(px))) return;
+        const arr = next[sym] || [];
+        if (arr.length && arr[arr.length - 1].price === Number(px)) return;
+        next[sym] = [...arr, { t: Date.now(), price: Number(px) }].slice(-200);
       });
-      return changed ? next : prev;
+      return next;
     });
-  }, [prices]);
+  }, [prices, quotes]);
+
   const chartData = priceHistory[chartSymbol] || [];
-  const chartUp = chartData.length > 1 ? chartData[chartData.length - 1].price >= chartData[0].price : true;
+  const chartUp = chartData.length >= 2 ? chartData[chartData.length - 1].price >= chartData[0].price : true;
+  const q = quotes?.[chartSymbol];
 
   return (
-    <div className="p-4 space-y-4">
-      <div className="flex flex-wrap gap-3">
-        <StatCard label="Active Signals" value={approved.length} icon={Radio} />
-        <StatCard label={hasJournal ? 'Win Rate (Journal)' : 'Win Rate'} value={hasJournal ? `${journalStats.winRate}%` : '—'} icon={Target} accent="var(--gold)" />
-        <StatCard label="Avg Score" value={avgScore} icon={GaugeIcon} accent="var(--blue)" />
-        <StatCard label="Signals Today" value={signals.length} icon={Zap} accent="var(--violet)" />
-        <StatCard label={accountBalance != null ? 'Account Bal. (live)' : 'Account Bal.'} value={displayBalance != null ? `$${displayBalance.toLocaleString()}` : '—'} icon={DollarSign} accent="var(--emerald)" />
-        <StatCard label="Max DD Limit" value="10.0%" icon={ShieldAlert} accent="var(--coral)" />
-      </div>
+    <div className="p-2 md:p-4 space-y-3 max-w-[1400px] mx-auto w-full">
+      <MarketVoice now={now || Date.now()} signals={signals} quotes={quotes} outlook={outlook} mode={mode} />
 
-      <div className="omni-panel p-4">
-        <div className="flex items-center justify-between flex-wrap gap-2 mb-1">
-          <SectionHeader icon={TrendingUp} title={`${chartSymbol} — Live`} sub={mode === 'live' ? 'real-time ticks' : 'demo simulator'} />
-          <div className="flex gap-1">
-            {SYMBOLS.map(sym => (
-              <button key={sym} onClick={() => setChartSymbol(sym)}
-                className="px-2 py-1 rounded font-mono text-[9px] uppercase tracking-wider transition-colors"
-                style={{
-                  color: chartSymbol === sym ? '#05070a' : 'var(--textDim)',
-                  background: chartSymbol === sym ? 'var(--emerald)' : 'var(--panel2)',
-                  border: '1px solid var(--border)',
-                }}>{sym}</button>
-            ))}
+      {/* MT5-style: chart left/center, watchlist RIGHT */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-3">
+        <div className="omni-panel p-2 md:p-3 order-2 lg:order-1">
+          <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+            <div className="flex gap-1 flex-wrap">
+              {SYMBOLS.map(sym => (
+                <button key={sym} onClick={() => setChartSymbol(sym)}
+                  className="font-mono text-[10px] px-2 py-1 rounded"
+                  style={{ background: chartSymbol === sym ? 'var(--emerald)' : 'var(--panel2)', color: chartSymbol === sym ? '#05070a' : 'var(--textDim)' }}>
+                  {sym}
+                </button>
+              ))}
+            </div>
+            <div className="font-mono text-[11px] flex gap-3 items-center">
+              {q?.bid != null && <span style={{ color: 'var(--coral)' }}>B {fmtPrice(chartSymbol, q.bid)}</span>}
+              {q?.ask != null && <span style={{ color: 'var(--emerald)' }}>A {fmtPrice(chartSymbol, q.ask)}</span>}
+              {q?.bid == null && <span style={{ color: 'var(--text)' }}>{fmtPrice(chartSymbol, q?.price ?? prices?.[chartSymbol])}</span>}
+              {q?.source === 'mt5_ea' && <Pill tone="up">MT5</Pill>}
+            </div>
+          </div>
+          <div className="h-[220px] md:h-[320px]">
+            {chartData.length < 2 ? (
+              <WaitingForBackend height={200} label="Collecting live ticks for chart…" />
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={chartData}>
+                  <defs>
+                    <linearGradient id="priceGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={chartUp ? '#1fe3a8' : '#ff5470'} stopOpacity={0.35} />
+                      <stop offset="100%" stopColor={chartUp ? '#1fe3a8' : '#ff5470'} stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid stroke="#1c232d" vertical={false} />
+                  <XAxis dataKey="t" hide />
+                  <YAxis orientation="right" domain={['dataMin', 'dataMax']} tick={{ fill: '#526078', fontSize: 10 }} width={72}
+                    tickFormatter={(v) => fmtPrice(chartSymbol, v)} />
+                  <Tooltip contentStyle={{ background: '#10151c', border: '1px solid #1c232d', borderRadius: 8, fontSize: 11 }}
+                    labelFormatter={(t) => new Date(t).toLocaleTimeString()} formatter={(v) => [fmtPrice(chartSymbol, v), chartSymbol]} />
+                  <Area type="monotone" dataKey="price" stroke={chartUp ? '#1fe3a8' : '#ff5470'} fill="url(#priceGrad)" strokeWidth={1.5} isAnimationActive={false} />
+                </AreaChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </div>
-        {chartData.length < 2 ? (
-          <div className="flex items-center justify-center font-mono text-[11px]" style={{ color: 'var(--textFaint)', height: 220 }}>
-            Collecting ticks…
+
+        {/* Watchlist RIGHT — Exness/MT5 style */}
+        <div className="omni-panel overflow-hidden order-1 lg:order-2 flex flex-col max-h-[380px] lg:max-h-none">
+          <button type="button" onClick={() => setTicksOpen(o => !o)}
+            className="flex items-center justify-between px-3 py-2 border-b w-full text-left"
+            style={{ borderColor: 'var(--border)' }}>
+            <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>Market Watch</span>
+            <ChevronDown size={14} style={{ transform: ticksOpen ? 'rotate(180deg)' : 'none', color: 'var(--textDim)' }} />
+          </button>
+          {ticksOpen && (
+            <div className="overflow-y-auto omni-scroll flex-1">
+              <div className="grid grid-cols-[1fr_72px_72px] gap-1 px-2 py-1 font-mono text-[9px] uppercase" style={{ color: 'var(--textFaint)' }}>
+                <span>Symbol</span><span className="text-right">Bid</span><span className="text-right">Ask</span>
+              </div>
+              {SYMBOLS.map(sym => {
+                const qq = quotes?.[sym];
+                const ch = changes?.[sym];
+                const up = ch == null ? null : ch >= 0;
+                return (
+                  <button key={sym} type="button" onClick={() => setChartSymbol(sym)}
+                    className="omni-row w-full grid grid-cols-[1fr_72px_72px] gap-1 px-2 py-2 font-mono text-[11px] text-left border-b"
+                    style={{ borderColor: 'var(--border)', background: chartSymbol === sym ? 'var(--panel2)' : 'transparent' }}>
+                    <span>
+                      <span style={{ color: 'var(--text)' }}>{sym}</span>
+                      {qq?.source === 'mt5_ea' && <span className="ml-1 text-[8px]" style={{ color: 'var(--gold)' }}>L</span>}
+                      {ch != null && <div className="text-[9px]" style={{ color: up ? 'var(--emerald)' : 'var(--coral)' }}>{fmtPct(ch)}</div>}
+                    </span>
+                    <span className="text-right" style={{ color: 'var(--coral)' }}>{fmtPrice(sym, qq?.bid ?? qq?.price ?? prices?.[sym])}</span>
+                    <span className="text-right" style={{ color: 'var(--emerald)' }}>{fmtPrice(sym, qq?.ask ?? qq?.price ?? prices?.[sym])}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Recent signals — high on page, mobile friendly */}
+      <div className="omni-panel overflow-hidden">
+        <SectionHeader icon={Radio} title="Recent signals" sub={`${recent.length} latest · approved ${approved.length}`} />
+        {recent.length === 0 ? (
+          <div className="p-4 font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
+            No signals yet. Live prices are active — the desk only posts when score, agents, and risk gates clear.
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height={220}>
-            <AreaChart data={chartData}>
-              <defs>
-                <linearGradient id="priceGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={chartUp ? '#1fe3a8' : '#ff5470'} stopOpacity={0.35} />
-                  <stop offset="100%" stopColor={chartUp ? '#1fe3a8' : '#ff5470'} stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid stroke="#1c232d" vertical={false} />
-              <XAxis dataKey="t" hide />
-              <YAxis domain={['dataMin', 'dataMax']} tick={{ fill: '#526078', fontSize: 10 }} width={64}
-                tickFormatter={(v) => fmtPrice(chartSymbol, v)} />
-              <Tooltip contentStyle={{ background: '#10151c', border: '1px solid #1c232d', borderRadius: 8, fontSize: 11 }}
-                labelFormatter={(t) => new Date(t).toLocaleTimeString()} formatter={(v) => [fmtPrice(chartSymbol, v), chartSymbol]} />
-              <Area type="monotone" dataKey="price" stroke={chartUp ? '#1fe3a8' : '#ff5470'} fill="url(#priceGrad)" strokeWidth={1.5} isAnimationActive={false} />
-            </AreaChart>
-          </ResponsiveContainer>
-        )}
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="omni-panel p-4 lg:col-span-2">
-          <SectionHeader icon={LayoutDashboard} title="Equity Curve" sub={equityCurveLive ? 'live · realized trades' : mode === 'live' ? 'live · awaiting closed trades' : 'simulated · 60-cycle window'} />
-          <ResponsiveContainer width="100%" height={220}>
-            <AreaChart data={equityCurve}>
-              <defs>
-                <linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#1fe3a8" stopOpacity={0.35} />
-                  <stop offset="100%" stopColor="#1fe3a8" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid stroke="#1c232d" vertical={false} />
-              <XAxis dataKey="t" hide />
-              <YAxis domain={['dataMin - 100', 'dataMax + 100']} tick={{ fill: '#526078', fontSize: 10 }} width={50} />
-              <Tooltip contentStyle={{ background: '#10151c', border: '1px solid #1c232d', borderRadius: 8, fontSize: 11 }} labelFormatter={() => ''} />
-              <Area type="monotone" dataKey="equity" stroke="#1fe3a8" fill="url(#eqGrad)" strokeWidth={1.5} />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-
-        <div className="omni-panel p-4">
-          <SectionHeader icon={Layers} title="Agent Consensus" sub="last 12 signals" />
-          <div className="space-y-2.5">
-            {consensus.map(c => (
-              <div key={c.agent}>
-                <div className="flex justify-between font-mono text-[10px] mb-1" style={{ color: 'var(--textDim)' }}>
-                  <span>{c.agent}</span><span>{c.bullPct}% bull</span>
-                </div>
-                <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
-                  <div className="h-full rounded-full" style={{ width: `${c.bullPct}%`, background: c.bullPct >= 50 ? 'var(--emerald)' : 'var(--coral)' }} />
-                </div>
+          <div className="divide-y max-h-[280px] md:max-h-[360px] overflow-y-auto omni-scroll" style={{ borderColor: 'var(--border)' }}>
+            {recent.map(s => (
+              <div key={s.id} className="px-3 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px]" style={{ borderColor: 'var(--border)' }}>
+                <span className="font-semibold" style={{ color: 'var(--text)' }}>{s.symbol}</span>
+                <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
+                <span style={{ color: (s.action === 'BUY' || s.action === 'LONG') ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
+                <span style={{ color: 'var(--gold)' }}>{s.score}</span>
+                <span style={{ color: 'var(--textDim)' }}>@ {fmtPrice(s.symbol, s.entry)}</span>
+                <Pill tone={s.gate?.status === 'approved' || s.gate?.status === 'APPROVED' ? 'up' : 'warn'}>{s.gate?.status || '—'}</Pill>
+                <span className="ml-auto text-[10px]" style={{ color: 'var(--textFaint)' }}>{timeAgo(s.timestamp)}</span>
               </div>
             ))}
           </div>
-        </div>
+        )}
       </div>
 
-      <div className="omni-panel p-4">
-        <SectionHeader icon={Radio} title="Recent Signal Feed" />
-        <div className="space-y-1 max-h-64 overflow-y-auto omni-scroll">
-          {signals.slice(0, 8).map(s => (
-            <div key={s.id} className="omni-row flex items-center gap-3 px-2 py-1.5 rounded font-mono text-[11px]">
-              <span style={{ color: 'var(--textFaint)' }} className="w-10">{timeAgo(s.timestamp)}</span>
-              <span style={{ color: 'var(--text)' }} className="w-16">{s.symbol}</span>
-              <span className="w-10" style={{ color: s.action === 'BUY' ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
-              <span className="w-10" style={{ color: 'var(--gold)' }}>{gradeFor(s.score)}</span>
-              <span className="flex-1" style={{ color: 'var(--textDim)' }}>{s.regime.regime}</span>
-              <Pill tone={s.gate.status === 'approved' ? 'up' : s.gate.status === 'gated' ? 'warn' : 'down'}>{s.gate.status}</Pill>
-            </div>
-          ))}
-        </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+        <StatCard label="Signals" value={signals.length} icon={Zap} accent="var(--violet)" />
+        <StatCard label="Approved" value={approved.length} icon={CheckCircle2} />
+        <StatCard label="Balance" value={accountBalance != null ? `$${Number(accountBalance).toLocaleString()}` : '—'} icon={Target} accent="var(--gold)" />
+        <StatCard label="Win rate" value={journalStats?.winRate != null ? `${journalStats.winRate}%` : '—'} icon={Activity} accent="var(--blue)" />
       </div>
     </div>
   );
 }
 
-/* ── SIGNALS ────────────────────────────────────────────────────────── */
 function SignalsTab({ signals, prices, quotes }) {
   const [expanded, setExpanded] = useState(null);
   const [desk, setDesk] = useState('ALL');
@@ -1816,6 +1867,12 @@ function RiskTab({ prices, changes, accountBalance, relativeStrength, mode }) {
 /* ── App shell ──────────────────────────────────────────────────────── */
 export default function OmniceeDashboard() {
   const [activeTab, setActiveTab] = useState('DASH');
+  const [installEvt, setInstallEvt] = useState(null);
+  useEffect(() => {
+    const h = (e) => { e.preventDefault(); setInstallEvt(e); };
+    window.addEventListener('beforeinstallprompt', h);
+    return () => window.removeEventListener('beforeinstallprompt', h);
+  }, []);
   const feed = useLiveFeed();
 
   const handleCommand = useCallback((raw) => {
@@ -1832,14 +1889,13 @@ export default function OmniceeDashboard() {
       <TickerTape prices={feed.prices} changes={feed.changes} flash={feed.flash} quotes={feed.quotes} />
       <div className="flex flex-col flex-1 min-h-0">
         <div className="flex-1 overflow-y-auto omni-scroll">
-          {activeTab === 'DASH' && <DashTab signals={feed.signals} equityCurve={feed.equityCurve} equityCurveLive={feed.equityCurveLive} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} changes={feed.changes} stats={feed.stats} mode={feed.mode} />}
+          {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} />}
           {activeTab === 'SIGNALS' && <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} />}
           {activeTab === 'INTEL' && <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} />}
           {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}
-          {activeTab === 'MONITOR' && <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} fetchErrors={feed.fetchErrors} />}
-          {activeTab === 'HEAT' && <HeatTab heatmapTiles={feed.heatmapTiles} mode={feed.mode} sentiment={feed.sentiment} />}
-          {activeTab === 'VALID' && <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} />}
           {activeTab === 'DESK' && <DeskTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} stats={feed.stats} accountBalance={feed.accountBalance} relativeStrength={feed.relativeStrength} mode={feed.mode} />}
+          {activeTab === 'VALID' && <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} />}
+          {activeTab === 'MONITOR' && <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} fetchErrors={feed.fetchErrors} />}
         </div>
         <div className="flex items-center justify-center gap-2 py-1 border-t font-mono text-[8px] uppercase tracking-wider" style={{ borderColor: 'var(--border)', color: 'var(--textFaint)' }}>
           <span>OMNICEE</span><span>·</span><span>Developed by James Yelbert</span>
