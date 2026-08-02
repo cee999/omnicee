@@ -444,10 +444,17 @@ void SendPriceTicks()
 
    int res = WebRequest("POST", url, headers, 5000, postData, result, resultHeaders);
 
+   // Log failures always (throttled success so Experts is readable)
+   static datetime lastPriceLog = 0;
    if(res == -1)
-      Print("[OMNICEE] Price sync failed — add URL to allowed list");
-   // No success Print() here (unlike SyncBalance) — this fires every
-   // InpPriceSync seconds, which would flood the Experts log otherwise.
+      Print("[OMNICEE] Price sync failed — add URL to Tools→Options→Expert Advisors allowed list");
+   else if(res != 200)
+      Print("[OMNICEE] Price sync HTTP ", res, " (sent ", sent, " symbols) — check EA_SECRET / server");
+   else if(TimeCurrent() - lastPriceLog >= 30)
+   {
+      lastPriceLog = TimeCurrent();
+      Print("[OMNICEE] Broker prices OK — ", sent, " symbols pushed (e.g. XAUUSD bid live)");
+   }
 }
 
 //+------------------------------------------------------------------+

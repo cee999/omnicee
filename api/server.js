@@ -124,12 +124,27 @@ function createApp() {
   }));
   app.use(compression());
   app.use(express.json({ limit: '512kb' }));
-  app.use(rateLimit({
+  // Global limit for dashboard/public API. EA price ticks are 1/sec and must
+  // not share this budget or broker prices never land and Yahoo wins.
+  const publicLimiter = rateLimit({
     windowMs: 60 * 1000,
     limit: Number(process.env.API_RATE_LIMIT_PER_MIN || 120),
     standardHeaders: true,
     legacyHeaders: false,
-  }));
+    skip: (req) => {
+      const p = req.path || '';
+      return p.startsWith('/api/ea/') || p.startsWith('/api/webhooks/');
+    },
+  });
+  app.use(publicLimiter);
+  // Separate generous cap for EA only (prices every 1s ≈ 60/min + poll/balance)
+  const eaLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    limit: Number(process.env.EA_RATE_LIMIT_PER_MIN || 300),
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  app.use('/api/ea', eaLimiter);
 
   app.get('/health', async (_req, res) => {
     let mongo = { ok: false };
