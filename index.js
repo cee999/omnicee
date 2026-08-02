@@ -1328,7 +1328,7 @@ const PRICE_SOURCE_RANK = {
   'free-rate-daily': 5,
   unknown: 0,
 };
-const BROKER_PRICE_HOLD_MS = Number(process.env.BROKER_PRICE_HOLD_MS) || 15000; // keep Exness/MT5 price for 15s — Yahoo/free cannot overwrite
+const BROKER_PRICE_HOLD_MS = Number(process.env.BROKER_PRICE_HOLD_MS) || 60000; // keep Exness/MT5 price for 60s — TwelveData/Yahoo cannot overwrite
 const lastPriceBySymbol = {}; // symbol -> { price, source, rank, ts }
 
 function onLivePrice(symbol, price, { change = null, bias = null, source = 'candle' } = {}) {

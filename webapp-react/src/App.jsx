@@ -352,6 +352,10 @@ function useLiveFeed() {
   const [relativeStrength, setRelativeStrength] = useState(null);
   const priceRef = useRef(prices);
   priceRef.current = prices;
+  // Prefer broker (mt5_ea) ticks on the client so TwelveData/Yahoo cannot
+  // paint over Exness prices while the EA is connected.
+  const priceSourceRef = useRef({});
+  const SRC_RANK = { mt5_ea: 100, tradingview: 90, binance: 70, bybit: 70, finnhub: 50, twelvedata: 50, candle: 40, 'yahoo-free': 10 };
 
   /* Reachability probe against the unauthenticated /health route. Render's
      free tier can take 30-60s+ to wake a cold instance, so a single
@@ -419,7 +423,15 @@ function useLiveFeed() {
         if (!cancelled && r.ok && Array.isArray(r.market)) {
           setPrices(prev => {
             const next = { ...prev };
-            r.market.forEach(m => { if (m.symbol && m.price != null && m.symbol in next) next[m.symbol] = Number(m.price); });
+            r.market.forEach(m => {
+              if (!m.symbol || m.price == null || !(m.symbol in next)) return;
+              const src = m.source || 'unknown';
+              const rank = SRC_RANK[src] ?? 0;
+              const prevSrc = priceSourceRef.current[m.symbol];
+              if (prevSrc && prevSrc.rank > rank && (Date.now() - prevSrc.ts) < 60000) return;
+              priceSourceRef.current[m.symbol] = { source: src, rank, ts: Date.now() };
+              next[m.symbol] = Number(m.price);
+            });
             return next;
           });
           setChanges(prev => {
@@ -517,6 +529,13 @@ function useLiveFeed() {
       socket.on('market', payload => {
         if (cancelled || !payload?.symbol || payload.price == null || !(payload.symbol in BASE_PRICE)) return;
         const sym = payload.symbol;
+        const src = payload.source || 'unknown';
+        const rank = SRC_RANK[src] ?? 0;
+        const prevSrc = priceSourceRef.current[sym];
+        if (prevSrc && prevSrc.rank > rank && (Date.now() - prevSrc.ts) < 60000) {
+          return; // keep broker price; ignore lower-authority feed
+        }
+        priceSourceRef.current[sym] = { source: src, rank, ts: Date.now() };
         const prevPrice = priceRef.current[sym];
         setFlash(f => ({ ...f, [sym]: payload.price >= prevPrice ? 'up' : 'down' }));
         setPrices(prev => ({ ...prev, [sym]: Number(payload.price) }));

@@ -84,8 +84,13 @@ int OnInit()
    Print("Price sync: ", priceSyncIntervalSec, "s (", ArraySize(OmniceeSymbols), " symbols)");
    Print("Magic: ", InpMagicNumber);
    
-   // Sync balance immediately
+   // Timer drives price/balance/signal poll even when the chart has no ticks.
+   // OnTick alone is unreliable for steady 1s broker price push.
+   EventSetTimer(1);
+   
+   // Sync balance + prices immediately
    SyncBalance();
+   SendPriceTicks();
    
    return INIT_SUCCEEDED;
 }
@@ -95,38 +100,45 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+   EventKillTimer();
    Print("=== OMNICEE EA Stopped ===");
 }
 
 //+------------------------------------------------------------------+
-//| Expert tick function                                              |
+//| Timer — reliable 1s broker price push (does not depend on ticks)  |
 //+------------------------------------------------------------------+
-void OnTick()
+void OnTimer()
 {
    datetime now = TimeCurrent();
    
-   // Poll for approved signals
    if(now - lastPollTime >= pollIntervalSec)
    {
       lastPollTime = now;
       PollApprovedSignals();
    }
    
-   // Sync balance periodically
    if(now - lastBalanceSync >= balanceSyncSec)
    {
       lastBalanceSync = now;
       SyncBalance();
    }
    
-   // Push live bid/ask ticks — this is the actual point of this EA existing
-   // beyond signal execution: James already has a real broker feed running
-   // here for free, so this is a genuine live tick source for the frontend
-   // ticker (feeds the same market_update pipeline TwelveData/Finnhub do —
-   // see POST /api/ea/prices on the server), no third-party API involved.
    if(now - lastPriceSync >= priceSyncIntervalSec)
    {
       lastPriceSync = now;
+      SendPriceTicks();
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Expert tick — kept for instant reaction; timer is the authority   |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+   // Prices are pushed on the timer. Optional extra push on busy ticks:
+   if(TimeCurrent() - lastPriceSync >= priceSyncIntervalSec)
+   {
+      lastPriceSync = TimeCurrent();
       SendPriceTicks();
    }
 }

@@ -600,13 +600,17 @@ function createApp() {
       } else if (engines.onLivePrice) {
         engines.onLivePrice(p.symbol, mid, { source: 'mt5_ea' });
       } else {
-        // Trading engine not booted yet (e.g. Mongo/feed init still in
-        // progress) — degrade to a direct emit so the ticker still moves;
-        // executionEngine.onPrice() and candle building just aren't
-        // reachable yet either way.
         bus.emit('market_update', { symbol: p.symbol, price: mid, change: null, bias: null, source: 'mt5_ea' });
       }
       accepted++;
+    }
+    if (accepted > 0) {
+      const now = Date.now();
+      if (!global.__lastEaPriceLog || now - global.__lastEaPriceLog > 15000) {
+        global.__lastEaPriceLog = now;
+        const sample = prices.find(x => x && x.symbol === 'XAUUSD') || prices[0];
+        console.log(`[EA prices] accepted=${accepted} sample=${sample?.symbol} bid=${sample?.bid} ask=${sample?.ask}`);
+      }
     }
     res.json({ ok: true, accepted });
   });
