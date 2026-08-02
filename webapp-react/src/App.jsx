@@ -784,7 +784,7 @@ function sessionNameUtc(hour) {
   return { name: 'Off-peak', note: 'Lower volume — fewer high-quality setups expected.' };
 }
 
-function MarketVoice({ now, signals, quotes, outlook, mode }) {
+function MarketVoice({ now, signals, quotes, outlook, mode, levels }) {
   const hour = new Date(now).getUTCHours();
   const sess = sessionNameUtc(hour);
   const recent = signals.slice(0, 8);
@@ -802,9 +802,10 @@ function MarketVoice({ now, signals, quotes, outlook, mode }) {
     : bear > bull + 1 ? 'Day lean: sellers have been more active in recent signals.'
     : 'Day lean: mixed — no strong one-sided pressure from recent signals.';
   lines.push(dayBias);
+
   return (
     <div className="omni-panel p-3 md:p-4">
-      <SectionHeader icon={Globe2} title="Market voice" sub="session · day · what the desk is seeing" />
+      <SectionHeader icon={Globe2} title="Market voice" sub="session · day · support / resistance" />
       <ul className="space-y-2 mt-1">
         {lines.map((line, i) => (
           <li key={i} className="font-mono text-[11px] md:text-[12px] leading-relaxed flex gap-2" style={{ color: i === 0 ? 'var(--text)' : 'var(--textDim)' }}>
@@ -813,6 +814,26 @@ function MarketVoice({ now, signals, quotes, outlook, mode }) {
           </li>
         ))}
       </ul>
+      <div className="mt-3 pt-3 border-t" style={{ borderColor: 'var(--border)' }}>
+        <div className="font-mono text-[9px] uppercase tracking-wider mb-2" style={{ color: 'var(--textFaint)' }}>Support / Resistance (H1 swings)</div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-2">
+          {levelGroups.map(g => (
+            <div key={g.title}>
+              <div className="font-mono text-[9px] uppercase mb-0.5" style={{ color: 'var(--textFaint)' }}>{g.title}</div>
+              {g.syms.map(sym => {
+                const lv = levels?.[sym];
+                return (
+                  <div key={sym} className="flex items-center gap-2 font-mono text-[10px] py-0.5">
+                    <span className="w-12" style={{ color: 'var(--text)' }}>{typeof symLabel === 'function' ? symLabel(sym) : sym}</span>
+                    <span style={{ color: 'var(--coral)' }}>S {lv?.support != null ? fmtPrice(sym, lv.support) : '—'}</span>
+                    <span style={{ color: 'var(--emerald)' }}>R {lv?.resistance != null ? fmtPrice(sym, lv.resistance) : '—'}</span>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -927,30 +948,8 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
         </div>
       </div>
 
-      {/* Voice + S/R side by side — BELOW ticks so ticks stay visible */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
-        <MarketVoice now={now || Date.now()} signals={signals} quotes={quotes} outlook={outlook} mode={mode} />
-        <div className="omni-panel p-3">
-          <SectionHeader icon={Layers} title="Support / Resistance" sub="by desk · H1 swings" />
-          <div className="space-y-2 max-h-36 overflow-y-auto omni-scroll">
-            {levelGroups.map(g => (
-              <div key={g.title}>
-                <div className="font-mono text-[9px] uppercase mb-0.5" style={{ color: 'var(--textFaint)' }}>{g.title}</div>
-                {g.syms.map(sym => {
-                  const lv = levels?.[sym];
-                  return (
-                    <div key={sym} className="flex items-center gap-2 font-mono text-[10px] py-0.5">
-                      <span className="w-12" style={{ color: 'var(--text)' }}>{symLabel(sym)}</span>
-                      <span style={{ color: 'var(--coral)' }}>S {lv?.support != null ? fmtPrice(sym, lv.support) : '—'}</span>
-                      <span style={{ color: 'var(--emerald)' }}>R {lv?.resistance != null ? fmtPrice(sym, lv.resistance) : '—'}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+      {/* Market voice includes S/R — below ticks */}
+      <MarketVoice now={now || Date.now()} signals={signals} quotes={quotes} outlook={outlook} mode={mode} levels={levels} />
 
       <div className="omni-panel overflow-hidden">
         <SectionHeader icon={Radio} title="Recent signals" sub={`${recent.length} latest · approved ${approved.length} · all saved to MongoDB`} />
