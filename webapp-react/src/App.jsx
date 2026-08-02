@@ -380,7 +380,7 @@ function LoginGate({ onAuthed }) {
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) throw new Error(data.error || 'Could not send code');
       setStep('code');
-      setMsg(data.devCode ? `Dev code: ${data.devCode}` : 'Code sent — check your inbox and spam folder.');
+      setMsg(data.devCode ? `Dev code: ${data.devCode}` : 'Code sent.');
     } catch (e) {
       setErr(e.message || 'Failed to send code');
     } finally {
@@ -398,8 +398,9 @@ function LoginGate({ onAuthed }) {
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) throw new Error(data.error || 'Invalid code');
-      setSession({ token: data.token, email: data.email, expiresAt: data.expiresAt });
-      onAuthed({ email: data.email });
+      const sess = { token: data.token, email: data.email, expiresAt: data.expiresAt };
+      setSession(sess);
+      onAuthed(sess);
     } catch (e) {
       setErr(e.message || 'Login failed');
     } finally {
@@ -448,13 +449,12 @@ function LoginGate({ onAuthed }) {
           }}>Ω</div>
           <div>
             <div style={{ fontSize: 15, letterSpacing: '0.15em', fontWeight: 700, color: text }}>OMNICEE</div>
-            <div style={{ fontSize: 11, color: faint, marginTop: 2 }}>Sign in with email code</div>
+            <div style={{ fontSize: 11, color: faint, marginTop: 2 }}>Email code login</div>
           </div>
         </div>
 
-        <p style={{ fontSize: 12, lineHeight: 1.55, color: dim, margin: '0 0 18px' }}>
-          Enter your email. We send a one-time 6-digit code — that is your password.
-          First time and next times use the same simple flow.
+        <p style={{ fontSize: 12, lineHeight: 1.5, color: dim, margin: '0 0 16px' }}>
+          Email → code → login. Stays signed in on this device.
         </p>
 
         <label style={{ display: 'block', fontSize: 10, textTransform: 'uppercase', color: faint, marginBottom: 12 }}>
@@ -542,10 +542,10 @@ function LoginGate({ onAuthed }) {
 
         <div style={{
           marginTop: 18, paddingTop: 14, borderTop: `1px solid ${border}`,
-          fontSize: 11, lineHeight: 1.5, color: faint,
+          fontSize: 11, lineHeight: 1.5, color: faint, textAlign: 'center',
         }}>
-          <div style={{ marginBottom: 6 }}><strong style={{ color: dim }}>Install on phone:</strong> browser menu → Add to Home Screen</div>
-          <div><strong style={{ color: dim }}>Install on desktop:</strong> Chrome/Edge → install icon in the address bar</div>
+          <div style={{ marginBottom: 4 }}>Phone: Add to Home Screen · Desktop: install icon</div>
+          <div style={{ color: dim }}>Developed by James Yelbert</div>
         </div>
       </div>
     </div>
@@ -2175,7 +2175,7 @@ export default function OmniceeDashboard() {
     return (
       <>
         <ThemeStyle />
-        <LoginGate onAuthed={(u) => setUser({ email: u.email })} />
+        <LoginGate onAuthed={(u) => setUser(u)} />
       </>
     );
   }
