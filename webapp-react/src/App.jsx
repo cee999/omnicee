@@ -1027,6 +1027,14 @@ function MarketVoice({ now, signals, quotes, outlook, mode, levels }) {
     : 'Day lean: mixed — no strong one-sided pressure from recent signals.';
   lines.push(dayBias);
 
+  const levelGroups = [
+    { title: 'Gold', syms: ['XAUUSD'] },
+    { title: 'FX', syms: ['EURUSD', 'GBPUSD', 'USDJPY'] },
+    { title: 'Oil', syms: ['USOIL'] },
+    { title: 'Dollar', syms: ['UUP'] },
+    { title: 'Crypto', syms: ['BTCUSDT', 'ETHUSDT'] },
+  ];
+
   return (
     <div className="omni-panel p-3 md:p-4">
       <SectionHeader icon={Globe2} title="Market voice" sub="session · day · support / resistance" />
@@ -1086,14 +1094,6 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
   const chartData = priceHistory[chartSymbol] || [];
   const chartUp = chartData.length >= 2 ? chartData[chartData.length - 1].price >= chartData[0].price : true;
   const q = quotes?.[chartSymbol];
-
-  const levelGroups = [
-    { title: 'Gold', syms: ['XAUUSD'] },
-    { title: 'FX', syms: ['EURUSD', 'GBPUSD', 'USDJPY'] },
-    { title: 'Oil', syms: ['USOIL'] },
-    { title: 'Dollar', syms: ['UUP'] },
-    { title: 'Crypto', syms: ['BTCUSDT', 'ETHUSDT'] },
-  ];
 
   return (
     <div className="p-2 md:p-3 space-y-2 max-w-[1400px] mx-auto w-full">
