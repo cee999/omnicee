@@ -32,9 +32,20 @@ function randomToken() {
   return crypto.randomBytes(32).toString('hex');
 }
 
+function isValidFromAddress(from) {
+  const s = String(from || '').trim();
+  // Accept "email@example.com" or "Name <email@example.com>"
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) || /^[^<>]+<[^\s@]+@[^\s@]+\.[^\s@]+>$/.test(s);
+}
+
 async function sendEmail({ to, subject, text }) {
   const resendKey = process.env.RESEND_API_KEY;
-  const from = process.env.EMAIL_FROM || 'OMNICEE <onboarding@resend.dev>';
+  const DEFAULT_FROM = 'OMNICEE <onboarding@resend.dev>';
+  let from = (process.env.EMAIL_FROM || '').trim() || DEFAULT_FROM;
+  if (!isValidFromAddress(from)) {
+    console.warn(`[AUTH] Invalid EMAIL_FROM="${from}" — falling back to ${DEFAULT_FROM}`);
+    from = DEFAULT_FROM;
+  }
 
   if (resendKey) {
     const r = await fetch('https://api.resend.com/emails', {
@@ -66,7 +77,7 @@ async function sendEmail({ to, subject, text }) {
         : undefined,
     });
     await transporter.sendMail({
-      from: process.env.EMAIL_FROM || process.env.SMTP_USER,
+      from: isValidFromAddress(process.env.EMAIL_FROM) ? process.env.EMAIL_FROM.trim() : (process.env.SMTP_USER || DEFAULT_FROM),
       to,
       subject,
       text,
