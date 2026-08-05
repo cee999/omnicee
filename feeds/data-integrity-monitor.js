@@ -54,7 +54,7 @@ class DataIntegrityMonitor {
       try {
         connected = typeof instance.isConnected === 'function' ? instance.isConnected() : null;
       } catch (_) { connected = null; }
-      const status = connected === true ? 'connected' : connected === false ? 'disconnected' : 'unknown';
+      const status = connected === false ? 'disconnected' : 'connected'; // null/true = running (REST feeds have no isConnected)
       return { name, connected, status, symbols };
     });
 

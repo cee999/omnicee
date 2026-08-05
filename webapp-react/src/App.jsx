@@ -1633,12 +1633,19 @@ function MonitorTab({ auditLog, feedHealth, uptimeSec, mode, fetchErrors }) {
   const feeds = FEEDS.map(f => {
     if (f.status === 'inert') return f;
     const live = liveByName.get(f.name);
-    if (mode !== 'live' || !live) return f;
-    const status = live.status === 'connected' ? 'live'
-      : live.status === 'disconnected' ? 'down'
-      : live.connected === true ? 'live'
-      : live.connected === false ? 'down'
-      : 'unknown';
+    if (mode !== 'live') return f;
+    // No health payload yet (login/cold start) → keep waiting
+    if (!feedHealth || !feedHealth.length) return { ...f, status: 'unknown' };
+    if (!live) {
+      // Listed in UI but not registered on server this boot (no key / skipped)
+      return { ...f, status: 'down', note: f.note || 'not started this boot' };
+    }
+    // Backend: connected | disconnected | unknown (unknown = REST feed with no isConnected)
+    // Treat "unknown" as live when the feed is registered — it is running.
+    const status = live.status === 'connected' || live.connected === true ? 'live'
+      : live.status === 'disconnected' || live.connected === false ? 'down'
+      : live.status === 'unknown' ? 'live'
+      : 'live';
     return { ...f, status };
   });
   const uptimeLabel = mode === 'live' && uptimeSec != null
@@ -1669,6 +1676,11 @@ function MonitorTab({ auditLog, feedHealth, uptimeSec, mode, fetchErrors }) {
           title="Live feeds"
           sub={`${liveCount}/${feeds.length} live${uptimeLabel ? ` · up ${uptimeLabel}` : ''}`}
         />
+        {(!feedHealth || !feedHealth.length) && mode === 'live' ? (
+          <div className="font-mono text-[11px] mb-3" style={{ color: 'var(--gold)' }}>
+            Feed status not loaded yet. Log in, wait a few seconds, or open Monitor again after the server finishes booting.
+          </div>
+        ) : null}
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5">
           {feeds.map(f => (
             <div key={f.name} className="omni-panel2 p-3">
