@@ -583,10 +583,10 @@ function useLiveFeed() {
   const [relativeStrength, setRelativeStrength] = useState(null);
   const priceRef = useRef(prices);
   priceRef.current = prices;
-  // Prefer broker (mt5_ea) ticks on the client so TwelveData/Yahoo cannot
+  // Prefer broker (mt5_ea) ticks on the client so lower-rank sources cannot
   // paint over Exness prices while the EA is connected.
   const priceSourceRef = useRef({});
-  const SRC_RANK = { mt5_ea: 100, tradingview: 90, binance: 70, bybit: 70, deriv: 55, finnhub: 50, twelvedata: 50, candle: 40, 'yahoo-free': 10 };
+  const SRC_RANK = { mt5_ea: 100, tradingview: 90, deriv: 55, candle: 40 };
 
   /* Reachability probe against the unauthenticated /health route. Render's
      free tier can take 30-60s+ to wake a cold instance, so a single
@@ -1414,7 +1414,7 @@ function SignalsTab({ signals, prices, quotes, auditLog }) {
         <SectionHeader icon={ScrollText} title="Gate checks" sub={`${nearMiss.length} near miss · ${fired.length} fired recently`} />
         {checks.length === 0 ? (
           <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
-            No checks logged yet. Wait for analysis (needs H1 candles from Yahoo/MT5). Soft gates are on so more candidates can appear.
+            No checks logged yet. Wait for analysis (needs candles from Deriv or MT5).
           </div>
         ) : (
           <div className="space-y-1 max-h-56 overflow-y-auto omni-scroll">
@@ -1768,7 +1768,7 @@ function NewsTab({ news, mode }) {
 
   return (
     <div className="p-4 space-y-3">
-      <SectionHeader icon={Newspaper} title="Market news" sub={live ? 'Yahoo + Finnhub forex/general · multi-source' : undefined} />
+      <SectionHeader icon={Newspaper} title="Market news" sub={live ? 'Financial + crypto headlines' : undefined} />
       <div className="flex gap-1 flex-wrap">
         {CATS.map(c => (
           <button key={c.id} type="button" onClick={() => setCat(c.id)}
@@ -1780,7 +1780,7 @@ function NewsTab({ news, mode }) {
       {items === null ? (
         <div className="omni-panel p-4"><WaitingForBackend height={200} /></div>
       ) : items.length === 0 ? (
-        <div className="omni-panel p-4 font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No news yet — wait a few seconds for Yahoo to load.</div>
+        <div className="omni-panel p-4 font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No news yet — wait a few seconds.</div>
       ) : (
         <>
           {major && (

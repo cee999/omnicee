@@ -65,7 +65,6 @@ const MAX_DRAWDOWN    = parseFloat(requireEnv('MAX_DRAWDOWN_PCT', '10.0'));
 const ACCOUNT_BALANCE = parseFloat(requireEnv('ACCOUNT_BALANCE', '10000'));
 const REQUIRE_KZ      = requireEnv('REQUIRE_KILLZONE', 'false') === 'true';
 const SIGNAL_SOFT_GATES = requireEnv('SIGNAL_SOFT_GATES', 'true') !== 'false'; // default ON — fewer hard blocks
-const TWELVE_KEY      = requireEnv('TWELVE_DATA_API_KEY', '');
 // FIX: intermarket analysis (DXY/equity cross-confirmation) — the last item
 // on the original audit's "does not exist" list. Configurable since not
 // FIX: was 'DXY' / 'SPX500', with a comment claiming "every TwelveData
@@ -108,10 +107,6 @@ try {
 const { AlertDispatcher }    = loadModule('./signal-pipeline/alert-dispatcher',  'AlertDispatcher')    || {};
 const { recordOutcomeEverywhere } = loadModule('./signal-pipeline/outcome-recorder', 'OutcomeRecorder') || {};
 const { ExecutionEngine }    = loadModule('./signal-pipeline/manual-mode',       'ExecutionEngine')    || {};
-const { BinanceFeed }        = loadModule('./feeds/binance-ws',                  'BinanceFeed')        || {};
-const { BybitFeed }           = loadModule('./feeds/bybit-ws',                    'BybitFeed')          || {};
-const { TwelveDataFeed }     = loadModule('./feeds/twelve-data',                 'TwelveDataFeed')     || {};
-const { FreeRateFeed }       = loadModule('./feeds/free-rate-feed',              'FreeRateFeed')       || {};
 const { SMCAgent }           = loadModule('./agents/smc-agent',                  'SMCAgent')           || {};
 const { MTFAgent }           = loadModule('./agents/mtf-agent',                  'MTFAgent')           || {};
 const { MomentumAgent }      = loadModule('./agents/momentum-agent',             'MomentumAgent')      || {};
@@ -145,7 +140,6 @@ const { AlphaVantageFeed }   = loadModule('./feeds/alpha-vantage-feed',         
 const { FinnhubFeed }        = loadModule('./feeds/finnhub-feed',                'FinnhubFeed')       || {};
 const { FMPFeed }            = loadModule('./feeds/fmp-feed',                    'FMPFeed')           || {};
 const { ForexFactoryCalendar } = loadModule('./feeds/forex-factory-calendar',   'ForexFactoryCalendar') || {};
-const { YahooOhlcFeed }        = loadModule('./feeds/yahoo-ohlc-feed',          'YahooOhlcFeed')        || {};
 const { DerivFeed }            = loadModule('./feeds/deriv-feed',               'DerivFeed')            || {};
 const { CFTCCotFeed }        = loadModule('./feeds/cftc-cot-feed',               'CFTCCotFeed')       || {};
 const { COTReportParser }    = loadModule('./feeds/cot-report-parser',           'COTReportParser')   || {};
@@ -1361,15 +1355,9 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
 const PRICE_SOURCE_RANK = {
   mt5_ea: 100,
   tradingview: 90,
-  binance: 70,
-  bybit: 70,
   deriv: 55,           // free live WS ticks — better than Yahoo, below broker
   finnhub: 50,
-  twelvedata: 50,
   candle: 40,
-  'yahoo-free': 10,
-  'free-rate': 10,
-  'free-rate-daily': 5,
   unknown: 0,
 };
 const BROKER_PRICE_HOLD_MS = Number(process.env.BROKER_PRICE_HOLD_MS) || 60000; // keep Exness/MT5 price for 60s — TwelveData/Yahoo cannot overwrite
@@ -2085,221 +2073,13 @@ function buildFeeds() {
   const cryptoSymbols = SYMBOLS.filter(s => s.endsWith('USDT') || s.endsWith('USDC') || s.endsWith('BTC'));
   const fxSymbols     = SYMBOLS.filter(s => !cryptoSymbols.includes(s));
 
-  // Binance feed for crypto
-  if (BinanceFeed && cryptoSymbols.length && process.env.LIVE_FEED_LEGACY === '1') {
-    const binanceFeed = new BinanceFeed({
-      symbols:    cryptoSymbols,
-      timeframes: TIMEFRAMES_STR,
-    });
-    binanceFeed.on('candle',        onCandle);
-    binanceFeed.on('candle_update', onCandle);
-    binanceFeed.on('error', (err) => log.error(`BinanceFeed error: ${feedErrorMessage(err)}`));
-    binanceFeed.on('connected', () => log.info(`BinanceFeed connected for: ${cryptoSymbols.join(', ')}`));
-    feeds.push({
-      name: 'BinanceFeed', instance: binanceFeed, symbols: cryptoSymbols,
-      // FIX: _preloadHistory() (feeds/binance-ws.js) populates the feed's
-      // OWN internal candleStore, but onCandle() below — the only thing
-      // that ever writes into THIS file's separate candleStores object,
-      // which regimeEngine/MarketOutlookBuilder/runAnalysisCycle all
-      // actually read from — only fires on live 'candle'/'candle_update'
-      // events. Historical backfill deliberately does NOT emit those
-      // events (avoiding a burst of stale-candle analysis triggers), so
-      // the preloaded data never reached the real analysis pipeline at
-      // all — candleStores stayed empty regardless of how well the feed
-      // itself preloaded, and regime classification's `candles.length >=
-      // 50` gate (signal-pipeline/market-outlook.js) would only ever be
-      // satisfied by waiting out real time from a cold start.
-      seed: () => {
-        let seeded = 0;
-        for (const symbol of cryptoSymbols) {
-          for (const tf of TIMEFRAMES_STR) {
-            const candles = binanceFeed.candleStore.get(`${symbol.toUpperCase()}_${tf}`);
-            if (candles?.length && candleStores[symbol]) {
-              candleStores[symbol][tf] = candles.slice(-MAX_CANDLES_PER_TF);
-              seeded += candles.length;
-            }
-          }
-        }
-        if (seeded) log.info(`BinanceFeed: seeded ${seeded} preloaded candles into the analysis pipeline`);
-      },
-    });
-    log.info(`BinanceFeed configured for: ${cryptoSymbols.join(', ')}`);
-    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('Binance', binanceFeed, cryptoSymbols);
-  }
 
-  // FIX: BybitFeed (funding rate, open interest, liquidation cascades, CVD —
-  // 971 lines) was never instantiated anywhere. BinanceFeed already handles
-  // crypto candles, so this deliberately does NOT listen to BybitFeed's
-  // 'candle'/'candle_update' events (that would just be redundant duplicate
-  // candle ingestion) — only the funding/OI/liquidation side channel, which
-  // feeds bybitFundingOI so onCandle() can attach real values to candles for
-  // VolumeOIAgent's pre-existing (previously always-zero) reads.
-  if (BybitFeed && cryptoSymbols.length && process.env.LIVE_FEED_LEGACY === '1') {
-    const bybitFeed = new BybitFeed({
-      symbols: cryptoSymbols,
-      timeframes: TIMEFRAMES_STR,
-      liquidations: true,
-      // L2 order book + trade tape available for microstructure context
-      orderBook: true,
-      trades: true,
-    });
-    bybitFeed.on('open_interest', (analysis) => {
-      const sym = analysis.symbol;
-      if (!bybitFundingOI[sym]) bybitFundingOI[sym] = {};
-      bybitFundingOI[sym].openInterest = analysis.oiValue ?? analysis.value ?? null;
-    });
-    bybitFeed.on('price', ({ symbol, price }) => {
-      // Live ticker — critical when Binance is geo-blocked (common on some
-      // cloud hosts). Without this, ETH/BTC only update from Binance candles.
-      if (Number.isFinite(price)) onLivePrice(symbol, price, { source: 'bybit' });
-      const rate = bybitFeed.funding?._rates?.get(symbol)?.current;
-      if (rate != null) {
-        if (!bybitFundingOI[symbol]) bybitFundingOI[symbol] = {};
-        bybitFundingOI[symbol].fundingRate = rate;
-      }
-    });
-    bybitFeed.on('liquidation_cascade', (data) => {
-      log.warn(`Bybit liquidation cascade: ${data.alert}`);
-      if (wsBus) wsBus.emit('liquidation_cascade', data);
-    });
-    bybitFeed.on('error', (err) => log.error(`BybitFeed error: ${feedErrorMessage(err)}`));
-    bybitFeed.on('connected', () => log.info(`BybitFeed connected for: ${cryptoSymbols.join(', ')}`));
-    feeds.push({
-      name: 'BybitFeed', instance: bybitFeed, symbols: cryptoSymbols,
-      // FIX: same root cause as BinanceFeed's seed above — BybitFeed's own
-      // _preloadHistory() (feeds/bybit-ws.js) already existed before this
-      // session's work and had this exact same gap the whole time.
-      seed: () => {
-        let seeded = 0;
-        for (const symbol of cryptoSymbols) {
-          for (const tf of TIMEFRAMES_STR) {
-            const candles = bybitFeed.candleStore.get(bybitFeed.category, symbol, tf);
-            if (candles?.length && candleStores[symbol]) {
-              candleStores[symbol][tf] = candles.slice(-MAX_CANDLES_PER_TF);
-              seeded += candles.length;
-            }
-          }
-        }
-        if (seeded) log.info(`BybitFeed: seeded ${seeded} preloaded candles into the analysis pipeline`);
-      },
-    });
-    log.info(`BybitFeed configured for: ${cryptoSymbols.join(', ')}`);
-    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('Bybit', bybitFeed, cryptoSymbols);
-  }
-
-  // TwelveData feed for forex/commodities
-  if (TwelveDataFeed && fxSymbols.length && TWELVE_KEY && process.env.LIVE_FEED_LEGACY === '1' && process.env.DISABLE_TWELVE_DATA !== '1') {
-    // FIX: DXY/equity-index candles must NOT go through onCandle() — it
-    // early-returns for any symbol not in the tradeable SYMBOLS list, so a
-    // macro symbol added there would be silently discarded, not analyzed.
-    // Subscribe them separately and route explicitly to intermarketAnalyzer.
-    const macroSymbols = intermarketAnalyzer ? [DXY_SYMBOL, EQUITY_INDEX_SYMBOL] : [];
-    const tdSymbols = [...new Set([...fxSymbols, ...macroSymbols])];
-
-    // Free-tier survival: default 15s poll + multi-TF live checks burns the
-    // 800/day quota in a few hours. Slow the quote poll to 2–3 min and let
-    // the existing per-TF checkInterval (already ~tf/3) + Finnhub fallback
-    // + FreeRateFeed keep the ticker alive. Paid tiers can override via env.
-    const tdPollMs = Number(process.env.TWELVE_DATA_POLL_MS) || 180000; // 3 min default
-    const tdFeed = new TwelveDataFeed({
-      apiKey:     TWELVE_KEY,
-      symbols:    tdSymbols,
-      timeframes: TIMEFRAMES_STR,
-      db,
-      pollIntervalMs: tdPollMs,
-      // FIX: this was a fully-built, documented option (see the class
-      // JSDoc example: "fallbackFeed: finnhub, // used for live candles
-      // once daily quota is hit") that nothing ever actually passed in —
-      // so hitting the free-tier 800/day cap just logged an error per
-      // blocked request and served stale last-known candles, instead of
-      // routing to Finnhub the way the code already knew how to.
-      fallbackFeed: finnhubFeed?.enabled() ? finnhubFeed : null,
-    });
-    tdFeed.on('candle',        (d) => macroSymbols.includes(d.symbol) ? intermarketAnalyzer.updatePrice(d.symbol, d.candle.close, d.candle.timestamp || Date.now()) : onCandle(d));
-    tdFeed.on('candle_update', (d) => macroSymbols.includes(d.symbol) ? intermarketAnalyzer.updatePrice(d.symbol, d.candle.close, d.candle.timestamp || Date.now()) : onCandle(d));
-    tdFeed.on('price', (d) => {
-      if (macroSymbols.includes(d.symbol)) {
-        intermarketAnalyzer.updatePrice(d.symbol, d.price, d.timestamp || Date.now());
-        return;
-      }
-      onLivePrice(d.symbol, d.price, { source: 'twelvedata', change: d.pctChange ?? null });
-    });
-    tdFeed.on('error', (err) => log.error(`TwelveData error: ${feedErrorMessage(err)}`));
-    tdFeed.on('connected', () => log.info(`TwelveDataFeed connected for: ${tdSymbols.join(', ')}`));
-    feeds.push({
-      name: 'TwelveDataFeed', instance: tdFeed, symbols: fxSymbols,
-      // FIX: same root cause again — TwelveDataFeed's preload (plus this
-      // session's rate-limit retry fix) populates its own candleStore, but
-      // never reached the shared candleStores object either.
-      seed: () => {
-        let seeded = 0;
-        for (const symbol of fxSymbols) {
-          for (const tf of TIMEFRAMES_STR) {
-            const candles = tdFeed.candleStore.get(symbol, tf);
-            if (candles?.length && candleStores[symbol]) {
-              candleStores[symbol][tf] = candles.slice(-MAX_CANDLES_PER_TF);
-              seeded += candles.length;
-            }
-          }
-        }
-        if (seeded) log.info(`TwelveDataFeed: seeded ${seeded} preloaded candles into the analysis pipeline`);
-      },
-    });
-    log.info(`TwelveDataFeed configured for: ${fxSymbols.join(', ')}${macroSymbols.length ? ` (+ macro: ${macroSymbols.join(', ')})` : ''}`);
-    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('TwelveData', tdFeed, fxSymbols);
-  } else if (fxSymbols.length && !TWELVE_KEY) {
-    log.warn(`Forex symbols ${fxSymbols.join(',')} configured but TWELVE_DATA_API_KEY is missing`);
-  }
-
-  // FIX: forex's live price ticker was entirely dependent on onCandle()'s
-  // throttled emission, itself gated behind TwelveData's own candle-close
-  // cadence (see lastMarketEmit above) — never genuinely tick-by-tick the
-  // way crypto's Binance WS already is. finnhub-feed.js's connectPriceStream
-  // (added this session — see its own comment for why this is confirmed
-  // free-tier) is a second, independent real-time source for exactly the
-  // symbols TwelveData already covers, feeding the identical market_update
-  // event onCandle() already uses. This doesn't touch TwelveData's request
-  // budget at all — it's a completely separate connection — and doesn't
-  // replace it either: TwelveData/Binance remain the only sources feeding
-  // candleStores (the OHLC data the agents actually run technical analysis
-  // against). This only makes the live price ticker itself more real-time.
-  if (finnhubFeed?.enabled() && fxSymbols.length) {
-    finnhubFeed.on('price', ({ symbol, price }) => {
-      if (process.env.LIVE_FEED_LEGACY === '1') onLivePrice(symbol, price, { source: 'finnhub' });
-    });
-    finnhubFeed.on('connected', () => log.info(`FinnhubFeed price stream connected for: ${fxSymbols.join(', ')}`));
-    finnhubFeed.on('error', (err) => log.warn(`FinnhubFeed price stream error: ${feedErrorMessage(err)}`));
-    finnhubFeed.connectPriceStream(fxSymbols);
-  }
-
-  // FreeRateFeed — no API key. Near-live Yahoo ticks (~20s) for FX + gold +
-  // crypto so the ticker stays fresh even when TwelveData quota is gone or
-  // Binance is geo-blocked. Does NOT write candleStores (agents still need
-  // TwelveData / Binance / Bybit / MT5 OHLC for signal analysis).
-  if (FreeRateFeed && SYMBOLS.length && process.env.LIVE_FEED_LEGACY === '1') {
-    const freeRateFeed = new FreeRateFeed({
-      symbols: SYMBOLS,
-      pollMs: Number(process.env.FREE_RATE_POLL_MS) || 20000,
-    });
-    freeRateFeed.on('price', ({ symbol, price, change }) => {
-      onLivePrice(symbol, price, { source: 'yahoo-free', change });
-    });
-    freeRateFeed.on('connected', () => log.info(`FreeRateFeed (Yahoo fallback ~20s) — overridden by MT5/Exness when EA is connected`));
-    freeRateFeed.on('error', (err) => log.warn(`FreeRateFeed error: ${feedErrorMessage(err)}`));
-    feeds.push({
-      name: 'FreeRateFeed',
-      instance: freeRateFeed,
-      symbols: SYMBOLS,
-    });
-    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('Yahoo', freeRateFeed, SYMBOLS);
-    log.info(`FreeRateFeed configured for: ${SYMBOLS.join(', ')}`);
-  }
 
 
   // Deriv — free live ticks over WebSocket (no MT5, no card).
   // Prices are Deriv's feed, not Exness. Ranked below MT5 when EA is live.
   // App ID: free at api.deriv.com — or leave blank to use public sample 1089.
-  // LIVE TICKS: Deriv + MT5 only (Yahoo/Twelve/Binance disabled unless LIVE_FEED_LEGACY=1)
+  // LIVE TICKS + OHLC: Deriv + MT5 only
   if (DerivFeed && SYMBOLS.length && process.env.DISABLE_DERIV !== '1') {
     const derivFeed = new DerivFeed({
       symbols: SYMBOLS,
@@ -2336,43 +2116,6 @@ function buildFeeds() {
   // Yahoo OHLC — BOOTSTRAP ONLY when broker (Exness/MT5) is not feeding.
   // Live prices and live candles come from OmniceeEA → POST /api/ea/prices.
   // Yahoo never overwrites a symbol that has a recent mt5_ea tick.
-  if (YahooOhlcFeed && SYMBOLS.length && process.env.LIVE_FEED_LEGACY === '1') {
-    const yahooOhlc = new YahooOhlcFeed({ symbols: SYMBOLS, interval: '1h', range: '10d' });
-    yahooOhlc.on('candles', ({ symbol, timeframe, candles }) => {
-      if (!candleStores[symbol]) candleStores[symbol] = {};
-      const prev = candleStores[symbol][timeframe] || [];
-      // Seed only if we have little/no history — do not clobber broker-built bars
-      if (prev.length >= 50) {
-        const last = lastPriceBySymbol[symbol];
-        if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < BROKER_PRICE_HOLD_MS * 4) {
-          return; // broker is live — keep its OHLC
-        }
-      }
-      if (prev.length < 40 && candles.length > prev.length) {
-        candleStores[symbol][timeframe] = candles.slice(-500);
-        log.info(`YahooOhlc seed: ${symbol} ${timeframe} ${candles.length} bars (fallback until MT5/Exness EA connects)`);
-      }
-    });
-    yahooOhlc.on('candle', ({ symbol, timeframe, candle, isClosed }) => {
-      // Skip Yahoo live bar updates when Exness/MT5 is the authority
-      const last = lastPriceBySymbol[symbol];
-      if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < BROKER_PRICE_HOLD_MS * 4) {
-        return;
-      }
-      try {
-        if (typeof onCandle === 'function') {
-          onCandle({ symbol, timeframe, candle: { ...candle, source: 'yahoo-free' }, isClosed: true });
-        }
-      } catch (err) {
-        log.warn(`YahooOhlc onCandle ${symbol}: ${err.message}`);
-      }
-    });
-    yahooOhlc.on('error', (err) => log.warn(`YahooOhlc: ${err.symbol || ''} ${err.error || err.message || err}`));
-    yahooOhlc.on('connected', () => log.info(`YahooOhlcFeed connected — bootstrap only; attach OmniceeEA for Exness/MT5 live prices`));
-    yahooOhlc.start();
-    feeds.push({ name: 'YahooOhlcFeed', instance: yahooOhlc, symbols: SYMBOLS });
-    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('YahooOHLC', yahooOhlc, SYMBOLS);
-  }
 
   // Surface Finnhub in Monitor when a key is present (news + optional FX stream)
   if (dataIntegrityMonitor && finnhubFeed?.enabled?.()) {
@@ -2521,7 +2264,7 @@ async function main() {
   }
 
   if (feeds.length === 0) {
-    log.warn('No feeds configured. Add BINANCE_API_KEY and/or TWELVE_DATA_API_KEY to .env');
+    log.warn('No live feeds configured — enable Deriv (DERIV_APP_ID) and/or attach MT5 OmniceeEA');
     log.info('Running in dry-run mode — use the test script to inject synthetic candles');
   }
 
