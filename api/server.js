@@ -140,7 +140,24 @@ function createApp() {
   app.use(compression());
   app.use(express.json({ limit: '512kb' }));
   app.use(emailSessionMiddleware(db));
-  app.use('/api/auth/email', createEmailAuthRouter(express, db));
+  // FIX: publicLimiter below deliberately skips everything under
+  // /api/auth/ (see its `skip` function) — that's correct, a dashboard-read
+  // budget is the wrong shape for login endpoints — but nothing ever
+  // supplied a REPLACEMENT limit for that path. Net effect: /api/auth/
+  // email/request and /verify had ZERO IP-based rate limiting; the only
+  // defense was email-auth.js's own 30-second-per-email cooldown, which
+  // does nothing against someone cycling through many different target
+  // emails from one IP (mail-bombing a victim's inbox with OTP codes,
+  // one email each) or scripting many parallel /verify guesses. This is
+  // deliberately tighter than publicLimiter and scoped only to auth.
+  const authLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    limit: Number(process.env.AUTH_RATE_LIMIT_PER_MIN || 20),
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { ok: false, error: 'Too many auth requests — wait a minute and try again' },
+  });
+  app.use('/api/auth/email', authLimiter, createEmailAuthRouter(express, db));
   ensureAuthIndexes(db).catch(err => console.warn('[AUTH] indexes:', err.message));
   // Global limit for dashboard/public API. EA price ticks are 1/sec and must
   // not share this budget or broker prices never land and Yahoo wins.

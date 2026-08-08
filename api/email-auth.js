@@ -96,8 +96,29 @@ async function sendEmail({ to, subject, text }) {
 function createEmailAuthRouter(express, db) {
   const router = express.Router();
 
-  // rate-ish: simple in-memory per email
-  const lastRequest = new Map();
+  // Per-email request tracking: 30s cooldown between codes (unchanged) PLUS
+  // a rolling-24h cap (new). FIX: the 30s cooldown alone only slows a
+  // single source down to ~2 requests/min — cheap to sidestep by rotating
+  // source IPs to keep mail-bombing ONE target inbox with OTP codes, since
+  // nothing capped total volume per email over time. authLimiter (see
+  // api/server.js) now covers the IP side of this; this covers the
+  // per-victim side, which IP limiting structurally can't.
+  const MAX_PER_DAY = Number(process.env.OTP_MAX_PER_EMAIL_PER_DAY || 8);
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const lastRequest = new Map(); // email -> { last: ts, windowStart: ts, count: n }
+
+  // In-memory only (matches the rest of this file's existing lastRequest
+  // approach) — resets on a Render free-tier restart/spin-down, which is
+  // an acceptable trade-off for a friends-scale app; a persistent version
+  // would move this into the same `email_otps` Mongo collection instead.
+  // Cleanup runs opportunistically on each request rather than its own
+  // timer, so an idle process doesn't need a background interval at all.
+  function cleanupStale(now) {
+    if (lastRequest.size < 500) return; // not worth the sweep yet
+    for (const [email, rec] of lastRequest) {
+      if (now - rec.windowStart > DAY_MS) lastRequest.delete(email);
+    }
+  }
 
   router.post('/request', async (req, res) => {
     try {
@@ -107,11 +128,17 @@ function createEmailAuthRouter(express, db) {
       }
 
       const now = Date.now();
-      const prev = lastRequest.get(email) || 0;
-      if (now - prev < 30000) {
+      cleanupStale(now);
+      const prev = lastRequest.get(email);
+      if (prev && now - prev.last < 30000) {
         return res.status(429).json({ ok: false, error: 'Wait 30 seconds before requesting another code' });
       }
-      lastRequest.set(email, now);
+      const windowStart = prev && now - prev.windowStart < DAY_MS ? prev.windowStart : now;
+      const count = prev && now - prev.windowStart < DAY_MS ? prev.count + 1 : 1;
+      if (count > MAX_PER_DAY) {
+        return res.status(429).json({ ok: false, error: 'Too many codes requested for this email today. Try again tomorrow.' });
+      }
+      lastRequest.set(email, { last: now, windowStart, count });
 
       const code = randomCode();
       const codeHash = hashCode(email, code);
