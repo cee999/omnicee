@@ -58,6 +58,18 @@ class BacktestEngine {
    * @param {number} [cfg.maxDailyLossPct=3.0]
    * @param {number} [cfg.maxDrawdownPct=10.0]
    * @param {number} [cfg.minScore=75]
+   * @param {boolean} [cfg.softGates=true] - MIRRORS index.js's SIGNAL_SOFT_GATES
+   *   (default true, same as live). When true: a session/killzone dead-zone
+   *   no longer hard-blocks — scoring continues and the signal lives or
+   *   dies on score/gates alone, same as crypto always does. When false:
+   *   reproduces the pre-softening behavior (hard session reject + the
+   *   scorer's own internal dead-zone check both active). Pass this
+   *   explicitly and run the same candles twice (true vs false) to measure
+   *   whether softening the gates actually helped or hurt — see
+   *   backtest/compare-gates.js, built for exactly that question.
+   * @param {boolean} [cfg.requireKillzone=false] - MIRRORS index.js's
+   *   REQUIRE_KZ, forwarded to SignalScorer only (the live SessionFilter
+   *   itself is always constructed with no args either way — see index.js).
    */
   constructor(cfg) {
     this.symbols = cfg.symbols;
@@ -66,6 +78,14 @@ class BacktestEngine {
     this.accountBalance = cfg.accountBalance ?? 10000;
     this.riskPct = cfg.riskPct ?? 1.0;
     this.minScore = cfg.minScore ?? 75;
+    // FIX: this engine previously always ran the pre-softening gate
+    // configuration (hard session block, scorer's own sessionFilter always
+    // on) no matter what SIGNAL_SOFT_GATES was set to live — so no backtest
+    // run through this file could ever reflect (or validate) the softened
+    // gates actually running in production. Defaults now match index.js's
+    // defaults exactly; both are still overridable per-run for comparison.
+    this.softGates = cfg.softGates ?? true;
+    this.requireKillzone = cfg.requireKillzone ?? false;
 
     // ── Build the exact same singleton pipeline as index.js's buildSingletons() ──
     this.drawdownGuard = new DrawdownGuard({
@@ -75,9 +95,9 @@ class BacktestEngine {
     });
     this.scorer = new SignalScorer({
       minScore: this.minScore,
-      sessionFilter: true,
+      sessionFilter: !this.softGates, // MIRRORS index.js: soft mode skips the scorer's own dead-zone hard reject
       newsBlackout: true,
-      requireKillzone: false,
+      requireKillzone: this.requireKillzone,
       circuitBreaker: { maxDailyLoss: cfg.maxDailyLossPct ?? 3.0, maxDrawdown: cfg.maxDrawdownPct ?? 10.0 },
     });
     this.sltp = new SLTPEngine();
@@ -230,7 +250,19 @@ class BacktestEngine {
     let sessionQuality = null;
     if (this.sessionFilter?.check) {
       sessionQuality = this.sessionFilter.check(symbol, candle.timestamp);
-      if (!sessionQuality.allowed) { this.rejections.session++; return; }
+      if (!sessionQuality.allowed) {
+        // MIRRORS index.js's runAnalysisCycle(): crypto always continues;
+        // everything else continues too iff softGates is on, otherwise this
+        // is the old hard reject. See the softGates doc comment on the
+        // constructor above for why this needs to be a real toggle here,
+        // not hardcoded to the old behavior.
+        const isCrypto = /USDT|USDC|BTC$|ETH$/.test(symbol);
+        if (!(this.softGates || isCrypto)) {
+          this.rejections.session++;
+          return;
+        }
+        // soft-block: fall through and keep scoring, same as live.
+      }
     }
 
     let drawdownEval = null;
