@@ -216,6 +216,41 @@ function createApp() {
     res.json({ ok: true, market: rows, source: 'memory' });
   });
 
+  // Historical + live-forming OHLC candles for the chart. Reads directly
+  // from the same candleStores object the live agents run technical
+  // analysis on (published via api/realtime.js's setEngines(), same
+  // pattern /api/outlook already uses below) rather than maintaining a
+  // separate history buffer, so the chart never shows something the
+  // signal pipeline itself didn't actually see. candleStores[symbol][tf]
+  // already includes the still-forming (unclosed) current bar — both
+  // onMT5Tick() and the exchange WS feeds update it on every tick before
+  // it closes — so this endpoint alone is enough for an initial paint;
+  // the frontend then keeps that last bar live between polls using the
+  // same 'market' tick stream it already consumes for the ticker.
+  app.get('/api/candles', dashboardReadAuth, async (req, res) => {
+    const live = getEngines();
+    if (!live.candleStores) {
+      return res.status(503).json({ ok: false, error: 'Candle store not yet initialized' });
+    }
+    const symbol = String(req.query.symbol || '').toUpperCase().trim();
+    const timeframe = String(req.query.timeframe || 'H1').toUpperCase().trim();
+    const limit = Math.min(Math.max(Number(req.query.limit) || 300, 10), 500);
+    if (!symbol) return res.status(400).json({ ok: false, error: 'symbol required' });
+    const candles = live.candleStores[symbol]?.[timeframe];
+    if (!candles || !candles.length) {
+      return res.json({ ok: true, symbol, timeframe, candles: [], note: 'No candle history yet for this symbol/timeframe — attach MT5 EA or wait for TwelveData/Binance to populate it.' });
+    }
+    // timestamp is stored in ms (see feeds/binance-ws.js, onMT5Tick) —
+    // convert to whole seconds here, once, server-side, since every
+    // consumer (lightweight-charts) wants UNIX seconds, not ms.
+    const out = candles.slice(-limit).map(c => ({
+      time: Math.floor(c.timestamp / 1000),
+      open: c.open, high: c.high, low: c.low, close: c.close,
+      volume: c.volume || 0,
+    }));
+    res.json({ ok: true, symbol, timeframe, candles: out });
+  });
+
   app.get('/api/outlook', dashboardReadAuth, async (req, res) => {
     const live = getEngines();
     if (!live.regimeEngine || !live.candleStores) {

@@ -1,8 +1,12 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
-  AreaChart, Area, BarChart, Bar, XAxis, YAxis,
+  BarChart, Bar, XAxis, YAxis,
   Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from 'recharts';
+import {
+  createChart, CandlestickSeries, HistogramSeries, createSeriesMarkers,
+  CrosshairMode, LineStyle,
+} from 'lightweight-charts';
 import {
   LayoutDashboard, Radio, Globe2, Activity, Flame, FlaskConical,
   ScrollText, ShieldAlert, ChevronRight, ChevronDown,
@@ -1071,30 +1075,211 @@ function MarketVoice({ now, signals, quotes, outlook, mode, levels }) {
   );
 }
 
+/* ── LIVE CHART (candlestick, MT5/broker-style) ────────────────────────
+ * lightweight-charts@5 does the actual rendering. Historical candles come
+ * from GET /api/candles, which reads the exact same candleStores object
+ * the live agents run technical analysis on (see api/server.js) — this
+ * chart never shows a bar the signal pipeline itself didn't see. Between
+ * polls, the still-forming bar is kept live by aggregating the same
+ * 'market' tick stream the ticker tape already consumes, bucketed with
+ * the identical Math.floor(now/durationMs)*durationMs logic index.js
+ * uses server-side (TIMEFRAME_MS), so the client and server never
+ * disagree about where one bar ends and the next begins.
+ */
+const TIMEFRAME_MS_CLIENT = { M15: 15 * 60e3, H1: 3600e3, H4: 4 * 3600e3, D1: 86400e3 };
+const CHART_COLORS = {
+  up: '#1fe3a8', down: '#ff5470', grid: '#1c232d', border: '#1c232d',
+  text: '#526078', crosshair: '#8b9bb0', panel2: '#10151c',
+};
+
+function LiveChart({ symbol, quote, signals }) {
+  const [timeframe, setTimeframe] = useState('H1');
+  const [status, setStatus] = useState('loading'); // loading | ok | empty | error
+  const [ohlcReadout, setOhlcReadout] = useState(null);
+
+  const containerRef = useRef(null);
+  const chartRef = useRef(null);
+  const candleSeriesRef = useRef(null);
+  const volumeSeriesRef = useRef(null);
+  const markersRef = useRef(null);
+  const priceLinesRef = useRef([]);
+  const lastBarRef = useRef(null);
+  const lastVolRef = useRef(0);
+
+  // Mount the chart instance once. Symbol/timeframe switches below reuse
+  // it via setData() rather than tearing it down — recreating a canvas
+  // chart on every symbol click is the kind of thing that looks fine in
+  // a demo and then jitters/flickers the moment it's live 24/7.
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const chart = createChart(containerRef.current, {
+      autoSize: true,
+      layout: { background: { color: 'transparent' }, textColor: CHART_COLORS.text, fontFamily: 'JetBrains Mono, monospace', fontSize: 10 },
+      grid: { vertLines: { color: CHART_COLORS.grid }, horzLines: { color: CHART_COLORS.grid } },
+      crosshair: {
+        mode: CrosshairMode.Normal,
+        vertLine: { color: CHART_COLORS.crosshair, width: 1, style: LineStyle.Dashed, labelBackgroundColor: CHART_COLORS.panel2 },
+        horzLine: { color: CHART_COLORS.crosshair, width: 1, style: LineStyle.Dashed, labelBackgroundColor: CHART_COLORS.panel2 },
+      },
+      rightPriceScale: { borderColor: CHART_COLORS.border },
+      timeScale: { borderColor: CHART_COLORS.border, timeVisible: true, secondsVisible: false },
+    });
+
+    const candleSeries = chart.addSeries(CandlestickSeries, {
+      upColor: CHART_COLORS.up, downColor: CHART_COLORS.down,
+      borderUpColor: CHART_COLORS.up, borderDownColor: CHART_COLORS.down,
+      wickUpColor: CHART_COLORS.up, wickDownColor: CHART_COLORS.down,
+      priceLineVisible: false,
+    });
+    // Volume as a squashed overlay in the bottom 20% of the same pane —
+    // the standard lightweight-charts pattern, avoids multi-pane sizing
+    // quirks for a first cut.
+    const volumeSeries = chart.addSeries(HistogramSeries, {
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'volume',
+      color: CHART_COLORS.up,
+    });
+    volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+
+    const markers = createSeriesMarkers(candleSeries, []);
+
+    const onCrosshairMove = (param) => {
+      const bar = param.seriesData?.get(candleSeries);
+      setOhlcReadout(bar ? { o: bar.open, h: bar.high, l: bar.low, c: bar.close } : null);
+    };
+    chart.subscribeCrosshairMove(onCrosshairMove);
+
+    chartRef.current = chart;
+    candleSeriesRef.current = candleSeries;
+    volumeSeriesRef.current = volumeSeries;
+    markersRef.current = markers;
+
+    return () => {
+      chart.unsubscribeCrosshairMove(onCrosshairMove);
+      chart.remove();
+      chartRef.current = null;
+      candleSeriesRef.current = null;
+      volumeSeriesRef.current = null;
+      markersRef.current = null;
+    };
+  }, []);
+
+  // Load history whenever symbol or timeframe changes, and self-heal on
+  // an interval — corrects for the live-forming bar's volume (which
+  // client-side tick aggregation below can't compute, since 'market'
+  // ticks don't carry volume) and for anything missed across a
+  // reconnect. 45s, not faster: this is a REST poll on top of the
+  // socket stream, not a replacement for it.
+  useEffect(() => {
+    if (!symbol) return;
+    let cancelled = false;
+    lastBarRef.current = null;
+
+    async function load() {
+      try {
+        const data = await omniFetch(`/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&limit=300`);
+        if (cancelled || !candleSeriesRef.current) return;
+        const candles = data?.candles || [];
+        if (!candles.length) { setStatus('empty'); return; }
+        candleSeriesRef.current.setData(candles.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })));
+        volumeSeriesRef.current?.setData(candles.map(c => ({ time: c.time, value: c.volume || 0, color: c.close >= c.open ? 'rgba(31,227,168,0.35)' : 'rgba(255,84,112,0.35)' })));
+        const last = candles[candles.length - 1];
+        lastBarRef.current = { time: last.time, open: last.open, high: last.high, low: last.low, close: last.close };
+        lastVolRef.current = last.volume || 0;
+        setStatus('ok');
+      } catch (e) {
+        if (!cancelled) setStatus('error');
+      }
+    }
+    load();
+    const poll = setInterval(load, 45000);
+    return () => { cancelled = true; clearInterval(poll); };
+  }, [symbol, timeframe]);
+
+  // Keep the current bar live between polls using the same tick stream
+  // the header bid/ask readout already uses. Bucketing mirrors index.js's
+  // TIMEFRAME_MS math exactly so this bar and the server's eventual
+  // closed bar for the same window never disagree on boundaries.
+  useEffect(() => {
+    const price = Number(quote?.price);
+    if (!candleSeriesRef.current || !Number.isFinite(price)) return;
+    const durationMs = TIMEFRAME_MS_CLIENT[timeframe];
+    const bucketTime = Math.floor((quote.ts || Date.now()) / durationMs) * (durationMs / 1000);
+    const prev = lastBarRef.current;
+    const bar = (!prev || prev.time !== bucketTime)
+      ? { time: bucketTime, open: prev ? prev.close : price, high: price, low: price, close: price }
+      : { ...prev, high: Math.max(prev.high, price), low: Math.min(prev.low, price), close: price };
+    lastBarRef.current = bar;
+    candleSeriesRef.current.update(bar);
+    volumeSeriesRef.current?.update({ time: bar.time, value: lastVolRef.current, color: bar.close >= bar.open ? 'rgba(31,227,168,0.35)' : 'rgba(255,84,112,0.35)' });
+  }, [quote?.price, quote?.ts, timeframe]);
+
+  // Signal overlay: arrows for every signal on this symbol, entry/SL/TP1
+  // price lines for only the most recent one (all of them would just be
+  // clutter on a live-forever chart).
+  useEffect(() => {
+    if (!markersRef.current || !candleSeriesRef.current) return;
+    const durationMs = TIMEFRAME_MS_CLIENT[timeframe];
+    const list = (signals || []).filter(s => s.action === 'BUY' || s.action === 'SELL');
+
+    markersRef.current.setMarkers(list.map(s => ({
+      time: Math.floor((s.timestamp || Date.now()) / durationMs) * (durationMs / 1000),
+      position: s.action === 'BUY' ? 'belowBar' : 'aboveBar',
+      color: s.action === 'BUY' ? CHART_COLORS.up : CHART_COLORS.down,
+      shape: s.action === 'BUY' ? 'arrowUp' : 'arrowDown',
+      text: s.score != null ? String(Math.round(s.score)) : s.action,
+    })));
+
+    priceLinesRef.current.forEach(l => { try { candleSeriesRef.current.removePriceLine(l); } catch (_) {} });
+    priceLinesRef.current = [];
+    const latest = list[0];
+    if (latest) {
+      const lines = [];
+      if (Number.isFinite(latest.entry)) lines.push({ price: latest.entry, color: CHART_COLORS.text, lineStyle: LineStyle.Solid, title: 'entry' });
+      if (Number.isFinite(latest.stopLoss)) lines.push({ price: latest.stopLoss, color: CHART_COLORS.down, lineStyle: LineStyle.Dashed, title: 'SL' });
+      if (Number.isFinite(latest.targets?.[0])) lines.push({ price: latest.targets[0], color: CHART_COLORS.up, lineStyle: LineStyle.Dashed, title: 'TP1' });
+      priceLinesRef.current = lines.map(opts => candleSeriesRef.current.createPriceLine({ ...opts, lineWidth: 1, axisLabelVisible: true }));
+    }
+  }, [signals, timeframe]);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
+        <div className="flex gap-1">
+          {TIMEFRAMES.map(tf => (
+            <button key={tf} onClick={() => setTimeframe(tf)}
+              className="font-mono text-[10px] px-2 py-0.5 rounded"
+              style={{ background: timeframe === tf ? 'var(--panel2)' : 'transparent', color: timeframe === tf ? 'var(--emerald)' : 'var(--textFaint)', border: '1px solid var(--border)' }}>
+              {tf}
+            </button>
+          ))}
+        </div>
+        {ohlcReadout && (
+          <div className="font-mono text-[10px] flex gap-2" style={{ color: 'var(--textDim)' }}>
+            <span>O <span style={{ color: 'var(--text)' }}>{fmtPrice(symbol, ohlcReadout.o)}</span></span>
+            <span>H <span style={{ color: 'var(--emerald)' }}>{fmtPrice(symbol, ohlcReadout.h)}</span></span>
+            <span>L <span style={{ color: 'var(--coral)' }}>{fmtPrice(symbol, ohlcReadout.l)}</span></span>
+            <span>C <span style={{ color: 'var(--text)' }}>{fmtPrice(symbol, ohlcReadout.c)}</span></span>
+          </div>
+        )}
+      </div>
+      <div className="relative h-[200px] md:h-[280px]">
+        {status === 'empty' && <div className="absolute inset-0 flex items-center justify-center"><WaitingForBackend height={180} label="No candle history yet for this symbol/timeframe" /></div>}
+        {status === 'error' && <div className="absolute inset-0 flex items-center justify-center"><WaitingForBackend height={180} label="Couldn't reach /api/candles — retrying…" /></div>}
+        {status === 'loading' && <div className="absolute inset-0 flex items-center justify-center"><WaitingForBackend height={180} label="Loading candles…" /></div>}
+        <div ref={containerRef} className="w-full h-full" style={{ visibility: status === 'ok' ? 'visible' : 'hidden' }} />
+      </div>
+    </div>
+  );
+}
+
 /* ── DASH ───────────────────────────────────────────────────────────── */
 function DashTab({ signals, accountBalance, journalStats, prices, quotes, changes, mode, outlook, now, levels }) {
   const approved = signals.filter(s => s.gate?.status === 'approved' || s.gate?.status === 'APPROVED');
   const recent = signals.slice(0, 12);
   const [chartSymbol, setChartSymbol] = useState('XAUUSD');
-  const [priceHistory, setPriceHistory] = useState(() => Object.fromEntries(SYMBOLS.map(s => [s, []])));
-
-  useEffect(() => {
-    setPriceHistory(prev => {
-      const next = { ...prev };
-      SYMBOLS.forEach(sym => {
-        const px = quotes?.[sym]?.price ?? prices?.[sym];
-        if (px == null || !Number.isFinite(Number(px))) return;
-        const arr = next[sym] || [];
-        if (arr.length && arr[arr.length - 1].price === Number(px)) return;
-        next[sym] = [...arr, { t: Date.now(), price: Number(px) }].slice(-200);
-      });
-      return next;
-    });
-  }, [prices, quotes]);
-
-  const chartData = priceHistory[chartSymbol] || [];
-  const chartUp = chartData.length >= 2 ? chartData[chartData.length - 1].price >= chartData[0].price : true;
   const q = quotes?.[chartSymbol];
+  const chartSignals = useMemo(() => signals.filter(s => s.symbol === chartSymbol), [signals, chartSymbol]);
 
   return (
     <div className="p-2 md:p-3 space-y-2 max-w-[1400px] mx-auto w-full">
@@ -1118,29 +1303,7 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
               {q?.source === 'mt5_ea' && <Pill tone="up">MT5</Pill>}
             </div>
           </div>
-          <div className="h-[200px] md:h-[280px]">
-            {chartData.length < 2 ? (
-              <WaitingForBackend height={180} label="Collecting live ticks…" />
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chartData}>
-                  <defs>
-                    <linearGradient id="priceGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={chartUp ? '#1fe3a8' : '#ff5470'} stopOpacity={0.35} />
-                      <stop offset="100%" stopColor={chartUp ? '#1fe3a8' : '#ff5470'} stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid stroke="#1c232d" vertical={false} />
-                  <XAxis dataKey="t" hide />
-                  <YAxis orientation="right" domain={['dataMin', 'dataMax']} tick={{ fill: '#526078', fontSize: 10 }} width={72}
-                    tickFormatter={(v) => fmtPrice(chartSymbol, v)} />
-                  <Tooltip contentStyle={{ background: '#10151c', border: '1px solid #1c232d', borderRadius: 8, fontSize: 11 }}
-                    labelFormatter={(t) => new Date(t).toLocaleTimeString()} formatter={(v) => [fmtPrice(chartSymbol, v), symLabel(chartSymbol)]} />
-                  <Area type="monotone" dataKey="price" stroke={chartUp ? '#1fe3a8' : '#ff5470'} fill="url(#priceGrad)" strokeWidth={1.5} isAnimationActive={false} />
-                </AreaChart>
-              </ResponsiveContainer>
-            )}
-          </div>
+          <LiveChart symbol={chartSymbol} quote={q} signals={chartSignals} />
         </div>
 
         <div className="omni-panel overflow-hidden order-1 lg:order-2 flex flex-col max-h-[320px] lg:max-h-[340px]">

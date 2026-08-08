@@ -53,6 +53,7 @@ export const OmniceeAPI = {
   health: () => get('/health'),
   market: ({ symbols } = {}) => get('/api/market', { symbols: Array.isArray(symbols) ? symbols.join(',') : symbols }),
   signals: ({ symbol, limit = 50 } = {}) => get('/api/signals', { symbol, limit }),
+  candles: ({ symbol, timeframe = 'H1', limit = 300 } = {}) => get('/api/candles', { symbol, timeframe, limit }),
   outlook: () => get('/api/outlook'),
   heatmap: ({ timeframe } = {}) => get('/api/heatmap', { timeframe }),
   auditTrail: ({ symbol, limit = 50 } = {}) => get('/api/audit-trail', { symbol, limit }),
