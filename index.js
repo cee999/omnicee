@@ -145,6 +145,7 @@ const { FinnhubFeed }        = loadModule('./feeds/finnhub-feed',               
 const { FMPFeed }            = loadModule('./feeds/fmp-feed',                    'FMPFeed')           || {};
 const { ForexFactoryCalendar } = loadModule('./feeds/forex-factory-calendar',   'ForexFactoryCalendar') || {};
 const { YahooOhlcFeed }        = loadModule('./feeds/yahoo-ohlc-feed',          'YahooOhlcFeed')        || {};
+const { DerivFeed }            = loadModule('./feeds/deriv-feed',               'DerivFeed')            || {};
 const { CFTCCotFeed }        = loadModule('./feeds/cftc-cot-feed',               'CFTCCotFeed')       || {};
 const { COTReportParser }    = loadModule('./feeds/cot-report-parser',           'COTReportParser')   || {};
 const { OpportunityRanker }  = loadModule('./signal-pipeline/opportunity-ranker', 'OpportunityRanker') || {};
@@ -1320,6 +1321,7 @@ const PRICE_SOURCE_RANK = {
   tradingview: 90,
   binance: 70,
   bybit: 70,
+  deriv: 55,           // free live WS ticks — better than Yahoo, below broker
   finnhub: 50,
   twelvedata: 50,
   candle: 40,
@@ -2249,6 +2251,32 @@ function buildFeeds() {
     });
     if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('Yahoo', freeRateFeed, SYMBOLS);
     log.info(`FreeRateFeed configured for: ${SYMBOLS.join(', ')}`);
+  }
+
+
+  // Deriv — free live ticks over WebSocket (no MT5, no card).
+  // Prices are Deriv's feed, not Exness. Ranked below MT5 when EA is live.
+  // App ID: free at api.deriv.com — or leave blank to use public sample 1089.
+  if (DerivFeed && SYMBOLS.length && process.env.DISABLE_DERIV !== '1') {
+    const derivFeed = new DerivFeed({
+      symbols: SYMBOLS,
+      appId: process.env.DERIV_APP_ID || '1089',
+    });
+    derivFeed.on('price', ({ symbol, price, bid, ask, change }) => {
+      // Do not overwrite a fresh Exness/MT5 tick
+      const last = lastPriceBySymbol[symbol];
+      if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < (BROKER_PRICE_HOLD_MS || 120000)) {
+        return;
+      }
+      onLivePrice(symbol, price, { source: 'deriv', change, bid, ask });
+    });
+    derivFeed.on('connected', () => log.info(`DerivFeed connected (app_id=${process.env.DERIV_APP_ID || '1089'}) — free live ticks, PC can stay off`));
+    derivFeed.on('disconnected', () => log.warn('DerivFeed disconnected — will reconnect'));
+    derivFeed.on('error', (err) => log.warn(`DerivFeed: ${feedErrorMessage(err)}`));
+    derivFeed.start();
+    feeds.push({ name: 'DerivFeed', instance: derivFeed, symbols: SYMBOLS });
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('Deriv', derivFeed, SYMBOLS);
+    log.info(`DerivFeed configured for: ${SYMBOLS.filter(s => true).join(', ')}`);
   }
 
   // Yahoo OHLC — BOOTSTRAP ONLY when broker (Exness/MT5) is not feeding.

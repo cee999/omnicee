@@ -103,6 +103,7 @@ function normalizeSignal(s) {
 }
 
 const FEEDS = [
+  { name: 'Deriv',        kind: 'free live ticks', status: 'unknown' },
   { name: 'Yahoo',        kind: 'free ticks', status: 'unknown' },
   { name: 'YahooOHLC',    kind: 'free candles', status: 'unknown' },
   { name: 'Binance',      kind: 'crypto ws',  status: 'unknown' },
