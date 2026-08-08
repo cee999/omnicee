@@ -253,19 +253,35 @@ function createApp() {
     const timeframe = String(req.query.timeframe || 'H1').toUpperCase().trim();
     const limit = Math.min(Math.max(Number(req.query.limit) || 300, 10), 500);
     if (!symbol) return res.status(400).json({ ok: false, error: 'symbol required' });
-    const candles = live.candleStores[symbol]?.[timeframe];
-    if (!candles || !candles.length) {
-      return res.json({ ok: true, symbol, timeframe, candles: [], note: 'No candle history yet for this symbol/timeframe — attach MT5 EA or wait for TwelveData/Binance to populate it.' });
+    let candles = live.candleStores[symbol]?.[timeframe];
+    if (!candles?.length) {
+      const fallbacks = { H4: ['H1', 'D1'], M30: ['M15', 'H1'], M1: ['M5', 'M15'] };
+      for (const fb of (fallbacks[timeframe] || [])) {
+        if (live.candleStores[symbol]?.[fb]?.length) {
+          candles = live.candleStores[symbol][fb];
+          break;
+        }
+      }
     }
-    // timestamp is stored in ms (see feeds/binance-ws.js, onMT5Tick) —
-    // convert to whole seconds here, once, server-side, since every
-    // consumer (lightweight-charts) wants UNIX seconds, not ms.
-    const out = candles.slice(-limit).map(c => ({
-      time: Math.floor(c.timestamp / 1000),
-      open: c.open, high: c.high, low: c.low, close: c.close,
-      volume: c.volume || 0,
-    }));
-    res.json({ ok: true, symbol, timeframe, candles: out });
+    if (!candles || !candles.length) {
+      return res.json({ ok: true, symbol, timeframe, candles: [], note: 'No candle history yet — wait for Yahoo/MT5 bootstrap.' });
+    }
+    const out = candles.slice(-limit).map(c => {
+      const raw = Number(c.timestamp ?? c.time);
+      if (!Number.isFinite(raw)) return null;
+      const time = Math.floor(raw > 1e12 ? raw / 1000 : raw);
+      const open = Number(c.open), high = Number(c.high), low = Number(c.low), close = Number(c.close);
+      if (![time, open, high, low, close].every(Number.isFinite)) return null;
+      if (time < 1e8) return null;
+      return { time, open, high, low, close, volume: Number(c.volume) || 0 };
+    }).filter(Boolean);
+    out.sort((a, b) => a.time - b.time);
+    const dedup = [];
+    for (const bar of out) {
+      if (dedup.length && dedup[dedup.length - 1].time === bar.time) dedup[dedup.length - 1] = bar;
+      else dedup.push(bar);
+    }
+    res.json({ ok: true, symbol, timeframe, candles: dedup });
   });
 
   app.get('/api/outlook', dashboardReadAuth, async (req, res) => {

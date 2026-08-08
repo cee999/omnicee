@@ -1,27 +1,35 @@
 /**
  * Yahoo Finance OHLC candles — free, no API key.
- * Fills candle history so the signal pipeline can run without Twelve Data / MT5.
+ * Seeds multiple timeframes so the chart does not go blank on TF switch.
  */
 'use strict';
 
 const https = require('https');
 const { EventEmitter } = require('events');
 
-const UA = 'Mozilla/5.0 (compatible; OMNICEE/1.0)';
+const UA = 'Mozilla/5.0 (compatible; OMNICEE/1.1)';
 
-/** Map internal symbol → Yahoo chart symbol */
 const YAHOO_SYMBOL = {
   BTCUSDT: 'BTC-USD',
   ETHUSDT: 'ETH-USD',
   EURUSD: 'EURUSD=X',
   GBPUSD: 'GBPUSD=X',
   USDJPY: 'USDJPY=X',
-  XAUUSD: 'GC=F', // COMEX gold futures proxy
+  XAUUSD: 'GC=F',
   AUDUSD: 'AUDUSD=X',
   USDCAD: 'USDCAD=X',
   NZDUSD: 'NZDUSD=X',
   USDCHF: 'USDCHF=X',
+  USOIL: 'CL=F',
 };
+
+const TF_SPECS = [
+  { interval: '5m', timeframe: 'M5', range: '5d' },
+  { interval: '15m', timeframe: 'M15', range: '10d' },
+  { interval: '60m', timeframe: 'H1', range: '1mo' },
+  { interval: '1h', timeframe: 'H1', range: '1mo' },
+  { interval: '1d', timeframe: 'D1', range: '6mo' },
+];
 
 function httpGetJSON(url) {
   return new Promise((resolve, reject) => {
@@ -47,11 +55,14 @@ function toCandles(chartResult) {
   for (let i = 0; i < r.timestamp.length; i++) {
     const o = q.open?.[i], h = q.high?.[i], l = q.low?.[i], c = q.close?.[i];
     if (![o, h, l, c].every(Number.isFinite)) continue;
+    const ts = Number(r.timestamp[i]);
+    const ms = ts > 1e12 ? ts : ts * 1000;
     out.push({
       open: o, high: h, low: l, close: c,
       volume: Number(q.volume?.[i]) || 0,
-      timestamp: r.timestamp[i] * 1000,
+      timestamp: ms,
       isClosed: true,
+      source: 'yahoo-ohlc',
     });
   }
   return out;
@@ -61,11 +72,10 @@ class YahooOhlcFeed extends EventEmitter {
   constructor(config = {}) {
     super();
     this.symbols = config.symbols || Object.keys(YAHOO_SYMBOL);
-    this.interval = config.interval || '1h';
-    this.range = config.range || '10d';
     this.pollMs = Number(config.pollMs || process.env.YAHOO_OHLC_POLL_MS || 5 * 60 * 1000);
     this._timer = null;
     this._running = false;
+    this._tfSpecs = config.tfSpecs || TF_SPECS;
   }
 
   enabled() { return this.symbols.length > 0; }
@@ -75,28 +85,32 @@ class YahooOhlcFeed extends EventEmitter {
     return YAHOO_SYMBOL[symbol] || (symbol.includes('USDT') ? symbol.replace('USDT', '-USD') : `${symbol}=X`);
   }
 
-  async fetchSymbol(symbol) {
+  async fetchSymbolTf(symbol, interval, range) {
     const y = this.yahooTicker(symbol);
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(y)}?interval=${this.interval}&range=${this.range}`;
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(y)}?interval=${interval}&range=${range}`;
     const data = await httpGetJSON(url);
     if (data?.chart?.error) throw new Error(data.chart.error.description || 'yahoo chart error');
     return toCandles(data);
   }
 
   async pollOnce() {
+    const seenH1 = new Set();
     for (const symbol of this.symbols) {
-      try {
-        const candles = await this.fetchSymbol(symbol);
-        if (candles.length) {
-          this.emit('candles', { symbol, timeframe: 'H1', candles });
-          const last = candles[candles.length - 1];
-          this.emit('candle', { symbol, timeframe: 'H1', candle: last, isClosed: true });
+      for (const spec of this._tfSpecs) {
+        if (spec.timeframe === 'H1' && seenH1.has(symbol)) continue;
+        try {
+          const candles = await this.fetchSymbolTf(symbol, spec.interval, spec.range);
+          if (candles.length) {
+            if (spec.timeframe === 'H1') seenH1.add(symbol);
+            this.emit('candles', { symbol, timeframe: spec.timeframe, candles });
+            const last = candles[candles.length - 1];
+            this.emit('candle', { symbol, timeframe: spec.timeframe, candle: last, isClosed: true });
+          }
+        } catch (err) {
+          this.emit('error', { symbol, timeframe: spec.timeframe, error: err.message });
         }
-      } catch (err) {
-        this.emit('error', { symbol, error: err.message });
+        await new Promise(r => setTimeout(r, 350));
       }
-      // gentle pacing
-      await new Promise(r => setTimeout(r, 400));
     }
   }
 
@@ -121,4 +135,4 @@ class YahooOhlcFeed extends EventEmitter {
   disconnect() { this.stop(); }
 }
 
-module.exports = { YahooOhlcFeed, YAHOO_SYMBOL };
+module.exports = { YahooOhlcFeed, YAHOO_SYMBOL, TF_SPECS };

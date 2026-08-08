@@ -672,7 +672,7 @@ function useLiveFeed() {
               const src = m.source || 'unknown';
               const rank = SRC_RANK[src] ?? 0;
               const prevSrc = priceSourceRef.current[m.symbol];
-              if (prevSrc && prevSrc.rank > rank && (Date.now() - prevSrc.ts) < 60000) return;
+              if (prevSrc && prevSrc.rank > rank && (Date.now() - prevSrc.ts) < 15000) return;
               priceSourceRef.current[m.symbol] = { source: src, rank, ts: Date.now() };
               next[m.symbol] = Number(m.price);
             });
@@ -685,7 +685,7 @@ function useLiveFeed() {
               const src = m.source || 'unknown';
               const rank = SRC_RANK[src] ?? 0;
               const prevSrc = priceSourceRef.current[m.symbol];
-              if (prevSrc && prevSrc.rank > rank && (Date.now() - prevSrc.ts) < 60000) return;
+              if (prevSrc && prevSrc.rank > rank && (Date.now() - prevSrc.ts) < 15000) return;
               next[m.symbol] = {
                 price: Number(m.price),
                 bid: m.bid != null ? Number(m.bid) : prev[m.symbol]?.bid ?? null,
@@ -1164,31 +1164,48 @@ function LiveChart({ symbol, quote, signals }) {
     };
   }, []);
 
-  // Load history whenever symbol or timeframe changes, and self-heal on
-  // an interval — corrects for the live-forming bar's volume (which
-  // client-side tick aggregation below can't compute, since 'market'
-  // ticks don't carry volume) and for anything missed across a
-  // reconnect. 45s, not faster: this is a REST poll on top of the
-  // socket stream, not a replacement for it.
+  // Load history on symbol/timeframe change (race-safe, clears old series)
   useEffect(() => {
     if (!symbol) return;
     let cancelled = false;
+    let reqId = 0;
     lastBarRef.current = null;
+    setStatus('loading');
+    setOhlcReadout(null);
+    try {
+      candleSeriesRef.current?.setData([]);
+      volumeSeriesRef.current?.setData([]);
+      if (markersRef.current?.setMarkers) markersRef.current.setMarkers([]);
+    } catch (_) {}
 
     async function load() {
+      const myId = ++reqId;
       try {
         const data = await omniFetch(`/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&limit=300`);
-        if (cancelled || !candleSeriesRef.current) return;
-        const candles = data?.candles || [];
-        if (!candles.length) { setStatus('empty'); return; }
+        if (cancelled || myId !== reqId || !candleSeriesRef.current) return;
+        const candles = (data?.candles || []).filter(c =>
+          Number.isFinite(c.time) && Number.isFinite(c.open) && Number.isFinite(c.high)
+          && Number.isFinite(c.low) && Number.isFinite(c.close) && c.time > 1e8
+        );
+        if (!candles.length) {
+          try { candleSeriesRef.current.setData([]); volumeSeriesRef.current?.setData([]); } catch (_) {}
+          setStatus('empty');
+          return;
+        }
         candleSeriesRef.current.setData(candles.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })));
-        volumeSeriesRef.current?.setData(candles.map(c => ({ time: c.time, value: c.volume || 0, color: c.close >= c.open ? 'rgba(31,227,168,0.35)' : 'rgba(255,84,112,0.35)' })));
+        volumeSeriesRef.current?.setData(candles.map(c => ({
+          time: c.time,
+          value: c.volume || 0,
+          color: c.close >= c.open ? 'rgba(31,227,168,0.35)' : 'rgba(255,84,112,0.35)',
+        })));
         const last = candles[candles.length - 1];
         lastBarRef.current = { time: last.time, open: last.open, high: last.high, low: last.low, close: last.close };
         lastVolRef.current = last.volume || 0;
+        setOhlcReadout({ o: last.open, h: last.high, l: last.low, c: last.close });
+        try { chartRef.current?.timeScale()?.fitContent?.(); } catch (_) {}
         setStatus('ok');
       } catch (e) {
-        if (!cancelled) setStatus('error');
+        if (!cancelled && myId === reqId) setStatus('error');
       }
     }
     load();
@@ -1264,8 +1281,8 @@ function LiveChart({ symbol, quote, signals }) {
         )}
       </div>
       <div className="relative h-[200px] md:h-[280px]">
-        {status === 'empty' && <div className="absolute inset-0 flex items-center justify-center"><WaitingForBackend height={180} label="No candle history yet for this symbol/timeframe" /></div>}
-        {status === 'error' && <div className="absolute inset-0 flex items-center justify-center"><WaitingForBackend height={180} label="Couldn't reach /api/candles — retrying…" /></div>}
+        {status === 'empty' && <div className="absolute inset-0 flex items-center justify-center"><WaitingForBackend height={180} label="No chart data yet — try H1 or wait a minute" /></div>}
+        {status === 'error' && <div className="absolute inset-0 flex items-center justify-center"><WaitingForBackend height={180} label="Chart temporarily unavailable — retrying…" /></div>}
         {status === 'loading' && <div className="absolute inset-0 flex items-center justify-center"><WaitingForBackend height={180} label="Loading candles…" /></div>}
         <div ref={containerRef} className="w-full h-full" style={{ visibility: status === 'ok' ? 'visible' : 'hidden' }} />
       </div>
@@ -1394,9 +1411,6 @@ function SignalsTab({ signals, prices, quotes, auditLog }) {
   return (
     <div className="p-4 space-y-3">
       <div className="omni-panel p-3 font-mono text-[11px]" style={{ color: 'var(--textDim)' }}>
-        <b style={{ color: 'var(--text)' }}>How signals work (simple)</b>
-        <div className="mt-1">Prices stay live from <b>MT5</b> (best) or <b>Deriv</b> / Yahoo (free). Signals need candle history + score ≥ min (default 65).</div>
-        <div className="mt-1">Below: <b>Near misses</b> = almost fired (see which gates failed). <b>Fired</b> = passed the important gates.</div>
       </div>
 
       <div className="omni-panel p-3">
@@ -2337,14 +2351,14 @@ function RiskTab({ prices, changes, accountBalance, relativeStrength, mode }) {
 
         <div className="omni-panel p-4">
           <SectionHeader icon={ShieldAlert} title="Drawdown Circuit Breaker" sub="no live risk-manager endpoint yet" />
-          <WaitingForBackend height={140} label="institutional-risk-manager.js tracks this internally — needs a REST/socket endpoint to reach the frontend" />
+          <WaitingForBackend height={140} label="Risk live data not connected yet" />
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="omni-panel p-4">
           <SectionHeader icon={Layers} title="Portfolio Exposure" sub="no live fills endpoint yet" />
-          <WaitingForBackend height={140} label="Needs the same EA position-fills endpoint noted on the Tape tab" />
+          <WaitingForBackend height={140} label="Position data not available yet" />
         </div>
 
         <div className="omni-panel p-4">
