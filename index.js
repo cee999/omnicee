@@ -2086,7 +2086,7 @@ function buildFeeds() {
   const fxSymbols     = SYMBOLS.filter(s => !cryptoSymbols.includes(s));
 
   // Binance feed for crypto
-  if (BinanceFeed && cryptoSymbols.length) {
+  if (BinanceFeed && cryptoSymbols.length && process.env.LIVE_FEED_LEGACY === '1') {
     const binanceFeed = new BinanceFeed({
       symbols:    cryptoSymbols,
       timeframes: TIMEFRAMES_STR,
@@ -2134,7 +2134,7 @@ function buildFeeds() {
   // candle ingestion) — only the funding/OI/liquidation side channel, which
   // feeds bybitFundingOI so onCandle() can attach real values to candles for
   // VolumeOIAgent's pre-existing (previously always-zero) reads.
-  if (BybitFeed && cryptoSymbols.length) {
+  if (BybitFeed && cryptoSymbols.length && process.env.LIVE_FEED_LEGACY === '1') {
     const bybitFeed = new BybitFeed({
       symbols: cryptoSymbols,
       timeframes: TIMEFRAMES_STR,
@@ -2188,7 +2188,7 @@ function buildFeeds() {
   }
 
   // TwelveData feed for forex/commodities
-  if (TwelveDataFeed && fxSymbols.length && TWELVE_KEY && process.env.DISABLE_TWELVE_DATA !== '1') {
+  if (TwelveDataFeed && fxSymbols.length && TWELVE_KEY && process.env.LIVE_FEED_LEGACY === '1' && process.env.DISABLE_TWELVE_DATA !== '1') {
     // FIX: DXY/equity-index candles must NOT go through onCandle() — it
     // early-returns for any symbol not in the tradeable SYMBOLS list, so a
     // macro symbol added there would be silently discarded, not analyzed.
@@ -2265,7 +2265,7 @@ function buildFeeds() {
   // against). This only makes the live price ticker itself more real-time.
   if (finnhubFeed?.enabled() && fxSymbols.length) {
     finnhubFeed.on('price', ({ symbol, price }) => {
-      onLivePrice(symbol, price, { source: 'finnhub' });
+      if (process.env.LIVE_FEED_LEGACY === '1') onLivePrice(symbol, price, { source: 'finnhub' });
     });
     finnhubFeed.on('connected', () => log.info(`FinnhubFeed price stream connected for: ${fxSymbols.join(', ')}`));
     finnhubFeed.on('error', (err) => log.warn(`FinnhubFeed price stream error: ${feedErrorMessage(err)}`));
@@ -2276,7 +2276,7 @@ function buildFeeds() {
   // crypto so the ticker stays fresh even when TwelveData quota is gone or
   // Binance is geo-blocked. Does NOT write candleStores (agents still need
   // TwelveData / Binance / Bybit / MT5 OHLC for signal analysis).
-  if (FreeRateFeed && SYMBOLS.length) {
+  if (FreeRateFeed && SYMBOLS.length && process.env.LIVE_FEED_LEGACY === '1') {
     const freeRateFeed = new FreeRateFeed({
       symbols: SYMBOLS,
       pollMs: Number(process.env.FREE_RATE_POLL_MS) || 20000,
@@ -2299,32 +2299,44 @@ function buildFeeds() {
   // Deriv — free live ticks over WebSocket (no MT5, no card).
   // Prices are Deriv's feed, not Exness. Ranked below MT5 when EA is live.
   // App ID: free at api.deriv.com — or leave blank to use public sample 1089.
+  // LIVE TICKS: Deriv + MT5 only (Yahoo/Twelve/Binance disabled unless LIVE_FEED_LEGACY=1)
   if (DerivFeed && SYMBOLS.length && process.env.DISABLE_DERIV !== '1') {
     const derivFeed = new DerivFeed({
       symbols: SYMBOLS,
       appId: process.env.DERIV_APP_ID || '1089',
     });
     derivFeed.on('price', ({ symbol, price, bid, ask, change }) => {
-      // Do not overwrite a fresh Exness/MT5 tick
       const last = lastPriceBySymbol[symbol];
       if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < (BROKER_PRICE_HOLD_MS || 120000)) {
         return;
       }
       onLivePrice(symbol, price, { source: 'deriv', change, bid, ask });
     });
-    derivFeed.on('connected', () => log.info(`DerivFeed connected (app_id=${process.env.DERIV_APP_ID || '1089'}) — free live ticks, PC can stay off`));
+    derivFeed.on('candles', ({ symbol, timeframe, candles }) => {
+      if (!candleStores[symbol]) candleStores[symbol] = {};
+      const prev = candleStores[symbol][timeframe] || [];
+      const last = lastPriceBySymbol[symbol];
+      if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < BROKER_PRICE_HOLD_MS * 4 && prev.length >= 50) {
+        return;
+      }
+      if (candles.length > (prev.length * 0.5) || prev.length < 40) {
+        candleStores[symbol][timeframe] = candles.slice(-500);
+        log.info(`Deriv candles: ${symbol} ${timeframe} ${candles.length} bars`);
+      }
+    });
+    derivFeed.on('connected', () => log.info(`DerivFeed connected (app_id=${process.env.DERIV_APP_ID || '1089'}) — ticks + OHLC; MT5 overrides when online`));
     derivFeed.on('disconnected', () => log.warn('DerivFeed disconnected — will reconnect'));
     derivFeed.on('error', (err) => log.warn(`DerivFeed: ${feedErrorMessage(err)}`));
     derivFeed.start();
     feeds.push({ name: 'DerivFeed', instance: derivFeed, symbols: SYMBOLS });
     if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('Deriv', derivFeed, SYMBOLS);
-    log.info(`DerivFeed configured for: ${SYMBOLS.filter(s => true).join(', ')}`);
+    log.info(`DerivFeed (primary free live) for: ${SYMBOLS.join(', ')}`);
   }
 
   // Yahoo OHLC — BOOTSTRAP ONLY when broker (Exness/MT5) is not feeding.
   // Live prices and live candles come from OmniceeEA → POST /api/ea/prices.
   // Yahoo never overwrites a symbol that has a recent mt5_ea tick.
-  if (YahooOhlcFeed && SYMBOLS.length) {
+  if (YahooOhlcFeed && SYMBOLS.length && process.env.LIVE_FEED_LEGACY === '1') {
     const yahooOhlc = new YahooOhlcFeed({ symbols: SYMBOLS, interval: '1h', range: '10d' });
     yahooOhlc.on('candles', ({ symbol, timeframe, candles }) => {
       if (!candleStores[symbol]) candleStores[symbol] = {};

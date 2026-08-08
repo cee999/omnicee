@@ -264,7 +264,7 @@ function createApp() {
       }
     }
     if (!candles || !candles.length) {
-      return res.json({ ok: true, symbol, timeframe, candles: [], note: 'No candle history yet — wait for Yahoo/MT5 bootstrap.' });
+      return res.json({ ok: true, symbol, timeframe, candles: [], note: 'No candle history yet — wait for Deriv/MT5.' });
     }
     const out = candles.slice(-limit).map(c => {
       const raw = Number(c.timestamp ?? c.time);

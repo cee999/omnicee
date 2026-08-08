@@ -107,18 +107,8 @@ function normalizeSignal(s) {
 }
 
 const FEEDS = [
-  { name: 'Deriv',        kind: 'free live ticks', status: 'unknown' },
-  { name: 'Yahoo',        kind: 'free ticks', status: 'unknown' },
-  { name: 'YahooOHLC',    kind: 'free candles', status: 'unknown' },
-  { name: 'Binance',      kind: 'crypto ws',  status: 'unknown' },
-  { name: 'Bybit',        kind: 'crypto ws',  status: 'unknown' },
-  { name: 'TwelveData',   kind: 'fx/commod',  status: 'unknown' },
-  { name: 'Finnhub',      kind: 'news',       status: 'unknown' },
-  { name: 'Alpha Vantage',kind: 'macro sent', status: 'unknown' },
-  { name: 'FMP',          kind: 'fundamentals',status: 'unknown' },
-  { name: 'CFTC COT',     kind: 'positioning',status: 'unknown' },
-  { name: 'Myfxbook',     kind: 'calendar',   status: 'unknown' },
-  { name: 'OpenInsider',  kind: 'SEC Form 4', status: 'inert', note: 'needs paid Parse.bot key' },
+  { name: 'MT5',          kind: 'Exness broker', status: 'unknown', note: 'attach OmniceeEA' },
+  { name: 'Deriv',        kind: 'live ticks+OHLC', status: 'unknown' },
 ];
 
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -1153,6 +1143,13 @@ function LiveChart({ symbol, quote, signals }) {
     candleSeriesRef.current = candleSeries;
     volumeSeriesRef.current = volumeSeries;
     markersRef.current = markers;
+    // Force layout after mount — hidden/0-size parents blank the canvas
+    requestAnimationFrame(() => {
+      try {
+        chart.applyOptions({ width: containerRef.current?.clientWidth || 600, height: containerRef.current?.clientHeight || 320 });
+        chart.timeScale().fitContent();
+      } catch (_) {}
+    });
 
     return () => {
       chart.unsubscribeCrosshairMove(onCrosshairMove);
@@ -1284,7 +1281,7 @@ function LiveChart({ symbol, quote, signals }) {
         {status === 'empty' && <div className="absolute inset-0 flex items-center justify-center"><WaitingForBackend height={180} label="No chart data yet — try H1 or wait a minute" /></div>}
         {status === 'error' && <div className="absolute inset-0 flex items-center justify-center"><WaitingForBackend height={180} label="Chart temporarily unavailable — retrying…" /></div>}
         {status === 'loading' && <div className="absolute inset-0 flex items-center justify-center"><WaitingForBackend height={180} label="Loading candles…" /></div>}
-        <div ref={containerRef} className="w-full h-full" style={{ visibility: status === 'ok' ? 'visible' : 'hidden' }} />
+        <div ref={containerRef} className="w-full h-full" style={{ opacity: status === 'ok' ? 1 : 0.15, minHeight: 280 }} />
       </div>
     </div>
   );
