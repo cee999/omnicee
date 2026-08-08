@@ -4,15 +4,23 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#05070a" />
-    <link rel="manifest" href="/manifest.json" />
-    <link rel="icon" href="/icons/favicon-32.png" sizes="32x32" />
-    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <title>OMNICEE — Institutional Signal Terminal</title>
     <!-- PWA installability — assets copied from the retired webapp/ into
          public/ so Vite ships them at dist/ root unchanged. -->
     <link rel="manifest" href="/manifest.json" />
-    <link rel="icon" href="/icons/icon-192.png" />
+    <link rel="icon" href="/icons/favicon-32.png" sizes="32x32" />
+    <link rel="icon" href="/icons/icon-192.png" sizes="192x192" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <!-- FIX: manifest.json + a registered service worker is enough for
+         Chrome/Edge (desktop and Android) to offer installation on their
+         own, but iOS Safari doesn't use that install flow at all — it only
+         offers "Add to Home Screen" as standalone/full-screen when these
+         Apple-specific tags are present. Without them, an iPhone "install"
+         was just a bookmark that opened Safari with browser chrome, not an
+         app. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="OMNICEE" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700;800&family=Orbitron:wght@600;800&display=swap" rel="stylesheet" />
     <!-- Telegram Mini App SDK — the retired webapp/index.html read

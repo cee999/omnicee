@@ -625,19 +625,19 @@ function useLiveFeed() {
     return () => clearInterval(clock);
   }, []);
 
-  /* Telegram Mini App shell init + PWA service-worker registration — both
-     ran unconditionally in the retired webapp/index.html (see its final
-     <script> block) but had no equivalent here. tg.ready()/tg.expand() are
-     no-ops (window.Telegram undefined) when this loads in a plain browser,
-     so this is safe outside Telegram too. */
+  /* Telegram Mini App shell init — ran unconditionally in the retired
+     webapp/index.html (see its final <script> block) but had no equivalent
+     here. tg.ready()/tg.expand() are no-ops (window.Telegram undefined)
+     when this loads in a plain browser, so this is safe outside Telegram
+     too. PWA service-worker registration moved to main.jsx's
+     registerServiceWorker() — it needs to run once at boot regardless of
+     App's mount/remount cycles, and owns real update-detection (see that
+     file's header comment) that a bare .register() call here didn't have. */
   useEffect(() => {
     try {
       const tg = window.Telegram && window.Telegram.WebApp;
       if (tg) { tg.ready(); tg.expand(); }
     } catch (_) { /* not inside Telegram, or SDK not loaded yet — fine */ }
-    if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
-    }
     if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
       setTimeout(() => { try { Notification.requestPermission(); } catch (_) {} }, 4000);
     }
