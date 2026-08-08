@@ -768,12 +768,17 @@ async function runTests() {
       sessionFilter: fakeSessionFilter,
       cotParser: fakeCotParser,
     });
-    if (outlook.week.tier1Events.length !== 2) throw new Error(`expected 2 this-week Tier-1 events, got ${outlook.week.tier1Events.length}`);
-    if (outlook.nextWeek.tier1Events.length !== 1) throw new Error(`expected 1 next-week Tier-1 event, got ${outlook.nextWeek.tier1Events.length}`);
+    // Calendar is intentionally NOT part of MarketOutlookBuilder's return
+    // value anymore (see market-outlook.js) — outlook.week/outlook.nextWeek
+    // don't exist. This test used to assert on them, which meant it was
+    // silently testing a shape the builder no longer produces while the
+    // real regression (alert-dispatcher.js's /outlook command still
+    // reading those fields and crashing) went uncaught. Assert on what the
+    // builder actually contracts to return instead.
+    if (outlook.week !== undefined || outlook.nextWeek !== undefined) throw new Error('expected calendar fields to stay removed from MarketOutlookBuilder output — if this changed intentionally, update alert-dispatcher.js._sendMarketOutlook to match');
     if (!outlook.symbols[0].institutionalPositioning?.isExtreme) throw new Error('expected EURUSD institutional positioning to be attached and flagged extreme');
-    if (!outlook.narrative.includes('Next week')) throw new Error('expected narrative to mention next week');
     if (!outlook.narrative.includes('hedge funds')) throw new Error('expected narrative to mention institutional/hedge-fund positioning');
-    pass(`MarketOutlookBuilder: week=${outlook.week.tier1Events.length} nextWeek=${outlook.nextWeek.tier1Events.length} COT-extreme=${outlook.symbols[0].institutionalPositioning.isExtreme}`);
+    pass(`MarketOutlookBuilder: no calendar leakage, COT-extreme=${outlook.symbols[0].institutionalPositioning.isExtreme}`);
   } catch (e) { fail('MarketOutlookBuilder', e); }
 
   try {

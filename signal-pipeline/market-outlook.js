@@ -41,19 +41,15 @@ class MarketOutlookBuilder {
   static build({ symbols = [], candleStores = {}, regimeEngine, sessionFilter, timeframe = 'H1', fundingSnapshots = null, cotParser = null }) {
     const now = Date.now();
 
-    const calendar = sessionFilter?.calendar || null;
-    const today    = calendar ? calendar.getUpcoming(24) : [];
-    const twoWeeks = calendar ? calendar.getUpcoming(24 * 14) : [];
-    const week     = twoWeeks.filter(e => e.hoursAway <= 24 * 7);
-    const nextWeek = twoWeeks.filter(e => e.hoursAway > 24 * 7);
-    const tier1Today    = today.filter(e => e.tier === 'TIER_1');
-    const tier1Week     = week.filter(e => e.tier === 'TIER_1');
-    const tier2Week     = week.filter(e => e.tier === 'TIER_2');
-    const tier3Week     = week.filter(e => e.tier === 'TIER_3' || e.tier === 'TIER_4');
-    const tier1NextWeek = nextWeek.filter(e => e.tier === 'TIER_1');
-    const tier2NextWeek = nextWeek.filter(e => e.tier === 'TIER_2');
-    // All events this week (any tier) for the Intel calendar panel
-    const allWeekEvents = week.slice(0, 12);
+    // Calendar is intentionally NOT part of Market Outlook (user request —
+    // it lives on the Intel tab / GET /api/calendar instead). Previously
+    // this method still called calendar.getUpcoming() twice and ran seven
+    // filter passes over the result on every single build(), then threw
+    // all of it away two lines below (the narrative call passed hardcoded
+    // empty arrays instead of these). That's a real, live-traffic cost —
+    // an unnecessary call into the calendar feed/parser on every outlook
+    // request — for output nobody ever read. Removed rather than kept
+    // "in case it's needed later"; git history has it if it is.
 
     const perSymbol = [];
     // Prefer requested TF, then fall back so Yahoo-only / sparse FX still get a regime when any TF has bars
@@ -204,7 +200,7 @@ class MarketOutlookBuilder {
     if (extremePositioning.length > 0) {
       for (const s of extremePositioning) {
         const p = s.institutionalPositioning;
-        lines.push(`${s.symbol} COT extreme: large specs ${Math.round(p.largeSpecPercentile)}th percentile (${p.date}) — ${p.note}.`);
+        lines.push(`${s.symbol} COT extreme: large speculators (hedge funds) ${Math.round(p.largeSpecPercentile)}th percentile (${p.date}) — ${p.note}.`);
       }
     }
 

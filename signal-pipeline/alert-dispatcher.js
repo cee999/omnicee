@@ -1897,23 +1897,18 @@ class AlertDispatcher extends EventEmitter {
       return;
     }
 
+    // NOTE: MarketOutlookBuilder deliberately stopped returning calendar
+    // data (outlook.week / outlook.nextWeek no longer exist — see the
+    // "Calendar is intentionally NOT part of Market Outlook" comment in
+    // market-outlook.js). This handler used to read those fields, which
+    // meant every /outlook call threw "Cannot read properties of
+    // undefined (reading 'tier1Events')" the moment it ran — caught by
+    // the smoke test, never actually fixed here until now. Calendar
+    // events live on the Intel tab / GET /api/calendar instead.
     const lines = [`${EMOJI.CHART} <b>Market Outlook — This Week &amp; Next</b>`, ''];
     lines.push(outlook.narrative);
     lines.push('');
-
-    if (outlook.week.tier1Events.length) {
-      lines.push('<b>This week (Tier 1):</b>');
-      for (const e of outlook.week.tier1Events.slice(0, 6)) {
-        lines.push(`  • ${e.name} (${e.currency}) — in ${e.hoursAway.toFixed(0)}h`);
-      }
-    }
-    if (outlook.nextWeek.tier1Events.length) {
-      lines.push('');
-      lines.push('<b>Next week (Tier 1):</b>');
-      for (const e of outlook.nextWeek.tier1Events.slice(0, 6)) {
-        lines.push(`  • ${e.name} (${e.currency}) — in ${(e.hoursAway / 24).toFixed(1)}d`);
-      }
-    }
+    lines.push('<i>Economic calendar moved to the Intel tab / /api/calendar.</i>');
 
     const withPositioning = outlook.symbols.filter(s => s.institutionalPositioning);
     if (withPositioning.length) {
