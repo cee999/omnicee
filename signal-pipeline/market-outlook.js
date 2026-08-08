@@ -131,26 +131,13 @@ class MarketOutlookBuilder {
       perSymbol.push(entry);
     }
 
+    // Calendar is intentionally NOT part of Market Outlook (user request).
+    // Use GET /api/calendar for economic events only.
     return {
       generatedAt: now,
-      today: {
-        tier1Events: tier1Today.map(MarketOutlookBuilder._formatEvent),
-        eventCount: today.length,
-      },
-      week: {
-        tier1Events: tier1Week.map(MarketOutlookBuilder._formatEvent),
-        tier2Events: tier2Week.map(MarketOutlookBuilder._formatEvent),
-        tier3Events: tier3Week.map(MarketOutlookBuilder._formatEvent),
-        allEvents: allWeekEvents.map(MarketOutlookBuilder._formatEvent),
-        eventCount: week.length,
-      },
-      nextWeek: {
-        tier1Events: tier1NextWeek.map(MarketOutlookBuilder._formatEvent),
-        tier2Events: tier2NextWeek.map(MarketOutlookBuilder._formatEvent),
-        eventCount: nextWeek.length,
-      },
       symbols: perSymbol,
-      narrative: MarketOutlookBuilder._narrative({ tier1Today, tier1Week, tier2Week, tier1NextWeek, tier2NextWeek, perSymbol }),
+      narrative: MarketOutlookBuilder._narrative({ tier1Today: [], tier1Week: [], tier2Week: [], tier1NextWeek: [], tier2NextWeek: [], perSymbol }),
+      note: 'Outlook = regime + session stance per symbol. Calendar is on the Calendar API / News desk only.',
     };
   }
 

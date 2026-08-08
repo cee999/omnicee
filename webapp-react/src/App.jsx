@@ -592,7 +592,7 @@ function useLiveFeed() {
   // Prefer broker (mt5_ea) ticks on the client so TwelveData/Yahoo cannot
   // paint over Exness prices while the EA is connected.
   const priceSourceRef = useRef({});
-  const SRC_RANK = { mt5_ea: 100, tradingview: 90, binance: 70, bybit: 70, finnhub: 50, twelvedata: 50, candle: 40, 'yahoo-free': 10 };
+  const SRC_RANK = { mt5_ea: 100, tradingview: 90, binance: 70, bybit: 70, deriv: 55, finnhub: 50, twelvedata: 50, candle: 40, 'yahoo-free': 10 };
 
   /* Reachability probe against the unauthenticated /health route. Render's
      free tier can take 30-60s+ to wake a cold instance, so a single
@@ -1209,7 +1209,7 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
   );
 }
 
-function SignalsTab({ signals, prices, quotes }) {
+function SignalsTab({ signals, prices, quotes, auditLog }) {
   const [expanded, setExpanded] = useState(null);
   const [desk, setDesk] = useState('ALL');
   const DESKS = {
@@ -1222,11 +1222,49 @@ function SignalsTab({ signals, prices, quotes }) {
   };
   const deskSymbols = DESKS[desk] || SYMBOLS;
   const filtered = signals.filter(s => deskSymbols.includes(s.symbol));
+  const checks = (Array.isArray(auditLog) ? auditLog : [])
+    .filter(e => deskSymbols.includes(e.symbol) || desk === 'ALL')
+    .slice(0, 25);
+  const nearMiss = checks.filter(e => !e.fired && (e.nearMiss || Number(e.score) >= 50));
+  const fired = checks.filter(e => e.fired);
 
   return (
     <div className="p-4 space-y-3">
+      <div className="omni-panel p-3 font-mono text-[11px]" style={{ color: 'var(--textDim)' }}>
+        <b style={{ color: 'var(--text)' }}>How signals work (simple)</b>
+        <div className="mt-1">Prices stay live from <b>MT5</b> (best) or <b>Deriv</b> / Yahoo (free). Signals need candle history + score ≥ min (default 65).</div>
+        <div className="mt-1">Below: <b>Near misses</b> = almost fired (see which gates failed). <b>Fired</b> = passed the important gates.</div>
+      </div>
+
+      <div className="omni-panel p-3">
+        <SectionHeader icon={ScrollText} title="Gate checks" sub={`${nearMiss.length} near miss · ${fired.length} fired recently`} />
+        {checks.length === 0 ? (
+          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
+            No checks logged yet. Wait for analysis (needs H1 candles from Yahoo/MT5). Soft gates are on so more candidates can appear.
+          </div>
+        ) : (
+          <div className="space-y-1 max-h-56 overflow-y-auto omni-scroll">
+            {checks.map((e, i) => (
+              <div key={e.id || i} className="flex flex-wrap items-start gap-2 font-mono text-[10px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
+                <span style={{ color: 'var(--textFaint)' }} className="w-10 shrink-0">{timeAgo(e.timestamp || Date.now())}</span>
+                <span style={{ color: 'var(--text)' }} className="w-16 shrink-0">{e.symbol}</span>
+                {e.fired
+                  ? <span style={{ color: 'var(--emerald)' }}>FIRED</span>
+                  : <span style={{ color: e.nearMiss || Number(e.score) >= 50 ? 'var(--gold)' : 'var(--textFaint)' }}>{e.nearMiss || Number(e.score) >= 50 ? 'NEAR' : 'block'}</span>}
+                {e.score != null && <span style={{ color: 'var(--textDim)' }}>score {e.score}</span>}
+                <span style={{ color: 'var(--textDim)' }} className="min-w-0 break-words flex-1">
+                  {(Array.isArray(e.gatesFailed) && e.gatesFailed.length) ? `failed: ${e.gatesFailed.join(', ')}` : ''}
+                  {(Array.isArray(e.gatesPassed) && e.gatesPassed.length) ? ` · passed: ${e.gatesPassed.join(', ')}` : ''}
+                  {' · '}{(Array.isArray(e.reasons) ? e.reasons : []).join(', ') || 'checked'}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div className="flex items-center gap-2 flex-wrap">
-        <SectionHeader icon={Radio} title="Signal Desks" sub={`${filtered.length} signal(s) · live broker prices`} />
+        <SectionHeader icon={Radio} title="Signal Desks" sub={`${filtered.length} signal(s) · MT5 or Deriv prices`} />
         <div className="ml-auto flex gap-1 flex-wrap">
           {Object.keys(DESKS).map(d => (
             <button key={d} onClick={() => setDesk(d)}
@@ -1248,7 +1286,7 @@ function SignalsTab({ signals, prices, quotes }) {
             <div key={sym} className="omni-panel2 px-2.5 py-2 font-mono text-[10px]">
               <div className="flex justify-between mb-1">
                 <span style={{ color: 'var(--text)' }}>{sym}</span>
-                <span style={{ color: q?.source === 'mt5_ea' ? 'var(--gold)' : 'var(--textFaint)' }}>{q?.source === 'mt5_ea' ? 'MT5' : (q?.source || '—')}</span>
+                <span style={{ color: q?.source === 'mt5_ea' ? 'var(--gold)' : 'var(--textFaint)' }}>{q?.source === 'mt5_ea' ? 'MT5' : q?.source === 'deriv' ? 'Deriv' : (q?.source || '—')}</span>
               </div>
               {q?.bid != null && q?.ask != null ? (
                 <div className="flex gap-2">
@@ -2208,7 +2246,7 @@ export default function OmniceeDashboard() {
       <div className="flex flex-col flex-1 min-h-0">
         <div className="flex-1 overflow-y-auto omni-scroll">
           {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} />}
-          {activeTab === 'SIGNALS' && <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} />}
+          {activeTab === 'SIGNALS' && <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} auditLog={feed.auditLog} />}
           {activeTab === 'INTEL' && <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} calendar={feed.calendar} levels={feed.levels} />}
           {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}
           {activeTab === 'DESK' && <DeskTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} stats={feed.stats} accountBalance={feed.accountBalance} relativeStrength={feed.relativeStrength} mode={feed.mode} />}

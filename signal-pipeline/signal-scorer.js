@@ -52,9 +52,9 @@ const AGENT_WEIGHTS = {
   PATTERN:        0.07,  // Classic patterns — lowest priority (most lag)
 };
 
-const MIN_SCORE_TO_FIRE    = 78;
+const MIN_SCORE_TO_FIRE    = 65; // aligned with signal-only default; env MIN_SIGNAL_SCORE overrides via constructor
 const MIN_SCORE_GRADE_A    = 85;
-const MIN_SCORE_GRADE_B    = 78;
+const MIN_SCORE_GRADE_B    = 65;
 
 // Session windows in UTC hours
 const SESSIONS = {
@@ -774,10 +774,13 @@ class SignalScorer extends EventEmitter {
       symbol,
       timeframe,
       currentPrice: price,
-      score,
+      score: typeof score === 'number' ? score : 0,
       reason,
+      waitReason:   reason,
       timestamp,
       session:      SessionDetector.getCurrent().best.name,
+      gatesFailed:  reason ? [String(reason).slice(0, 120)] : [],
+      gatesPassed:  [],
     };
   }
 

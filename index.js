@@ -58,12 +58,13 @@ const SYMBOLS         = (requireEnv('SYMBOLS', 'EURUSD,GBPUSD,USDJPY,XAUUSD,USOI
   .split(',').map(s => s.trim()).filter(Boolean);
 const TIMEFRAMES_STR  = (requireEnv('TIMEFRAMES', 'H1,H4') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
-const MIN_SCORE       = parseFloat(requireEnv('MIN_SIGNAL_SCORE', '78'));
+const MIN_SCORE       = parseFloat(requireEnv('MIN_SIGNAL_SCORE', '65')); // signal-only: 65 fires more; raise to 75+ for stricter
 const RISK_PCT        = parseFloat(requireEnv('RISK_PCT_PER_TRADE', '1.0'));
 const MAX_DAILY_LOSS  = parseFloat(requireEnv('MAX_DAILY_LOSS_PCT', '3.0'));
 const MAX_DRAWDOWN    = parseFloat(requireEnv('MAX_DRAWDOWN_PCT', '10.0'));
 const ACCOUNT_BALANCE = parseFloat(requireEnv('ACCOUNT_BALANCE', '10000'));
 const REQUIRE_KZ      = requireEnv('REQUIRE_KILLZONE', 'false') === 'true';
+const SIGNAL_SOFT_GATES = requireEnv('SIGNAL_SOFT_GATES', 'true') !== 'false'; // default ON — fewer hard blocks
 const TWELVE_KEY      = requireEnv('TWELVE_DATA_API_KEY', '');
 // FIX: intermarket analysis (DXY/equity cross-confirmation) — the last item
 // on the original audit's "does not exist" list. Configurable since not
@@ -414,11 +415,34 @@ async function runAnalysisCycle(symbol, timeframe) {
     if (sessionFilter?.check) {
       sessionQuality = sessionFilter.check(symbol, Date.now());
       if (!sessionQuality.allowed) {
-        log.debug(`${key}: session filter blocked — ${sessionQuality.reason}`);
-        try {
-          auditTrail?.record?.({ symbol, timeframe, signalFired: false, blockedReason: `session: ${sessionQuality.reason}`, score: 0 });
-        } catch (_) {}
-        return;
+        const isCrypto = /USDT|USDC|BTC$|ETH$/.test(symbol);
+        // Soft gates: crypto always continues; FX continues but tagged (signal-only app)
+        if (SIGNAL_SOFT_GATES || isCrypto) {
+          log.debug(`${key}: session soft-block (${sessionQuality.reason}) — continuing under soft gates`);
+          try {
+            auditTrail?.record?.({
+              symbol, timeframe, signalFired: false,
+              blockedReason: `session_soft: ${sessionQuality.reason}`,
+              score: 0,
+              reasons: ['session_restricted', sessionQuality.reason],
+              gatesFailed: ['session'],
+              gatesPassed: [],
+            });
+          } catch (_) {}
+          // do not return — allow scoring so users see near-miss / live candidates
+        } else {
+          log.debug(`${key}: session filter blocked — ${sessionQuality.reason}`);
+          try {
+            auditTrail?.record?.({
+              symbol, timeframe, signalFired: false,
+              blockedReason: `session: ${sessionQuality.reason}`,
+              score: 0,
+              reasons: [sessionQuality.reason],
+              gatesFailed: ['session'],
+            });
+          } catch (_) {}
+          return;
+        }
       }
     }
 
@@ -469,7 +493,17 @@ async function runAnalysisCycle(symbol, timeframe) {
     if (!signal || signal.action === 'WAIT') {
       log.debug(`${key}: score=${signal?.score?.final || 0} — no signal`);
       if (auditTrail) {
-        auditTrail.record({ symbol, timeframe, signalFired: false, blockedReason: 'no_signal_or_wait', score: signal?.score?.final ?? 0 });
+        const sc = signal?.score?.final ?? 0;
+        const why = signal?.waitReason || signal?.reason || signal?.note || 'no_signal_or_wait';
+        auditTrail.record({
+          symbol, timeframe, signalFired: false,
+          blockedReason: why,
+          score: sc,
+          reasons: [String(why)],
+          gatesFailed: sc > 0 && sc < MIN_SCORE ? ['min_score'] : ['consensus_or_agents'],
+          gatesPassed: sc >= 40 ? ['partial_score'] : [],
+          nearMiss: sc >= MIN_SCORE - 15 && sc < MIN_SCORE,
+        });
       }
       return;
     }
@@ -960,7 +994,15 @@ async function runAnalysisCycle(symbol, timeframe) {
       return;
     }
     if (auditTrail) {
-      auditTrail.record({ symbol, timeframe, signalFired: true, action: fullSignal.action, score: fullSignal.score?.final ?? 0, grade: fullSignal.score?.grade });
+      auditTrail.record({
+        symbol, timeframe, signalFired: true,
+        action: fullSignal.action,
+        score: fullSignal.score?.final ?? 0,
+        grade: fullSignal.score?.grade,
+        reasons: ['passed_all_core_gates', fullSignal.action],
+        gatesPassed: ['score', 'agents', 'risk'],
+        gatesFailed: [],
+      });
     }
 
     // Track this position in the portfolio-risk model so future correlation
@@ -1539,7 +1581,7 @@ function buildSingletons() {
   if (SignalScorer) {
     scorer = new SignalScorer({
       minScore:      MIN_SCORE,
-      sessionFilter: true,
+      sessionFilter: !SIGNAL_SOFT_GATES, // soft mode skips dead-zone hard reject in scorer
       newsBlackout:  true,
       requireKillzone: REQUIRE_KZ,
       circuitBreaker: {

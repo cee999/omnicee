@@ -398,12 +398,16 @@ function createApp() {
       signalFired: !!(e.signalFired || e.fired),
       action: e.action,
       score: e.score,
+      nearMiss: !!e.nearMiss,
+      gatesPassed: Array.isArray(e.gatesPassed) ? e.gatesPassed : [],
+      gatesFailed: Array.isArray(e.gatesFailed) ? e.gatesFailed : [],
       reasons: Array.isArray(e.reasons) ? e.reasons
         : e.blockedReason ? [e.blockedReason]
         : e.action ? [`${e.action}${e.score != null ? ` score ${e.score}` : ''}`]
         : ['checked'],
     }));
-    res.json({ ok: true, entries, total: live.auditTrail.size() });
+    const nearMisses = entries.filter(e => e.nearMiss || (!e.fired && Number(e.score) >= 50)).slice(0, 15);
+    res.json({ ok: true, entries, nearMisses, total: live.auditTrail.size() });
   });
 
   // ── Data Integrity / Feed Health (doc item: Connection & Data Integrity
