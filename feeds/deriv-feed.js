@@ -1,6 +1,6 @@
 /**
- * DERIV FEED — Live ticks + OHLC history (no MT5, free)
- * Primary free live source when Exness EA is offline.
+ * DERIV — primary free live ticks + OHLC when MT5 is offline.
+ * Server-side only (Render). Laptop can be OFF.
  */
 'use strict';
 
@@ -19,38 +19,38 @@ const DERIV_MAP = {
   XAGUSD: 'frxXAGUSD',
   BTCUSDT: 'cryBTCUSD',
   ETHUSDT: 'cryETHUSD',
-  USOIL: 'frxWTIOil',
 };
 
-// Chart / analysis timeframes we seed from Deriv candles
 const CANDLE_REQS = [
-  { timeframe: 'M5', granularity: 300, count: 300 },
-  { timeframe: 'M15', granularity: 900, count: 300 },
-  { timeframe: 'H1', granularity: 3600, count: 300 },
-  { timeframe: 'H4', granularity: 14400, count: 200 },
-  { timeframe: 'D1', granularity: 86400, count: 200 },
+  { timeframe: 'M5', granularity: 300, count: 200 },
+  { timeframe: 'M15', granularity: 900, count: 200 },
+  { timeframe: 'H1', granularity: 3600, count: 250 },
+  { timeframe: 'H4', granularity: 14400, count: 150 },
+  { timeframe: 'D1', granularity: 86400, count: 150 },
 ];
 
-const DEFAULT_APP_ID = process.env.DERIV_APP_ID || '1089';
-const WS_URL = (appId) => `wss://ws.derivws.com/websockets/v3?app_id=${appId}`;
-const PING_MS = 30000;
-const RECONNECT_MS = 5000;
-const HISTORY_REFRESH_MS = 5 * 60 * 1000;
+const URLS = [
+  (id) => `wss://ws.derivws.com/websockets/v3?app_id=${id}`,
+  (id) => `wss://ws.binaryws.com/websockets/v3?app_id=${id}`,
+];
 
 class DerivFeed extends EventEmitter {
   constructor(config = {}) {
     super();
     this.symbols = (config.symbols || Object.keys(DERIV_MAP)).filter(s => DERIV_MAP[s]);
-    this.appId = String(config.appId || DEFAULT_APP_ID);
+    this.appId = String(config.appId || process.env.DERIV_APP_ID || '1089');
     this._ws = null;
-    this._pingTimer = null;
-    this._reconnectTimer = null;
-    this._historyTimer = null;
+    this._urlIndex = 0;
     this._stopped = false;
     this._connected = false;
     this._lastQuote = new Map();
-    this._pendingHistory = []; // queue of history requests
+    this._lastTickAt = 0;
+    this._pendingHistory = [];
     this._historyBusy = false;
+    this._pingTimer = null;
+    this._watchTimer = null;
+    this._reconnectTimer = null;
+    this._historyTimer = null;
   }
 
   enabled() { return this.symbols.length > 0; }
@@ -59,95 +59,122 @@ class DerivFeed extends EventEmitter {
   start() {
     this._stopped = false;
     this._connect();
+    // If no tick for 25s while "connected", force reconnect
+    this._watchTimer = setInterval(() => {
+      if (this._stopped) return;
+      if (!this._connected) return;
+      if (this._lastTickAt && Date.now() - this._lastTickAt > 25000) {
+        this.emit('error', new Error('no ticks for 25s — reconnecting'));
+        this._forceReconnect();
+      }
+    }, 10000);
   }
 
   stop() {
     this._stopped = true;
-    this._clearTimers();
+    this._teardown();
+  }
+
+  _teardown() {
+    if (this._pingTimer) clearInterval(this._pingTimer);
+    if (this._watchTimer) clearInterval(this._watchTimer);
+    if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
+    if (this._historyTimer) clearInterval(this._historyTimer);
+    this._pingTimer = this._watchTimer = this._reconnectTimer = this._historyTimer = null;
     if (this._ws) {
-      try { this._ws.close(); } catch (_) {}
+      try { this._ws.removeAllListeners(); this._ws.close(); } catch (_) {}
       this._ws = null;
     }
     this._connected = false;
   }
 
-  _clearTimers() {
-    if (this._pingTimer) clearInterval(this._pingTimer);
-    if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
-    if (this._historyTimer) clearInterval(this._historyTimer);
-    this._pingTimer = null;
-    this._reconnectTimer = null;
-    this._historyTimer = null;
+  _forceReconnect() {
+    if (this._stopped) return;
+    try { if (this._ws) this._ws.close(); } catch (_) {}
+    this._connected = false;
+    this._urlIndex = (this._urlIndex + 1) % URLS.length;
+    if (this._reconnectTimer) return;
+    this._reconnectTimer = setTimeout(() => {
+      this._reconnectTimer = null;
+      this._connect();
+    }, 2000);
   }
 
   _connect() {
     if (this._stopped) return;
-    this._clearTimers();
+    if (this._pingTimer) clearInterval(this._pingTimer);
+    if (this._historyTimer) clearInterval(this._historyTimer);
+
+    const url = URLS[this._urlIndex](this.appId);
     let ws;
     try {
-      ws = new WebSocket(WS_URL(this.appId));
+      ws = new WebSocket(url, { handshakeTimeout: 15000 });
     } catch (err) {
       this.emit('error', err);
-      this._scheduleReconnect();
+      this._forceReconnect();
       return;
     }
     this._ws = ws;
 
     ws.on('open', () => {
       this._connected = true;
-      this.emit('connected');
+      this.emit('connected', { url, appId: this.appId });
       this._subscribeTicks();
-      this._queueAllHistory();
+      // Ticks first; history after 2s so subscriptions are not starved
+      setTimeout(() => {
+        if (this._stopped || !this._connected) return;
+        this._queueAllHistory();
+        this._historyTimer = setInterval(() => this._queueAllHistory(), 5 * 60 * 1000);
+      }, 2000);
       this._pingTimer = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           try { ws.send(JSON.stringify({ ping: 1 })); } catch (_) {}
         }
-      }, PING_MS);
-      this._historyTimer = setInterval(() => this._queueAllHistory(), HISTORY_REFRESH_MS);
+      }, 20000);
     });
 
     ws.on('message', (raw) => {
       let msg;
       try { msg = JSON.parse(String(raw)); } catch (_) { return; }
-      this._handleMessage(msg);
+      this._handle(msg);
     });
 
     ws.on('close', () => {
       this._connected = false;
       this.emit('disconnected');
-      this._scheduleReconnect();
+      if (!this._stopped) this._forceReconnect();
     });
 
-    ws.on('error', (err) => this.emit('error', err));
-  }
-
-  _scheduleReconnect() {
-    if (this._stopped || this._reconnectTimer) return;
-    this._reconnectTimer = setTimeout(() => {
-      this._reconnectTimer = null;
-      this._connect();
-    }, RECONNECT_MS);
+    ws.on('error', (err) => {
+      this.emit('error', err);
+    });
   }
 
   _send(obj) {
-    if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return;
-    try { this._ws.send(JSON.stringify(obj)); } catch (err) { this.emit('error', err); }
+    if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return false;
+    try {
+      this._ws.send(JSON.stringify(obj));
+      return true;
+    } catch (err) {
+      this.emit('error', err);
+      return false;
+    }
   }
 
   _subscribeTicks() {
     for (const omni of this.symbols) {
-      const deriv = DERIV_MAP[omni];
-      if (!deriv) continue;
-      this._send({ ticks: deriv, subscribe: 1 });
+      const d = DERIV_MAP[omni];
+      if (!d) continue;
+      this._send({ ticks: d, subscribe: 1 });
     }
   }
 
   _queueAllHistory() {
     for (const omni of this.symbols) {
-      const deriv = DERIV_MAP[omni];
-      if (!deriv) continue;
+      const d = DERIV_MAP[omni];
+      if (!d) continue;
       for (const spec of CANDLE_REQS) {
-        this._pendingHistory.push({ omni, deriv, ...spec });
+        this._pendingHistory.push({ omni, deriv: d, ...spec });
       }
     }
     this._drainHistory();
@@ -165,23 +192,28 @@ class DerivFeed extends EventEmitter {
       end: 'latest',
       granularity: job.granularity,
       style: 'candles',
-      req_id: 900000 + (job.granularity % 10000),
       passthrough: { omni: job.omni, timeframe: job.timeframe },
     });
-    // Allow next request after short delay (handled when response arrives or timeout)
     setTimeout(() => {
       this._historyBusy = false;
       this._drainHistory();
-    }, 400);
+    }, 500);
   }
 
-  _handleMessage(msg) {
+  _handle(msg) {
+    if (msg.error) {
+      // Don't die on one bad symbol
+      this.emit('error', new Error(msg.error.message || JSON.stringify(msg.error)));
+      return;
+    }
+
     if (msg.msg_type === 'tick' && msg.tick) {
       const t = msg.tick;
       const omni = this._omniFromDeriv(t.symbol);
       if (!omni) return;
       const quote = Number(t.quote ?? t.bid ?? t.ask);
       if (!Number.isFinite(quote)) return;
+      this._lastTickAt = Date.now();
       const bid = Number.isFinite(Number(t.bid)) ? Number(t.bid) : null;
       const ask = Number.isFinite(Number(t.ask)) ? Number(t.ask) : null;
       const prev = this._lastQuote.get(omni);
@@ -213,22 +245,15 @@ class DerivFeed extends EventEmitter {
         timestamp: (Number(c.epoch) || 0) * 1000,
         isClosed: true,
         source: 'deriv',
-      })).filter(c => [c.open, c.high, c.low, c.close, c.timestamp].every(Number.isFinite) && c.timestamp > 0);
-      if (candles.length) {
-        this.emit('candles', { symbol: omni, timeframe, candles });
-      }
-      return;
-    }
-
-    if (msg.error) {
-      this.emit('error', new Error(msg.error.message || JSON.stringify(msg.error)));
+      })).filter(c => [c.open, c.high, c.low, c.close].every(Number.isFinite) && c.timestamp > 1e11);
+      if (candles.length) this.emit('candles', { symbol: omni, timeframe, candles });
     }
   }
 
-  _omniFromDeriv(derivSym) {
-    if (!derivSym) return null;
+  _omniFromDeriv(sym) {
+    if (!sym) return null;
     for (const [omni, d] of Object.entries(DERIV_MAP)) {
-      if (d === derivSym) return omni;
+      if (d === sym) return omni;
     }
     return null;
   }

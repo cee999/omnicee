@@ -1371,8 +1371,12 @@ function onLivePrice(symbol, price, { change = null, bias = null, source = 'cand
   const rank = PRICE_SOURCE_RANK[source] ?? PRICE_SOURCE_RANK.unknown;
   const prev = lastPriceBySymbol[symbol];
 
-  // If we have a recent higher-authority price (esp. broker), drop this update
-  if (prev && prev.rank > rank && (now - prev.ts) < BROKER_PRICE_HOLD_MS) {
+  // Higher-authority (MT5) only blocks lower sources while it is FRESH.
+  // If the EA / PC is offline, mt5_ea timestamps go stale and Deriv must win.
+  const holdMs = source === 'deriv'
+    ? Math.min(BROKER_PRICE_HOLD_MS, 12000) // Deriv can take over 12s after last MT5 tick
+    : BROKER_PRICE_HOLD_MS;
+  if (prev && prev.rank > rank && (now - prev.ts) < holdMs) {
     return;
   }
   // Same rank throttle: broker ticks can be faster (100ms); others 400ms
@@ -2087,10 +2091,32 @@ function buildFeeds() {
     });
     derivFeed.on('price', ({ symbol, price, bid, ask, change }) => {
       const last = lastPriceBySymbol[symbol];
-      if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < (BROKER_PRICE_HOLD_MS || 120000)) {
+      // Only block if MT5 tick is truly fresh (<12s). PC off => Deriv takes over.
+      if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < 12000) {
         return;
       }
       onLivePrice(symbol, price, { source: 'deriv', change, bid, ask });
+      // Build/update forming M5 + H1 bars so chart works without waiting for history
+      try {
+        if (typeof onMT5Tick === 'function') {
+          // reuse candle builder path with deriv source identity via price only
+        }
+        for (const tf of ['M5', 'H1']) {
+          if (!candleStores[symbol]) candleStores[symbol] = {};
+          const arr = candleStores[symbol][tf] || (candleStores[symbol][tf] = []);
+          const ms = tf === 'M5' ? 300000 : 3600000;
+          const bucket = Math.floor(Date.now() / ms) * ms;
+          const lastBar = arr[arr.length - 1];
+          if (!lastBar || lastBar.timestamp !== bucket) {
+            arr.push({ open: price, high: price, low: price, close: price, volume: 0, timestamp: bucket, isClosed: false, source: 'deriv' });
+            if (arr.length > 500) arr.splice(0, arr.length - 500);
+          } else {
+            lastBar.high = Math.max(lastBar.high, price);
+            lastBar.low = Math.min(lastBar.low, price);
+            lastBar.close = price;
+          }
+        }
+      } catch (_) {}
     });
     derivFeed.on('candles', ({ symbol, timeframe, candles }) => {
       if (!candleStores[symbol]) candleStores[symbol] = {};
@@ -2203,6 +2229,23 @@ async function main() {
 
   // e. Build and connect feeds
   const feeds = buildFeeds();
+  // Best-effort self-ping (does not replace UptimeRobot, helps when URL is set)
+  const keepUrl = process.env.KEEPALIVE_URL || process.env.RENDER_EXTERNAL_URL;
+  if (keepUrl) {
+    setInterval(() => {
+      const https = require('https');
+      try {
+        https.get(String(keepUrl).replace(/\/$/, '') + '/health', (r) => { r.resume(); }).on('error', () => {});
+      } catch (_) {}
+    }, 4 * 60 * 1000);
+    log.info(`Keepalive scheduled for ${keepUrl}`);
+  }
+  // Re-publish so /api/market always sees live lastPriceBySymbol updates
+  try {
+    const rt = require('./api/realtime');
+    const prev = rt.getEngines() || {};
+    rt.setEngines({ ...prev, lastPriceBySymbol, candleStores, onLivePrice, onMT5Tick });
+  } catch (e) { log.warn(`re-publish engines: ${e.message}`); }
   setupShutdown(feeds);
 
   let connected = 0;

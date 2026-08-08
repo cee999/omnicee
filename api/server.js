@@ -66,7 +66,17 @@ function dashboardReadAuth(req, res, next) {
     req.telegramUser = { id: req.emailSession.email, username: req.emailSession.email };
     return next();
   }
-  // When EMAIL_AUTH_REQUIRED is on, block public read (friends must log in)
+  // Price / health endpoints must stay readable when the laptop is off.
+  // Login is still required for the rest of the dashboard when EMAIL_AUTH_REQUIRED=true.
+  const path = (req.path || req.url || '').split('?')[0];
+  const publicPricePaths = new Set([
+    '/api/market', '/api/candles', '/api/health', '/health',
+  ]);
+  if (req.method === 'GET' && publicPricePaths.has(path)) {
+    req.telegramUser = { id: 'public-prices', username: 'public-prices' };
+    req.authMethod = 'public-prices';
+    return next();
+  }
   if (process.env.EMAIL_AUTH_REQUIRED === 'true') {
     return res.status(401).json({ ok: false, error: 'Login required', code: 'AUTH_REQUIRED' });
   }
