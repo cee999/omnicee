@@ -783,7 +783,20 @@ function createApp() {
     });
   });
 
-    // Web App Manifest — correct MIME helps Chrome/Edge install eligibility
+    // Service worker must never be cached by the browser for 24h —
+  // otherwise installed PWAs keep an old SW and never auto-update.
+  app.get('/sw.js', (req, res, next) => {
+    res.set({
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+      'Service-Worker-Allowed': '/',
+      'Content-Type': 'application/javascript; charset=utf-8',
+    });
+    res.sendFile(path.join(STATIC_ROOT, 'sw.js'), (err) => { if (err) next(); });
+  });
+
+  // Web App Manifest — correct MIME helps Chrome/Edge install eligibility
   app.get(['/manifest.json', '/manifest.webmanifest'], (req, res, next) => {
     const file = req.path.endsWith('.webmanifest')
       ? path.join(STATIC_ROOT, 'manifest.webmanifest')
