@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - refactor/web-only-notifications
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -50,6 +53,7 @@ jobs:
           fi
 
       - name: Commit migration
+        if: github.event_name == 'push'
         run: |
           git config user.name 'OMNICEE Production Bot'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
