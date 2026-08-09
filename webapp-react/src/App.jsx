@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, Component } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis,
   Tooltip, ResponsiveContainer, CartesianGrid, Cell,
@@ -1510,6 +1510,49 @@ function computeVolumeProfile(candles, rows = 28) {
   };
 }
 
+/**
+ * ErrorBoundary
+ * ─────────────
+ * FIX (root cause of "screen goes blank"): this app had NO error boundary
+ * anywhere. React's default behavior on any uncaught render/effect
+ * exception is to unmount the ENTIRE tree — so a bug in one panel (e.g.
+ * the chart hitting a lightweight-charts edge case on a fast symbol
+ * switch — see LiveChart's loadedKeyRef fix below for the specific race
+ * that was actually doing this) took down the whole app, header and nav
+ * included, leaving a blank page with no way back except a manual reload.
+ *
+ * Wrapped around each tab's content (see OmniceeDashboard's render below)
+ * so a crash in one tab shows a contained "Something broke in this view"
+ * message instead — the header/ticker/nav stay alive and the person can
+ * just switch tabs or retry, which is what "the screen goes blank when I
+ * switch [symbols]" should have been able to do all along.
+ */
+class ErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) {
+    console.error('[ErrorBoundary]', this.props.label || '', error, info?.componentStack);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="omni-panel p-4 m-2 flex flex-col items-center gap-2 text-center">
+          <span className="font-mono text-[11px]" style={{ color: 'var(--coral)' }}>
+            Something broke in {this.props.label || 'this view'} — the rest of the app is still fine.
+          </span>
+          <span className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>{String(this.state.error.message || this.state.error)}</span>
+          <button
+            onClick={() => this.setState({ error: null })}
+            className="font-mono text-[10px] px-3 py-1 rounded mt-1"
+            style={{ background: 'var(--panel2)', color: 'var(--emerald)', border: '1px solid var(--border)' }}
+          >Try again</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
   const [timeframe, setTimeframe] = useState('H1');
   const [status, setStatus] = useState('loading'); // loading | ok | empty | error
@@ -1535,6 +1578,24 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
   const indicatorMenuRef = useRef(null);
   const lastBarRef = useRef(null);
   const lastVolRef = useRef(0);
+  // FIX (root cause of the "screen goes blank when I switch [symbols]"
+  // bug): on a symbol/timeframe switch, the historical reload below is
+  // async — there's a real window where candleSeriesRef.current still
+  // holds the OLD symbol's data while this effect's deps (quote, signals)
+  // have already updated to the NEW symbol. The live-tick effect used to
+  // fire in that window and call series.update() with a bar built from
+  // the new symbol's price/timestamp against the old symbol's still-
+  // loaded series — lightweight-charts requires updates to be time-
+  // ordered relative to what's already in the series, and throws when
+  // they aren't (e.g. the new symbol's bucketed tick time landing earlier
+  // than the old symbol's last loaded bar). That threw INSIDE a useEffect
+  // with no error boundary anywhere in the app (see the new ErrorBoundary
+  // above) — React's default behavior on an uncaught render/effect error
+  // is to unmount the whole tree, which is exactly "the screen goes
+  // blank". loadedKeyRef gates every write to the chart series behind
+  // "does this data actually belong to the symbol/timeframe on screen
+  // right now" so that window can't produce a mismatched write anymore.
+  const loadedKeyRef = useRef(null);
 
   // Recompute whichever overlays are currently toggled on from the full
   // candle set. Cheap even at 300 candles (worst case ~6k ops for
@@ -1661,6 +1722,8 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
       volumeSeriesRef.current?.setData([]);
       if (markersRef.current?.setMarkers) markersRef.current.setMarkers([]);
     } catch (_) {}
+    loadedKeyRef.current = null; // block live-tick writes until THIS combo's history actually lands
+    const key = `${symbol}:${timeframe}`;
 
     async function load() {
       const myId = ++reqId;
@@ -1674,6 +1737,7 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
         if (!candles.length) {
           try { candleSeriesRef.current.setData([]); volumeSeriesRef.current?.setData([]); } catch (_) {}
           setStatus('empty');
+          loadedKeyRef.current = key; // this combo has resolved (to empty) — live ticks may now seed a fresh bar
           return;
         }
         candleSeriesRef.current.setData(candles.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })));
@@ -1692,9 +1756,14 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
         lastVolRef.current = last.volume || 0;
         setOhlcReadout({ o: last.open, h: last.high, l: last.low, c: last.close });
         try { chartRef.current?.timeScale()?.fitContent?.(); } catch (_) {}
+        loadedKeyRef.current = key; // only NOW is it safe for the live-tick effect to write into this series
         setStatus('ok');
       } catch (e) {
         if (!cancelled && myId === reqId) setStatus('error');
+        // deliberately NOT setting loadedKeyRef here — an errored load means
+        // we don't actually know the series is in a good state for this
+        // symbol/timeframe, so live ticks stay gated off until the next
+        // successful poll rather than risk writing over unknown contents.
       }
     }
     load();
@@ -1714,48 +1783,68 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
   useEffect(() => {
     const tickPrice = Number(quote?.bid ?? quote?.price);
     if (!candleSeriesRef.current || !Number.isFinite(tickPrice)) return;
+    // FIX (screen-blanks-on-switch, see ErrorBoundary/loadedKeyRef comments
+    // above): don't write into the series until the history for THIS
+    // symbol:timeframe has actually landed — otherwise a live tick can hit
+    // a series that's still showing the PREVIOUS symbol's data, and
+    // lightweight-charts throws (uncaught, with no boundary = blank app)
+    // if the computed bucket time lands before that stale series' last bar.
+    if (loadedKeyRef.current !== `${symbol}:${timeframe}`) return;
     const durationMs = TIMEFRAME_MS_CLIENT[timeframe];
     const bucketTime = Math.floor((quote.ts || Date.now()) / durationMs) * (durationMs / 1000);
     const prev = lastBarRef.current;
     const bar = (!prev || prev.time !== bucketTime)
       ? { time: bucketTime, open: prev ? prev.close : tickPrice, high: tickPrice, low: tickPrice, close: tickPrice }
       : { ...prev, high: Math.max(prev.high, tickPrice), low: Math.min(prev.low, tickPrice), close: tickPrice };
-    lastBarRef.current = bar;
-    candleSeriesRef.current.update(bar);
-    volumeSeriesRef.current?.update({ time: bar.time, value: lastVolRef.current, color: bar.close >= bar.open ? 'rgba(31,227,168,0.35)' : 'rgba(255,84,112,0.35)' });
-    const cs = candlesRef.current;
-    if (cs.length && cs[cs.length - 1].time === bar.time) cs[cs.length - 1] = bar;
-    else cs.push(bar);
-    applyIndicators(cs);
-  }, [quote?.bid, quote?.price, quote?.ts, timeframe]);
+    // Belt-and-suspenders: even with loadedKeyRef gating the common case,
+    // still never let a chart-library assertion (e.g. an out-of-order
+    // time from a delayed/reordered tick) throw uncaught here — that's
+    // exactly the class of error that used to blank the whole screen.
+    try {
+      candleSeriesRef.current.update(bar);
+      volumeSeriesRef.current?.update({ time: bar.time, value: lastVolRef.current, color: bar.close >= bar.open ? 'rgba(31,227,168,0.35)' : 'rgba(255,84,112,0.35)' });
+      lastBarRef.current = bar;
+      const cs = candlesRef.current;
+      if (cs.length && cs[cs.length - 1].time === bar.time) cs[cs.length - 1] = bar;
+      else cs.push(bar);
+      applyIndicators(cs);
+    } catch (err) {
+      console.warn('[LiveChart] skipped an out-of-order tick update:', err.message);
+    }
+  }, [quote?.bid, quote?.price, quote?.ts, timeframe, symbol]);
 
   // Signal overlay: arrows for every signal on this symbol, entry/SL/TP1
   // price lines for only the most recent one (all of them would just be
   // clutter on a live-forever chart).
   useEffect(() => {
     if (!markersRef.current || !candleSeriesRef.current) return;
-    const durationMs = TIMEFRAME_MS_CLIENT[timeframe];
-    const list = (signals || []).filter(s => s.action === 'BUY' || s.action === 'SELL');
+    if (loadedKeyRef.current !== `${symbol}:${timeframe}`) return; // same guard — don't draw against a series mid-transition
+    try {
+      const durationMs = TIMEFRAME_MS_CLIENT[timeframe];
+      const list = (signals || []).filter(s => s.action === 'BUY' || s.action === 'SELL');
 
-    markersRef.current.setMarkers(list.map(s => ({
-      time: Math.floor((s.timestamp || Date.now()) / durationMs) * (durationMs / 1000),
-      position: s.action === 'BUY' ? 'belowBar' : 'aboveBar',
-      color: s.action === 'BUY' ? CHART_COLORS.up : CHART_COLORS.down,
-      shape: s.action === 'BUY' ? 'arrowUp' : 'arrowDown',
-      text: s.score != null ? String(Math.round(s.score)) : s.action,
-    })));
+      markersRef.current.setMarkers(list.map(s => ({
+        time: Math.floor((s.timestamp || Date.now()) / durationMs) * (durationMs / 1000),
+        position: s.action === 'BUY' ? 'belowBar' : 'aboveBar',
+        color: s.action === 'BUY' ? CHART_COLORS.up : CHART_COLORS.down,
+        shape: s.action === 'BUY' ? 'arrowUp' : 'arrowDown',
+        text: s.score != null ? String(Math.round(s.score)) : s.action,
+      })));
 
-    priceLinesRef.current.forEach(l => { try { candleSeriesRef.current.removePriceLine(l); } catch (_) {} });
-    priceLinesRef.current = [];
-    const latest = list[0];
-    if (latest) {
-      const lines = [];
-      if (Number.isFinite(latest.entry)) lines.push({ price: latest.entry, color: CHART_COLORS.text, lineStyle: LineStyle.Solid, title: 'entry' });
-      if (Number.isFinite(latest.stopLoss)) lines.push({ price: latest.stopLoss, color: CHART_COLORS.down, lineStyle: LineStyle.Dashed, title: 'SL' });
-      if (Number.isFinite(latest.targets?.[0])) lines.push({ price: latest.targets[0], color: CHART_COLORS.up, lineStyle: LineStyle.Dashed, title: 'TP1' });
-      priceLinesRef.current = lines.map(opts => candleSeriesRef.current.createPriceLine({ ...opts, lineWidth: 1, axisLabelVisible: true }));
+      priceLinesRef.current.forEach(l => { try { candleSeriesRef.current.removePriceLine(l); } catch (_) {} });
+      priceLinesRef.current = [];
+      const latest = list[0];
+      if (latest) {
+        const lines = [];
+        if (Number.isFinite(latest.entry)) lines.push({ price: latest.entry, color: CHART_COLORS.text, lineStyle: LineStyle.Solid, title: 'entry' });
+        if (Number.isFinite(latest.stopLoss)) lines.push({ price: latest.stopLoss, color: CHART_COLORS.down, lineStyle: LineStyle.Dashed, title: 'SL' });
+        if (Number.isFinite(latest.targets?.[0])) lines.push({ price: latest.targets[0], color: CHART_COLORS.up, lineStyle: LineStyle.Dashed, title: 'TP1' });
+        priceLinesRef.current = lines.map(opts => candleSeriesRef.current.createPriceLine({ ...opts, lineWidth: 1, axisLabelVisible: true }));
+      }
+    } catch (err) {
+      console.warn('[LiveChart] skipped a marker/price-line update:', err.message);
     }
-  }, [signals, timeframe]);
+  }, [signals, timeframe, symbol]);
 
   // Support/resistance drawn straight on the price axis (H1 swing high/low
   // from /api/levels) so it moves with the chart instead of living in a
@@ -2202,7 +2291,9 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
             </span>
             {q?.source === 'mt5_ea' && <Pill tone="up">MT5</Pill>}
           </div>
-          <LiveChart symbol={chartSymbol} quote={q} signals={chartSignals} levels={levels} onSymbolChange={setChartSymbol} />
+          <ErrorBoundary key={chartSymbol} label="the chart">
+            <LiveChart symbol={chartSymbol} quote={q} signals={chartSignals} levels={levels} onSymbolChange={setChartSymbol} />
+          </ErrorBoundary>
         </div>
 
         <div className="omni-panel overflow-hidden order-2 xl:order-2 flex flex-col max-h-[min(55vh,480px)] sm:max-h-[min(50vh,520px)] xl:max-h-[min(60vh,720px)] min-h-[280px]">
@@ -3939,24 +4030,26 @@ export default function OmniceeDashboard() {
       <TickerTape prices={feed.prices || {}} changes={feed.changes || {}} flash={feed.flash || {}} quotes={feed.quotes || {}} />
       <div className="flex flex-col flex-1 min-h-0" style={{ minHeight: 0 }}>
         <div className="omni-main omni-scroll">
-          {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} analysisLive={feed.analysisLive} socketLive={feed.socketLive} cryptoVolAlerts={feed.cryptoVolAlerts} />}
-          {activeTab === 'SIGNALS' && (
-            <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} auditLog={feed.auditLog} analysisLive={feed.analysisLive} />
-          )}
-          {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}
-          {activeTab === 'VALID' && (
-            <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} hurstBoard={feed.hurstBoard} />
-          )}
-          {activeTab === 'ANALYSIS' && (
-            <AnalysisTab mode={feed.mode} />
-          )}
-          {activeTab === 'MONITOR' && (
-            <div className="space-y-2">
-              <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} fetchErrors={feed.fetchErrors} analysisLive={feed.analysisLive} socketLive={feed.socketLive} />
-              <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} calendar={feed.calendar} />
-              <DeskTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} stats={feed.stats} accountBalance={feed.accountBalance} relativeStrength={feed.relativeStrength} mode={feed.mode} />
-            </div>
-          )}
+          <ErrorBoundary key={activeTab} label={activeTab}>
+            {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} analysisLive={feed.analysisLive} socketLive={feed.socketLive} cryptoVolAlerts={feed.cryptoVolAlerts} />}
+            {activeTab === 'SIGNALS' && (
+              <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} auditLog={feed.auditLog} analysisLive={feed.analysisLive} />
+            )}
+            {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}
+            {activeTab === 'VALID' && (
+              <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} hurstBoard={feed.hurstBoard} />
+            )}
+            {activeTab === 'ANALYSIS' && (
+              <AnalysisTab mode={feed.mode} />
+            )}
+            {activeTab === 'MONITOR' && (
+              <div className="space-y-2">
+                <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} fetchErrors={feed.fetchErrors} analysisLive={feed.analysisLive} socketLive={feed.socketLive} />
+                <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} calendar={feed.calendar} />
+                <DeskTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} stats={feed.stats} accountBalance={feed.accountBalance} relativeStrength={feed.relativeStrength} mode={feed.mode} />
+              </div>
+            )}
+          </ErrorBoundary>
         </div>
         <div className="omni-hide-xs flex items-center justify-center gap-2 py-0.5 border-t font-mono text-[8px] uppercase tracking-wider" style={{ borderColor: 'var(--border)', color: 'var(--textFaint)' }}>
           <span>OMNICEE</span><span>·</span><span>Developed by James Yelbert</span>
