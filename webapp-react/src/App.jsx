@@ -14,6 +14,7 @@ import {
   Circle, Clock, Zap, Database,
   Terminal, Newspaper, Gauge as GaugeIcon,
   Layers, Target, DollarSign, SlidersHorizontal, Maximize2, Minimize2,
+  Download, Share2,
 } from 'lucide-react';
 
 const SYMBOLS = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'USOIL', 'UUP', 'BTCUSDT', 'ETHUSDT'];
@@ -2552,6 +2553,89 @@ function RiskTab({ prices, changes, accountBalance, relativeStrength, mode }) {
   );
 }
 
+
+function isStandalonePwa() {
+  try {
+    if (window.matchMedia('(display-mode: standalone)').matches) return true;
+    if (window.navigator.standalone === true) return true; // iOS Safari
+  } catch (_) {}
+  return false;
+}
+
+function isIosSafari() {
+  const ua = navigator.userAgent || '';
+  const iOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const webkit = /WebKit/.test(ua);
+  const notOther = !/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
+  return iOS && webkit && notOther;
+}
+
+/** Visible install path — beforeinstallprompt alone never shows a button by itself. */
+function InstallBanner({ installEvt, onInstalled }) {
+  const [dismissed, setDismissed] = useState(false);
+  const [iosHelp, setIosHelp] = useState(false);
+  const standalone = isStandalonePwa();
+  if (standalone || dismissed) return null;
+
+  const onInstallClick = async () => {
+    if (installEvt?.prompt) {
+      try {
+        await installEvt.prompt();
+        const choice = await installEvt.userChoice;
+        if (choice?.outcome === 'accepted') onInstalled?.();
+      } catch (_) {}
+      return;
+    }
+    if (isIosSafari()) {
+      setIosHelp(true);
+      return;
+    }
+    // Desktop without deferred prompt yet — browser may still allow via menu
+    setIosHelp(false);
+    alert('Install: use the browser menu → "Install app" / "Add to Home screen". Chrome/Edge address bar may also show an install icon.');
+  };
+
+  return (
+    <div className="px-2 pt-2">
+      <div className="omni-panel px-3 py-2 flex flex-wrap items-center gap-2" style={{ borderColor: 'var(--emerald)' }}>
+        <Download size={14} style={{ color: 'var(--emerald)' }} />
+        <div className="flex-1 min-w-[140px] font-mono text-[11px]" style={{ color: 'var(--text)' }}>
+          Install OMNICEE on this device
+          <div className="text-[10px]" style={{ color: 'var(--textFaint)' }}>
+            {installEvt ? 'Ready — works offline shell + home screen icon' : isIosSafari() ? 'iPhone/iPad: use Share → Add to Home Screen' : 'Waiting for browser install offer — or use browser menu'}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onInstallClick}
+          className="font-mono text-[10px] uppercase px-3 py-1.5 rounded font-semibold"
+          style={{ background: 'var(--emerald)', color: '#05070a' }}
+        >
+          {installEvt ? 'Install app' : isIosSafari() ? 'How to install' : 'Install help'}
+        </button>
+        <button
+          type="button"
+          onClick={() => setDismissed(true)}
+          className="font-mono text-[10px] px-2 py-1 rounded"
+          style={{ color: 'var(--textFaint)', border: '1px solid var(--border)' }}
+        >
+          Later
+        </button>
+      </div>
+      {iosHelp && (
+        <div className="omni-panel2 mt-1 px-3 py-2 font-mono text-[10px] space-y-1" style={{ color: 'var(--textDim)' }}>
+          <div style={{ color: 'var(--text)' }}>iPhone / iPad (Safari)</div>
+          <div>1. Tap the <b>Share</b> button (square with arrow)</div>
+          <div>2. Scroll and tap <b>Add to Home Screen</b></div>
+          <div>3. Tap <b>Add</b> — OMNICEE opens like an app</div>
+          <div className="pt-1" style={{ color: 'var(--textFaint)' }}>Android Chrome: menu ⋮ → Install app / Add to Home screen</div>
+          <div style={{ color: 'var(--textFaint)' }}>PC Chrome/Edge: install icon in address bar, or menu → Install OMNICEE</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── App shell ──────────────────────────────────────────────────────── */
 export default function OmniceeDashboard() {
   const [activeTab, setActiveTab] = useState('DASH');
@@ -2560,7 +2644,10 @@ export default function OmniceeDashboard() {
   useEffect(() => {
     const h = (e) => { e.preventDefault(); setInstallEvt(e); };
     window.addEventListener('beforeinstallprompt', h);
-    return () => window.removeEventListener('beforeinstallprompt', h);
+    window.addEventListener('appinstalled', () => setInstallEvt(null));
+    return () => {
+      window.removeEventListener('beforeinstallprompt', h);
+    };
   }, []);
   const feed = useLiveFeed();
 
@@ -2569,6 +2656,9 @@ export default function OmniceeDashboard() {
       <>
         <ThemeStyle />
         <LoginGate onAuthed={(u) => setUser(u)} />
+        <div className="fixed bottom-0 left-0 right-0 z-50 max-w-lg mx-auto">
+          <InstallBanner installEvt={installEvt} onInstalled={() => setInstallEvt(null)} />
+        </div>
       </>
     );
   }
@@ -2584,6 +2674,7 @@ export default function OmniceeDashboard() {
     <div className="omni-root flex flex-col h-full min-h-[640px] w-full text-sm">
       <ThemeStyle />
       <TopBar now={feed.now} mode={feed.mode} socketLive={feed.socketLive} analysisLive={feed.analysisLive} wakingBackend={feed.wakingBackend} onCommand={handleCommand} />
+      <InstallBanner installEvt={installEvt} onInstalled={() => setInstallEvt(null)} />
       <TickerTape prices={feed.prices} changes={feed.changes} flash={feed.flash} quotes={feed.quotes} />
       <div className="flex flex-col flex-1 min-h-0">
         <div className="flex-1 overflow-y-auto omni-scroll">
