@@ -556,6 +556,7 @@ function useLiveFeed() {
   // the UI can show whether it's on tick-by-tick push or 5s-poll fallback.
   const [socketLive, setSocketLive] = useState(false);
   const [analysisLive, setAnalysisLive] = useState(null); // { symbol, timeframe, ts }
+  const [cryptoVolAlerts, setCryptoVolAlerts] = useState([]);
   const [news, setNews] = useState(null);
   const [sentiment, setSentiment] = useState(null);
   const [journalStats, setJournalStats] = useState(null);
@@ -835,6 +836,20 @@ function useLiveFeed() {
             ts: payload.timestamp || Date.now(),
           });
         }
+        if (payload.type === 'crypto_volatility_alert') {
+          setCryptoVolAlerts(prev => [payload, ...prev].slice(0, 20));
+        }
+      });
+      socket.on('crypto_volatility_alert', payload => {
+        if (cancelled || !payload) return;
+        setCryptoVolAlerts(prev => [payload, ...prev].slice(0, 20));
+        try {
+          if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+            new Notification(`OMNICEE ${payload.symbol} ${payload.direction}`, {
+              body: payload.message || `${payload.absPct}% in ${payload.window}`,
+            });
+          }
+        } catch (_) {}
       });
       socket.on('regime', payload => {
         if (cancelled || !payload?.symbol) return;
@@ -871,7 +886,7 @@ function useLiveFeed() {
 
   return {
     now, prices, quotes, changes, flash, signals, calendar, levels, auditLog, equityCurve, equityCurveLive,
-    stats, outlook, heatmapTiles, feedHealth, uptimeSec, accountBalance, socketLive, analysisLive,
+    stats, outlook, heatmapTiles, feedHealth, uptimeSec, accountBalance, socketLive, analysisLive, cryptoVolAlerts,
     news, sentiment, journalStats, learningProfiles, relativeStrength, fetchErrors,
     mode, connected: mode === 'live', wakingBackend,
   };
@@ -1450,7 +1465,7 @@ function LiveChart({ symbol, quote, signals, levels }) {
 }
 
 /* ── DASH ───────────────────────────────────────────────────────────── */
-function DashTab({ signals, accountBalance, journalStats, prices, quotes, changes, mode, outlook, now, levels, analysisLive, socketLive }) {
+function DashTab({ signals, accountBalance, journalStats, prices, quotes, changes, mode, outlook, now, levels, analysisLive, socketLive, cryptoVolAlerts }) {
   const approved = signals.filter(s => s.gate?.status === 'approved' || s.gate?.status === 'APPROVED');
   const recent = signals.slice(0, 12);
   const [chartSymbol, setChartSymbol] = useState('XAUUSD');
@@ -1469,6 +1484,19 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
         </span>
         <span style={{ color: 'var(--textFaint)' }}>MT5 + Deriv only · analysis always on</span>
       </div>
+      {Array.isArray(cryptoVolAlerts) && cryptoVolAlerts.length > 0 && (
+        <div className="omni-panel px-3 py-2 space-y-1">
+          <div className="font-mono text-[10px] uppercase" style={{ color: 'var(--gold)' }}>Crypto volatility alerts</div>
+          {cryptoVolAlerts.slice(0, 5).map((a, i) => (
+            <div key={i} className="font-mono text-[11px] flex flex-wrap gap-2" style={{ color: a.direction === 'UP' ? 'var(--emerald)' : 'var(--coral)' }}>
+              <span>{a.symbol}</span>
+              <span>{a.direction}</span>
+              <span>{a.absPct}% / {a.window}</span>
+              <span style={{ color: 'var(--textFaint)' }}>{a.severity}</span>
+            </div>
+          ))}
+        </div>
+      )}
       {/* LIVE TICKS FIRST — no scroll required */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_260px] gap-2">
         <div className="omni-panel p-2 md:p-3 order-2 lg:order-1">
@@ -2671,7 +2699,7 @@ export default function OmniceeDashboard() {
       <TickerTape prices={feed.prices} changes={feed.changes} flash={feed.flash} quotes={feed.quotes} />
       <div className="flex flex-col flex-1 min-h-0">
         <div className="flex-1 overflow-y-auto omni-scroll">
-          {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} analysisLive={feed.analysisLive} socketLive={feed.socketLive} />}
+          {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} analysisLive={feed.analysisLive} socketLive={feed.socketLive} cryptoVolAlerts={feed.cryptoVolAlerts} />}
           {activeTab === 'SIGNALS' && (
             <div className="space-y-2">
               <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} auditLog={feed.auditLog} analysisLive={feed.analysisLive} />

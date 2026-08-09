@@ -98,6 +98,7 @@ const { FinnhubFeed }        = loadModule('./feeds/finnhub-feed',               
 const { FMPFeed }            = loadModule('./feeds/fmp-feed',                    'FMPFeed')           || {};
 const { ForexFactoryCalendar } = loadModule('./feeds/forex-factory-calendar',   'ForexFactoryCalendar') || {};
 const { DerivFeed }            = loadModule('./feeds/deriv-feed',               'DerivFeed')            || {};
+const { CryptoVolatilityAlert } = loadModule('./feeds/crypto-volatility-alert', 'CryptoVolatilityAlert') || {};
 const { CFTCCotFeed }        = loadModule('./feeds/cftc-cot-feed',               'CFTCCotFeed')       || {};
 const { COTReportParser }    = loadModule('./feeds/cot-report-parser',           'COTReportParser')   || {};
 const { OpportunityRanker }  = loadModule('./signal-pipeline/opportunity-ranker', 'OpportunityRanker') || {};
@@ -119,6 +120,11 @@ const conflictResolver = ConflictResolverClass ? new ConflictResolverClass() : n
 const trapDetector        = TrapDetector        ? new TrapDetector()        : null;
 const compressionDetector = CompressionDetector ? new CompressionDetector() : null;
 const abnormalMarketDetector = AbnormalMarketDetector ? new AbnormalMarketDetector() : null;
+const cryptoVolAlert = CryptoVolatilityAlert
+  ? new CryptoVolatilityAlert({
+      symbols: (SYMBOLS || []).filter(s => /USDT$|USDC$|BTC|ETH/.test(s)),
+    })
+  : null;
 const timeCycleEngine     = TimeCycleEngine     ? new TimeCycleEngine()     : null;
 const strategySelector    = StrategySelector    ? new StrategySelector()    : null;
 const candleIntelligence  = CandleIntelligence  ? new CandleIntelligence()  : null;
@@ -1258,6 +1264,35 @@ function onLivePrice(symbol, price, { change = null, bias = null, source = 'cand
 
   // Always-on analysis: same spirit as live chart — rescore while ticks flow
   try { scheduleLiveAnalysis(symbol, source); } catch (_) {}
+
+  // Crypto volatility alerts (BTC/ETH short-window % moves)
+  if (cryptoVolAlert && cryptoVolAlert.isCrypto(symbol)) {
+    try {
+      const alert = cryptoVolAlert.onPrice(symbol, price, now);
+      if (alert && wsBus) {
+        wsBus.emit('crypto_volatility_alert', alert);
+        wsBus.emit('telemetry_update', { type: 'crypto_volatility_alert', ...alert });
+        log.warn(`[CryptoVol] ${alert.message}`);
+        if (dispatcher?.sendMessage && alert.severity !== 'elevated') {
+          dispatcher.sendMessage(
+            `⚡ *Crypto volatility*\n${alert.symbol} ${alert.direction} ${alert.absPct}% / ${alert.window}\nPrice ${alert.price}`
+          ).catch(() => {});
+        }
+        try {
+          auditTrail?.record?.({
+            symbol, timeframe: alert.window, signalFired: false,
+            blockedReason: `crypto_vol_${alert.direction}_${alert.absPct}pct`,
+            score: alert.absPct,
+            reasons: [alert.message],
+            gatesFailed: [],
+            gatesPassed: ['crypto_volatility_watch'],
+          });
+        } catch (_) {}
+      }
+    } catch (e) {
+      log.debug(`cryptoVolAlert: ${e.message}`);
+    }
+  }
 
   if (executionEngine?.onPrice) {
     try { executionEngine.onPrice(symbol, price, null); }
