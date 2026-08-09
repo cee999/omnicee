@@ -1,62 +1,24 @@
-/**
- * ============================================================
- *  SIGNAL SCORER — Multi-Agent Confluence Weighting Engine
- *  AI Trading Assistant · Layer 5 · Signal Pipeline
- * ============================================================
- *
- *  Responsibilities:
- *    - Receives raw votes from all 5 specialized AI agents
- *    - Applies weighted confluence scoring (SMC 35%, MTF 25%,
- *      Momentum 20%, Volume/OI 10%, Macro/Sentiment 10%)
- *    - Applies session filter (London / NY / Asia killzones)
- *    - Applies news blackout filter (30min before/after high-impact)
- *    - Applies drawdown circuit breaker (pauses if daily loss hit)
- *    - Generates final LONG / SHORT / WAIT with full audit trail
- *    - Writes signal history to PostgreSQL via db module
- *    - Publishes signal to Redis for frontend + alert-dispatcher
- *    - Tracks signal performance (win rate per symbol, per session)
- *
- *  Minimum score to fire a signal: 75/100
- *  Grade A = 85+, Grade B = 75-84, Grade C = 65-74 (not fired)
- * ============================================================
- */
 
 'use strict';
 
 const EventEmitter = require('events');
 
-// ─────────────────────────────────────────────
-//  WEIGHT CONFIGURATION
-// ─────────────────────────────────────────────
-
-// FIX: PatternAgent (Wyckoff/harmonics/H&S/divergences, ~1,250 lines) was
-// instantiated in index.js's agentPool but .analyze() was never called on
-// it anywhere — its vote had zero influence on any signal, ever. Adding it
-// as a 6th weighted voting agent. This is a real strategy-parameter change,
-// not just a wiring fix: the other 5 weights are scaled down proportionally
-// (×0.92) so the total still sums to exactly 1.0 — the `margin < 0.15`
-// clear-majority check elsewhere in this file assumes weights sum to 1.0,
-// and leaving them unscaled would silently loosen that threshold.
-// Jane Street / quant-desk inspired weights (sum = 1.0)
-// Priority: order-flow & structure > multi-scale alignment > lagging indicators
-// Microstructure + Fractal were computed every cycle but previously had ZERO
-// weight — they never influenced direction or score. Wired in for profit edge.
+// FIX: PatternAgent (Wyckoff/harmonics/H&S/divergences, ~1,250 lines) was instantiated in index.js's agentPool but .analyze() was never called on it anywhere — its vote had zero influence on any...
 const AGENT_WEIGHTS = {
-  SMC:            0.20,  // Institutional structure (OB/FVG/BOS) — still core
-  MICROSTRUCTURE: 0.18,  // Order flow, CVD, absorption, LVN — quant edge
-  MTF:            0.15,  // Multi-timeframe alignment — cuts false breaks
-  VOLUME_OI:      0.12,  // Positioning, funding, OI — crowded trade risk
-  FRACTAL:        0.10,  // Hurst / persistence regime — trade with memory
-  MOMENTUM:       0.10,  // RSI/MACD/EMA — useful but lagging
-  MACRO_SENT:     0.08,  // COT / news / fear-greed — slower signal
-  PATTERN:        0.07,  // Classic patterns — lowest priority (most lag)
+  SMC:            0.20,
+  MICROSTRUCTURE: 0.18,
+  MTF:            0.15,
+  VOLUME_OI:      0.12,
+  FRACTAL:        0.10,
+  MOMENTUM:       0.10,
+  MACRO_SENT:     0.08,
+  PATTERN:        0.07,
 };
 
-const MIN_SCORE_TO_FIRE    = 65; // aligned with signal-only default; env MIN_SIGNAL_SCORE overrides via constructor
+const MIN_SCORE_TO_FIRE    = 65;
 const MIN_SCORE_GRADE_A    = 85;
 const MIN_SCORE_GRADE_B    = 65;
 
-// Session windows in UTC hours
 const SESSIONS = {
   ASIA: {
     name:  'Asia',
@@ -95,10 +57,6 @@ const SESSIONS = {
   },
 };
 
-// ─────────────────────────────────────────────
-//  SESSION DETECTOR
-// ─────────────────────────────────────────────
-
 class SessionDetector {
   static getCurrent(timestampMs) {
     const d       = new Date(timestampMs || Date.now());
@@ -112,7 +70,6 @@ class SessionDetector {
     if (utcHour >= 13   && utcHour < 21) active.push(SESSIONS.NEW_YORK);
     if (utcHour >= 21)                   active.push(SESSIONS.DEAD);
 
-    // Best session = highest quality one active
     const qualityOrder = ['HIGHEST', 'HIGH', 'LOW', 'DEAD'];
     active.sort((a, b) =>
       qualityOrder.indexOf(a.quality) - qualityOrder.indexOf(b.quality)
@@ -127,7 +84,6 @@ class SessionDetector {
       isKillzone:    best.quality === 'HIGHEST',
       isHighVolume:  best.quality === 'HIGH' || best.quality === 'HIGHEST',
       isDead:        best.quality === 'DEAD',
-      // Score multiplier: killzone = 1.1x, high = 1.0x, low = 0.85x, dead = 0.6x
       multiplier:    best.quality === 'HIGHEST' ? 1.10
         : best.quality === 'HIGH' ? 1.00
         : best.quality === 'LOW' ? 0.85
@@ -135,9 +91,6 @@ class SessionDetector {
     };
   }
 
-  /**
-   * Returns the next high-quality session
-   */
   static getNextKillzone(timestampMs) {
     const d       = new Date(timestampMs || Date.now());
     const utcHour = d.getUTCHours() + d.getUTCMinutes() / 60;
@@ -149,46 +102,30 @@ class SessionDetector {
   }
 }
 
-// ─────────────────────────────────────────────
-//  NEWS BLACKOUT MANAGER
-// ─────────────────────────────────────────────
-
 class NewsBlackoutManager {
   constructor() {
-    // Scheduled high-impact events: { symbol, time: UTC ms, name, impact }
     this._events = [];
-    this._blackoutWindow = 30 * 60 * 1000; // 30 minutes each side
+    this._blackoutWindow = 30 * 60 * 1000;
   }
 
-  /**
-   * Register a high-impact news event
-   */
   addEvent(event) {
     this._events.push({
       ...event,
       addedAt: Date.now(),
     });
-    // Keep only future events
     this._events = this._events.filter(e => e.time > Date.now() - this._blackoutWindow);
   }
 
-  /**
-   * Add multiple events from an economic calendar feed
-   */
   addEvents(events) {
     for (const event of events) {
       this.addEvent(event);
     }
   }
 
-  /**
-   * Check if trading is blacked out right now for a symbol
-   */
   isBlackedOut(symbol, timestampMs) {
     const now = timestampMs || Date.now();
 
     const affecting = this._events.filter(e => {
-      // Event affects this symbol (USD events affect all USD pairs, etc.)
       const symbolMatch = !e.symbol ||
         e.symbol === symbol ||
         symbol.includes(e.currency || '');
@@ -212,23 +149,13 @@ class NewsBlackoutManager {
   }
 }
 
-// ─────────────────────────────────────────────
-//  DRAWDOWN CIRCUIT BREAKER
-// ─────────────────────────────────────────────
-
 class DrawdownCircuitBreaker {
-  /**
-   * @param {Object} config
-   * @param {number} config.maxDailyLossPct - max daily loss % before pausing (default 3%)
-   * @param {number} config.maxWeeklyLossPct - max weekly loss % (default 7%)
-   * @param {number} config.maxConsecutiveLosses - stop after N losses in a row (default 4)
-   */
   constructor(config = {}) {
     this.maxDailyLossPct        = config.maxDailyLossPct        || 3;
     this.maxWeeklyLossPct       = config.maxWeeklyLossPct       || 7;
     this.maxConsecutiveLosses   = config.maxConsecutiveLosses   || 4;
 
-    this._dailyPnl        = 0;   // in % of account
+    this._dailyPnl        = 0;
     this._weeklyPnl       = 0;
     this._consecutiveLoss = 0;
     this._isPaused        = false;
@@ -238,22 +165,16 @@ class DrawdownCircuitBreaker {
     this._weekStart       = this._getWeekStartUTC();
   }
 
-  /**
-   * Register a completed trade result
-   * @param {number} pnlPct - PnL as percentage of account (+ or -)
-   */
   recordTrade(pnlPct) {
     const now = Date.now();
 
     this._tradeLog.push({ pnlPct, timestamp: now });
 
-    // Reset daily if new day
     if (this._getTodayUTC() > this._dayStart) {
       this._dailyPnl  = 0;
       this._dayStart  = this._getTodayUTC();
     }
 
-    // Reset weekly if new week
     if (this._getWeekStartUTC() > this._weekStart) {
       this._weeklyPnl  = 0;
       this._weekStart  = this._getWeekStartUTC();
@@ -316,20 +237,16 @@ class DrawdownCircuitBreaker {
 
   _getWeekStartUTC() {
     const d   = new Date();
-    const day = d.getUTCDay(); // 0 = Sunday
+    const day = d.getUTCDay();
     const diff = d.getUTCDate() - day;
     return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), diff);
   }
 }
 
-// ─────────────────────────────────────────────
-//  SIGNAL HISTORY TRACKER
-// ─────────────────────────────────────────────
-
 class SignalHistoryTracker {
   constructor() {
-    this._signals = [];   // all signals fired
-    this._outcomes = [];  // closed trade outcomes
+    this._signals = [];
+    this._outcomes = [];
   }
 
   record(signal) {
@@ -345,16 +262,13 @@ class SignalHistoryTracker {
   closeSignal(id, outcome) {
     const sig = this._signals.find(s => s.id === id);
     if (sig) {
-      sig.outcome  = outcome; // 'WIN' | 'LOSS' | 'BREAKEVEN'
+      sig.outcome  = outcome;
       sig.closedAt = Date.now();
       sig.pnlPct   = outcome.pnlPct;
       this._outcomes.push(outcome);
     }
   }
 
-  /**
-   * Win rate statistics per symbol, per session, per timeframe
-   */
   getStats() {
     const closed  = this._signals.filter(s => s.outcome !== null);
     const wins    = closed.filter(s => s.outcome?.result === 'WIN');
@@ -375,9 +289,8 @@ class SignalHistoryTracker {
 
     const profitFactor = (avgLoss !== 0 && !isNaN(avgLoss))
       ? parseFloat(Math.abs(avgWin / avgLoss).toFixed(2))
-      : (avgWin > 0 ? 999 : 0); // Handle zero loss as infinite PF
+      : (avgWin > 0 ? 999 : 0);
 
-    // Per-symbol breakdown
     const bySymbol = {};
     for (const sig of closed) {
       if (!bySymbol[sig.symbol]) bySymbol[sig.symbol] = { wins: 0, losses: 0, total: 0 };
@@ -411,20 +324,7 @@ class SignalHistoryTracker {
   }
 }
 
-// ─────────────────────────────────────────────
-//  MAIN SIGNAL SCORER CLASS
-// ─────────────────────────────────────────────
-
 class SignalScorer extends EventEmitter {
-  /**
-   * @param {Object} config
-   * @param {number} config.minScore            - minimum score to fire (default 75)
-   * @param {boolean} config.sessionFilter      - apply session quality filter (default true)
-   * @param {boolean} config.newsBlackout       - apply news blackout filter (default true)
-   * @param {Object}  config.circuitBreaker     - DrawdownCircuitBreaker config
-   * @param {Object}  config.redis              - Redis client for publishing
-   * @param {boolean} config.requireKillzone    - only fire in killzone sessions (default false)
-   */
   constructor(config = {}) {
     super();
 
@@ -439,26 +339,10 @@ class SignalScorer extends EventEmitter {
     this.history          = new SignalHistoryTracker();
 
     this._processingCount = 0;
-    this._lastSignalTime  = new Map(); // symbol → timestamp (prevent spam)
-    this._minSignalGapMs  = 5 * 60 * 1000; // min 5 minutes between signals per symbol
+    this._lastSignalTime  = new Map();
+    this._minSignalGapMs  = 5 * 60 * 1000;
   }
 
-  // ─────────────────────────────────────────────
-  //  MAIN SCORE FUNCTION
-  // ─────────────────────────────────────────────
-
-  /**
-   * The master scoring function. Takes agent votes and outputs a final signal.
-   *
-   * @param {Object} agentVotes - votes from all 5 agents
-   * @param {Object} agentVotes.smc        - { direction, score, reasons, analysis }
-   * @param {Object} agentVotes.mtf        - { direction, score, reasons, analysis }
-   * @param {Object} agentVotes.momentum   - { direction, score, reasons, analysis }
-   * @param {Object} agentVotes.volumeOI   - { direction, score, reasons, analysis }
-   * @param {Object} agentVotes.macroSent  - { direction, score, reasons, analysis }
-   * @param {Object} context               - { symbol, timeframe, currentPrice, timestamp }
-   * @returns {Object} scoredSignal
-   */
   async score(agentVotes, context) {
     this._processingCount++;
 
@@ -469,20 +353,17 @@ class SignalScorer extends EventEmitter {
       timestamp = Date.now(),
     } = context;
 
-    // ── Step 1: Validate all required agents present ──
     const validation = this._validateVotes(agentVotes);
     if (!validation.valid) {
       return this._buildWaitSignal(symbol, timeframe, currentPrice, validation.reason, 0);
     }
 
-    // ── Step 2: Circuit breaker check ──
     const cb = this.circuitBreaker.isPaused();
     if (cb.paused) {
       return this._buildWaitSignal(symbol, timeframe, currentPrice,
         `Circuit breaker active: ${cb.reason}`, 0);
     }
 
-    // ── Step 3: News blackout check ──
     if (this.newsBlackout) {
       const blackout = this.newsManager.isBlackedOut(symbol, timestamp);
       if (blackout.isBlackedOut) {
@@ -491,7 +372,6 @@ class SignalScorer extends EventEmitter {
       }
     }
 
-    // ── Step 4: Session filter ──
     const session = SessionDetector.getCurrent(timestamp);
     if (this.sessionFilter && session.isDead) {
       return this._buildWaitSignal(symbol, timeframe, currentPrice,
@@ -503,16 +383,12 @@ class SignalScorer extends EventEmitter {
         `Waiting for killzone. Next: ${next.session} in ${next.hoursAway.toFixed(1)}h`, 0);
     }
 
-    // ── Step 5: Determine consensus direction ──
     const directionVote = this._resolveDirection(agentVotes);
     if (directionVote.direction === 'WAIT') {
       return this._buildWaitSignal(symbol, timeframe, currentPrice,
         directionVote.reason, 0);
     }
 
-    // ── Step 5b: Microstructure adverse-selection gate (Jane Street style) ──
-    // If order-flow clearly opposes the consensus direction with high
-    // conviction, do not fire — you are likely the informed flow's counterparty.
     const micro = agentVotes.microstructure;
     if (micro?.direction && micro.direction !== 'WAIT') {
       const microDir = String(micro.direction).toUpperCase();
@@ -523,31 +399,25 @@ class SignalScorer extends EventEmitter {
       }
     }
 
-    // Fractal chaos / anti-persistence veto: Lyapunov chaotic or strong mean-revert
-    // regime against a momentum-style consensus → stand down
     const fractal = agentVotes.fractal;
     if (fractal?.analysis?.lyapunov?.chaotic === true && (fractal.score || 0) >= 60) {
       return this._buildWaitSignal(symbol, timeframe, currentPrice,
         `Fractal chaos regime (Lyapunov) — edge unstable, no trade`, 0);
     }
 
-    // ── Step 6: Compute weighted confluence score ──
     const scoring = this._computeWeightedScore(agentVotes, directionVote.direction);
 
-    // ── Step 7: Apply session multiplier ──
     const rawScore    = scoring.rawScore;
     const adjScore    = Math.min(Math.round(rawScore * session.multiplier), 100);
     const grade       = adjScore >= MIN_SCORE_GRADE_A ? 'A'
       : adjScore >= MIN_SCORE_GRADE_B ? 'B'
       : adjScore >= 65 ? 'C' : 'D';
 
-    // ── Step 8: Score gate ──
     if (adjScore < this.minScore) {
       return this._buildWaitSignal(symbol, timeframe, currentPrice,
         `Score ${adjScore}/100 below minimum ${this.minScore} (grade ${grade})`, adjScore);
     }
 
-    // ── Step 9: Signal spam prevention ──
     const lastFired = this._lastSignalTime.get(`${symbol}_${timeframe}`);
     if (lastFired && (timestamp - lastFired) < this._minSignalGapMs) {
       const wait = ((this._minSignalGapMs - (timestamp - lastFired)) / 60000).toFixed(1);
@@ -555,7 +425,6 @@ class SignalScorer extends EventEmitter {
         `Signal cooldown: wait ${wait}min before next signal`, adjScore);
     }
 
-    // ── Step 10: Build final signal ──
     const signal = this._buildFireSignal({
       symbol,
       timeframe,
@@ -571,21 +440,17 @@ class SignalScorer extends EventEmitter {
       directionVote,
     });
 
-    // Record signal time
     this._lastSignalTime.set(`${symbol}_${timeframe}`, timestamp);
 
-    // Record in history
     const signalId = this.history.record(signal);
     signal.id      = signalId;
 
-    // ── Step 11: Publish to Redis ──
     if (this.redis) {
       await this._publishSignal(signal).catch(err =>
         console.error('[SignalScorer] Redis publish error:', err)
       );
     }
 
-    // ── Step 12: Emit event ──
     this.emit('signal', signal);
 
     if (grade === 'A') {
@@ -595,16 +460,6 @@ class SignalScorer extends EventEmitter {
     return signal;
   }
 
-  // ─────────────────────────────────────────────
-  //  DIRECTION RESOLUTION
-  // ─────────────────────────────────────────────
-
-  /**
-   * Resolves the final direction from all agent votes.
-   * Uses weighted majority — agents with higher weight have more influence.
-   * SMC + MTF combined = 60% — if both agree, direction is confirmed.
-   * If they conflict → WAIT (no trade).
-   */
   _resolveDirection(agentVotes) {
     const votes = {
       LONG:  0,
@@ -651,14 +506,11 @@ class SignalScorer extends EventEmitter {
       };
     }
 
-    // Find winning direction
     const maxVote   = Math.max(...Object.values(votes));
     const winner    = Object.keys(votes).find(k => votes[k] === maxVote);
     const loser     = winner === 'LONG' ? 'SHORT' : 'LONG';
     const margin    = votes[winner] - (votes[loser] || 0);
 
-    // Stricter clear-majority for profit mode (margin > 0.18 weight)
-    // Jane Street-style: only trade when the book is clearly one-sided
     if (margin < 0.18 && winner !== 'WAIT') {
       return {
         direction: 'WAIT',
@@ -677,15 +529,6 @@ class SignalScorer extends EventEmitter {
     };
   }
 
-  // ─────────────────────────────────────────────
-  //  WEIGHTED SCORE COMPUTATION
-  // ─────────────────────────────────────────────
-
-  /**
-   * Computes the weighted score from each agent's individual score.
-   * Each agent returns a score 0–100 for the given direction.
-   * Weighted average = final raw score.
-   */
   _computeWeightedScore(agentVotes, direction) {
     const breakdown = [];
     let weightedSum = 0;
@@ -705,29 +548,23 @@ class SignalScorer extends EventEmitter {
     for (const { key, label, weight } of agentMap) {
       const vote = agentVotes[key];
 
-      // If agent direction conflicts with consensus, invert its contribution
       let agentScore = vote?.score ?? 0;
       const agentDir = vote?.direction?.toUpperCase() ?? 'WAIT';
 
       let contribution;
       let status;
 
-      // Confidence-aware weighting (quant-desk style):
-      // High-conviction confirms get a slight boost; weak confirms are not
-      // inflated. Neutrals pull less. Opposers contribute zero.
-      // Formula keeps average score near the agents' raw levels so the
-      // minScore gate (78) remains calibrated.
       const conf = Math.max(agentScore, 0) / 100;
-      const confBoost = 0.92 + 0.08 * conf; // range ~0.92–1.00
+      const confBoost = 0.92 + 0.08 * conf;
 
       if (agentDir === direction) {
         contribution = agentScore * weight * confBoost;
         status       = 'CONFIRMS';
       } else if (agentDir === 'WAIT') {
-        contribution = agentScore * weight * 0.40; // neutral = reduced pull
+        contribution = agentScore * weight * 0.40;
         status       = 'NEUTRAL';
       } else {
-        contribution = 0; // Opposing agent = zero (SMC/MTF hard-block already applied)
+        contribution = 0;
         status       = 'OPPOSES';
         agentScore   = 0;
       }
@@ -751,7 +588,6 @@ class SignalScorer extends EventEmitter {
       ? parseFloat((weightedSum / totalWeight).toFixed(2))
       : 0;
 
-    // Bonus points for multiple strong confirmations
     const confirmCount = breakdown.filter(b => b.status === 'CONFIRMS' && b.rawScore >= 70).length;
     const confluenceBonus = confirmCount >= 4 ? 5 : confirmCount >= 3 ? 3 : 0;
 
@@ -763,10 +599,6 @@ class SignalScorer extends EventEmitter {
       confirmCount,
     };
   }
-
-  // ─────────────────────────────────────────────
-  //  SIGNAL BUILDERS
-  // ─────────────────────────────────────────────
 
   _buildWaitSignal(symbol, timeframe, price, reason, score, timestamp = Date.now()) {
     return {
@@ -793,19 +625,16 @@ class SignalScorer extends EventEmitter {
 
     const isLong   = direction === 'LONG';
 
-    // Aggregate all reasons from all confirming agents
     const allReasons = scoring.breakdown
       .filter(b => b.status === 'CONFIRMS')
       .flatMap(b => b.reasons.map(r => `[${b.label}] ${r}`));
 
-    // Risk summary from SMC agent (primary)
     const smcSignal = agentVotes.smc?.signal || {};
     const mtfBiasRaw = agentVotes.mtf?.analysis?.htfBias || direction;
     const mtfBias = typeof mtfBiasRaw === 'string'
       ? mtfBiasRaw
       : (mtfBiasRaw.direction || mtfBiasRaw.bias || direction);
 
-    // Build comprehensive AI reasoning text
     const reasoning = this._buildReasoningText({
       direction, adjScore, grade, session,
       scoring, allReasons, smcSignal, mtfBias,
@@ -813,14 +642,12 @@ class SignalScorer extends EventEmitter {
     });
 
     return {
-      // ── Identity ──
       action:       direction,
       symbol,
       timeframe,
       timestamp,
       currentPrice,
 
-      // ── Score breakdown ──
       score: {
         final:          adjScore,
         raw:            rawScore,
@@ -830,7 +657,6 @@ class SignalScorer extends EventEmitter {
         confluenceBonus: scoring.confluenceBonus,
       },
 
-      // ── Agent breakdown ──
       agentBreakdown: scoring.breakdown.map(b => ({
         agent:       b.label,
         score:       b.rawScore,
@@ -840,7 +666,6 @@ class SignalScorer extends EventEmitter {
         topReasons:  b.reasons.slice(0, 3),
       })),
 
-      // ── Direction analysis ──
       directionAnalysis: {
         consensus:    directionVote.direction,
         margin:       directionVote.margin,
@@ -851,7 +676,6 @@ class SignalScorer extends EventEmitter {
           .map(a => a.agent),
       },
 
-      // ── Entry zone ──
       entry:          smcSignal.entry || {
         zoneHigh: parseFloat((currentPrice * (isLong ? 1.0005 : 1.0005)).toFixed(5)),
         zoneLow:  parseFloat((currentPrice * (isLong ? 0.9995 : 0.9995)).toFixed(5)),
@@ -859,13 +683,11 @@ class SignalScorer extends EventEmitter {
         note:     'No OB available — use caution, reduce size',
       },
 
-      // ── Stop loss ──
       stopLoss:       smcSignal.stopLoss || {
         price: parseFloat((currentPrice * (isLong ? 0.995 : 1.005)).toFixed(5)),
         note:  'Default ATR-based stop',
       },
 
-      // ── Take profit targets ──
       targets:        smcSignal.targets || {
         tp1: {
           price: parseFloat((currentPrice * (isLong ? 1.0075 : 0.9925)).toFixed(5)),
@@ -879,14 +701,12 @@ class SignalScorer extends EventEmitter {
         },
       },
 
-      // ── Trade management ──
       management:     smcSignal.management || {
         moveToBreakeven: 'After TP1 hit',
         partialClose:    '50% at TP1',
         trailingStop:    'ATR × 1.5 after TP1',
       },
 
-      // ── Session context ──
       session: {
         current:     session.best.name,
         quality:     session.best.quality,
@@ -896,17 +716,14 @@ class SignalScorer extends EventEmitter {
         nextKillzone: SessionDetector.getNextKillzone(timestamp),
       },
 
-      // ── HTF bias ──
       htfBias: {
         direction: mtfBias,
         note:      `Higher timeframe bias is ${mtfBias}`,
       },
 
-      // ── AI reasoning ──
       reasoning,
       allReasons: allReasons.slice(0, 10),
 
-      // ── Metadata ──
       meta: {
         generatedAt:    new Date(timestamp).toISOString(),
         processingCount: this._processingCount,
@@ -916,10 +733,6 @@ class SignalScorer extends EventEmitter {
     };
   }
 
-  /**
-   * Generates a detailed plain-English AI reasoning text.
-   * This is what gets sent to the user in the Telegram alert.
-   */
   _buildReasoningText(params) {
     const {
       direction, adjScore, grade, session,
@@ -940,13 +753,11 @@ class SignalScorer extends EventEmitter {
       `🧠 WHY THIS TRADE:`,
     ];
 
-    // Add top reasons
     const topReasons = allReasons.slice(0, 6);
     for (const r of topReasons) {
       lines.push(`  ✅ ${r}`);
     }
 
-    // Entry/SL/TP
     if (smcSignal.entry) {
       lines.push('');
       lines.push(`📍 ENTRY ZONE: ${smcSignal.entry.zoneLow} – ${smcSignal.entry.zoneHigh}`);
@@ -972,10 +783,6 @@ class SignalScorer extends EventEmitter {
     return lines.join('\n');
   }
 
-  // ─────────────────────────────────────────────
-  //  VALIDATION
-  // ─────────────────────────────────────────────
-
   _validateVotes(agentVotes) {
     const required = ['smc', 'mtf', 'momentum'];
     const missing  = required.filter(k => !agentVotes[k]);
@@ -986,10 +793,6 @@ class SignalScorer extends EventEmitter {
 
     return { valid: true };
   }
-
-  // ─────────────────────────────────────────────
-  //  REDIS PUBLISHER
-  // ─────────────────────────────────────────────
 
   async _publishSignal(signal) {
     if (!this.redis) return;
@@ -1008,13 +811,6 @@ class SignalScorer extends EventEmitter {
     await Promise.all(channels.map(ch => this.redis.publish(ch, payload)));
   }
 
-  // ─────────────────────────────────────────────
-  //  PUBLIC API
-  // ─────────────────────────────────────────────
-
-  /**
-   * Add a high-impact news event to the blackout manager
-   */
   addNewsEvent(event) {
     this.newsManager.addEvent(event);
   }
@@ -1023,18 +819,12 @@ class SignalScorer extends EventEmitter {
     this.newsManager.addEvents(events);
   }
 
-  /**
-   * Record a completed trade outcome (feeds circuit breaker + history)
-   */
   recordTradeOutcome(signalId, outcome) {
     this.history.closeSignal(signalId, outcome);
     this.circuitBreaker.recordTrade(outcome.pnlPct || 0);
     this.emit('trade_outcome', { signalId, outcome });
   }
 
-  /**
-   * Get full performance stats
-   */
   getStats() {
     return {
       signals:        this.history.getStats(),
@@ -1044,18 +834,11 @@ class SignalScorer extends EventEmitter {
     };
   }
 
-  /**
-   * Reset circuit breaker (use after reviewing losses)
-   */
   resetCircuitBreaker() {
     this.circuitBreaker.reset();
     this.emit('circuit_breaker_reset');
   }
 }
-
-// ─────────────────────────────────────────────
-//  EXPORTS
-// ─────────────────────────────────────────────
 
 module.exports = {
   SignalScorer,
@@ -1068,48 +851,3 @@ module.exports = {
   MIN_SCORE_TO_FIRE,
 };
 
-/**
- * ─────────────────────────────────────────────
- *  USAGE EXAMPLE
- * ─────────────────────────────────────────────
- *
- *  const { SignalScorer } = require('./signal-scorer');
- *
- *  const scorer = new SignalScorer({
- *    minScore:      75,
- *    sessionFilter: true,
- *    newsBlackout:  true,
- *    circuitBreaker: {
- *      maxDailyLossPct:      3,
- *      maxWeeklyLossPct:     7,
- *      maxConsecutiveLosses: 4,
- *    },
- *  });
- *
- *  // Register upcoming news
- *  scorer.addNewsEvent({
- *    name:     'US NFP',
- *    time:     new Date('2026-06-06T12:30:00Z').getTime(),
- *    impact:   'HIGH',
- *    currency: 'USD',
- *  });
- *
- *  // Score incoming agent votes
- *  const signal = await scorer.score({
- *    smc:       smcAgent.getLastVote(),
- *    mtf:       mtfAgent.getLastVote(),
- *    momentum:  momentumAgent.getLastVote(),
- *    volumeOI:  volumeAgent.getLastVote(),
- *    macroSent: sentimentAgent.getLastVote(),
- *  }, {
- *    symbol:       'XAUUSD',
- *    timeframe:    'H1',
- *    currentPrice: 2345.50,
- *  });
- *
- *  if (signal.action !== 'WAIT') {
- *    console.log(signal.reasoning); // Full AI text for Telegram
- *    // → pass to alert-dispatcher.js
- *  }
- * ─────────────────────────────────────────────
- */

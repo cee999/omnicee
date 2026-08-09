@@ -1,38 +1,8 @@
 'use strict';
 
-/**
- * Single, shared "a trade outcome just happened" pipeline.
- *
- * FIX: this exact sequence — adaptiveLearning.recordOutcome() then feeding
- * bayesianEng / walkForward / institutionalGates / sessionFilter /
- * drawdownGuard / institutionalRiskManager — used to live inline, duplicated,
- * in two places in api/server.js (POST /api/outcomes and the record_outcome
- * socket event). A third real entry point exists (the Telegram /win, /loss,
- * /be commands) that was NEVER wired to any of this — it called a
- * `dispatcher.scorer.recordTradeOutcome()` where `dispatcher.scorer` is never
- * assigned anywhere in the codebase, so it silently did nothing beyond
- * sending a confirmation message. Factored out so all three entry points
- * share one implementation instead of drifting out of sync.
- *
- * @param {Object} params
- * @param {string} params.signalId
- * @param {Object} params.signal        - the original signal object
- * @param {Object} params.outcome       - { pnlR } or { pnlPct } or { result }
- * @param {Object} params.mongoStore    - db module (getTradeOutcome/saveTradeOutcome live inside adaptiveLearning.store)
- * @param {Object} params.engines       - { adaptiveLearning, bayesianEng, walkForward, institutionalGates, sessionFilter, drawdownGuard, institutionalRiskManager }
- * @param {Object} [params.fallbackLearningEngine] - used only if engines.adaptiveLearning is unavailable
- * @returns {Promise<{ok: boolean, saved?: Object, error?: string, status?: number}>}
- */
+// FIX: this exact sequence — adaptiveLearning.recordOutcome() then feeding bayesianEng / walkForward / institutionalGates / sessionFilter / drawdownGuard / institutionalRiskManager — used to live...
 async function recordOutcomeEverywhere({ signalId, signal, outcome, mongoStore, engines = {}, fallbackLearningEngine = null }) {
-  // FIX: every secondary engine-feed call below used to swallow failures
-  // completely — `catch (_) {}`, zero logging. That's the CORRECT recovery
-  // behavior (the primary outcome record is already safely persisted by
-  // the time any of these run, so one engine's update failing shouldn't
-  // block the others), but zero visibility meant an engine could silently
-  // drift out of sync with real outcomes indefinitely — including
-  // institutionalRiskManager.closePosition() below, whose own adjacent
-  // comment explains that a failure here specifically reintroduces the
-  // "exposure only ever accumulates" bug that call was added to fix.
+  // FIX: every secondary engine-feed call below used to swallow failures completely — `catch (_) {}`, zero logging.
   const logEngineFailure = (name, err) =>
     console.warn(`[OutcomeRecorder] ${name}.recordOutcome-style update failed for signal ${signalId} — that engine's internal state may now be out of sync with this trade's real outcome: ${err.message}`);
 
@@ -63,19 +33,10 @@ async function recordOutcomeEverywhere({ signalId, signal, outcome, mongoStore, 
       pnlR: saved.pnlR,
     });
   } catch (e) { logEngineFailure('drawdownGuard', e); }
-  // FIX: executePosition() (index.js) tracks a position in
-  // InstitutionalRiskManager's portfolio model when a signal fires, but
-  // nothing ever called closePosition() — tracked exposure would only ever
-  // accumulate, making its correlation/portfolio-exposure checks
-  // increasingly wrong over time (eventually blocking everything as
-  // "over-exposed" on positions that were actually closed long ago).
+  // FIX: executePosition() (index.js) tracks a position in InstitutionalRiskManager's portfolio model when a signal fires, but nothing ever called closePosition() — tracked exposure would only ever...
   try { engines.institutionalRiskManager?.closePosition(saved.symbol); } catch (e) { logEngineFailure('institutionalRiskManager.closePosition', e); }
   try { engines.institutionalRiskManager?.recordTradeResult(saved.symbol, saved.pnlR, saved.closedAt); } catch (e) { logEngineFailure('institutionalRiskManager.recordTradeResult', e); }
-  // FIX: RiskEngine.recordTrade() (risk-engine/position-sizer.js) feeds the
-  // performance stats (win rate, avg win, avg loss) that its own internal
-  // Kelly Criterion overlay requires 10+ real trades of before it will ever
-  // activate — this method existed with zero call sites anywhere, so even
-  // with useKelly:true configured, the overlay could never turn on.
+  // FIX: RiskEngine.recordTrade() (risk-engine/position-sizer.js) feeds the performance stats (win rate, avg win, avg loss) that its own internal Kelly Criterion overlay requires 10+ real trades of...
   try { engines.riskEngine?.recordTrade({ pnlR: saved.pnlR }); } catch (e) { logEngineFailure('riskEngine.recordTrade', e); }
 
   return { ok: true, saved, isWin };

@@ -16,16 +16,6 @@ import {
   Layers, Target, DollarSign,
 } from 'lucide-react';
 
-/* ────────────────────────────────────────────────────────────────────────
-   OMNICEE // INSTITUTIONAL SIGNAL TERMINAL
-   The real dashboard: every panel reads from the live backend (GET
-   /api/signals, /api/outlook, /api/heatmap, /api/audit-trail, /api/health,
-   /api/stats, /api/journal, /api/news, /api/watchlist, /api/equity-curve)
-   plus a socket.io channel for tick-by-tick prices where available. No
-   demo/simulated data — a panel with nothing real to show yet displays an
-   honest "Waiting for backend" state instead of an invented number.
-   ──────────────────────────────────────────────────────────────────────── */
-
 const SYMBOLS = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'USOIL', 'UUP', 'BTCUSDT', 'ETHUSDT'];
 const SYMBOL_LABEL = { UUP: 'DXY', XAUUSD: 'GOLD', USOIL: 'OIL', BTCUSDT: 'BTC', ETHUSDT: 'ETH' };
 function symLabel(s) { return SYMBOL_LABEL[s] || s; }
@@ -42,15 +32,7 @@ const BASE_PRICE = {
 const DECIMALS = { EURUSD: 4, GBPUSD: 4, USDJPY: 3, XAUUSD: 2, USOIL: 2, UUP: 3, BTCUSDT: 1, ETHUSDT: 2 };
 const PIP = { EURUSD: 0.0001, GBPUSD: 0.0001, USDJPY: 0.01, XAUUSD: 0.1, BTCUSDT: 10, ETHUSDT: 1 };
 
-// FIX: the Agent Breakdown panel renders `{s.agreeCount}/8 aligned`, but
-// agreeCount was only ever computed by the demo signal generator further
-// down — api/server.js's db.compactSignal() (the shape both /api/signals
-// and the 'signal' socket event actually deliver) never included it, so
-// every real signal showed "undefined/8 aligned" the moment live data
-// started flowing instead of demo data. Applied once, here, to both the
-// REST-polled list and each socket-pushed signal, rather than at render
-// time, so every consumer of `signals` state sees a consistently-shaped
-// object regardless of which transport it arrived by.
+// FIX: the Agent Breakdown panel renders `{s.agreeCount}/8 aligned`, but agreeCount was only ever computed by the demo signal generator further down — api/server.js's db.compactSignal() (the shape both...
 function signalScore(s) {
   const raw = typeof s.score === 'object' ? s.score?.final : s.score;
   return Number.isFinite(Number(raw)) ? Number(raw) : 0;
@@ -132,7 +114,6 @@ function gradeFor(score) {
   return 'C';
 }
 
-/* Diverging color for heatmaps: v in [-1,1] -> coral..slate..emerald */
 function heatColor(v) {
   const t = clamp(v, -1, 1);
   if (t >= 0) {
@@ -143,9 +124,6 @@ function heatColor(v) {
   return `rgba(255,84,112,${0.12 + a * 0.55})`;
 }
 
-/* ── Theme: single embedded stylesheet, CSS custom properties carry the
-   exact brand palette (Tailwind's default palette doesn't have it), while
-   layout/spacing throughout the component tree uses plain Tailwind utilities. */
 function ThemeStyle() {
   return (
     <style>{`
@@ -994,7 +972,6 @@ function NavBar({ active, onSelect }) {
   );
 }
 
-
 function sessionNameUtc(hour) {
   if (hour >= 0 && hour < 8) return { name: 'Asia', note: 'Typically thinner liquidity — wait for clearer structure.' };
   if (hour >= 8 && hour < 13) return { name: 'London', note: 'Strong session for FX & gold — look for continuation after London open.' };
@@ -1003,7 +980,7 @@ function sessionNameUtc(hour) {
   return { name: 'Off-peak', note: 'Lower volume — fewer high-quality setups expected.' };
 }
 
-function MarketVoice({ now, signals, quotes, outlook, mode, levels }) {
+function MarketVoice({ now, signals, quotes, outlook, mode }) {
   const hour = new Date(now).getUTCHours();
   const sess = sessionNameUtc(hour);
   const recent = signals.slice(0, 8);
@@ -1022,17 +999,9 @@ function MarketVoice({ now, signals, quotes, outlook, mode, levels }) {
     : 'Day lean: mixed — no strong one-sided pressure from recent signals.';
   lines.push(dayBias);
 
-  const levelGroups = [
-    { title: 'Gold', syms: ['XAUUSD'] },
-    { title: 'FX', syms: ['EURUSD', 'GBPUSD', 'USDJPY'] },
-    { title: 'Oil', syms: ['USOIL'] },
-    { title: 'Dollar', syms: ['UUP'] },
-    { title: 'Crypto', syms: ['BTCUSDT', 'ETHUSDT'] },
-  ];
-
   return (
     <div className="omni-panel p-3 md:p-4">
-      <SectionHeader icon={Globe2} title="Market voice" sub="session · day · support / resistance" />
+      <SectionHeader icon={Globe2} title="Market voice" sub="session · day bias" />
       <ul className="space-y-2 mt-1">
         {lines.map((line, i) => (
           <li key={i} className="font-mono text-[11px] md:text-[12px] leading-relaxed flex gap-2" style={{ color: i === 0 ? 'var(--text)' : 'var(--textDim)' }}>
@@ -1041,26 +1010,6 @@ function MarketVoice({ now, signals, quotes, outlook, mode, levels }) {
           </li>
         ))}
       </ul>
-      <div className="mt-3 pt-3 border-t" style={{ borderColor: 'var(--border)' }}>
-        <div className="font-mono text-[9px] uppercase tracking-wider mb-2" style={{ color: 'var(--textFaint)' }}>Support / Resistance (H1 swings)</div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-2">
-          {levelGroups.map(g => (
-            <div key={g.title}>
-              <div className="font-mono text-[9px] uppercase mb-0.5" style={{ color: 'var(--textFaint)' }}>{g.title}</div>
-              {g.syms.map(sym => {
-                const lv = levels?.[sym];
-                return (
-                  <div key={sym} className="flex items-center gap-2 font-mono text-[10px] py-0.5">
-                    <span className="w-12" style={{ color: 'var(--text)' }}>{typeof symLabel === 'function' ? symLabel(sym) : sym}</span>
-                    <span style={{ color: 'var(--coral)' }}>S {lv?.support != null ? fmtPrice(sym, lv.support) : '—'}</span>
-                    <span style={{ color: 'var(--emerald)' }}>R {lv?.resistance != null ? fmtPrice(sym, lv.resistance) : '—'}</span>
-                  </div>
-                );
-              })}
-            </div>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }
@@ -1082,7 +1031,7 @@ const CHART_COLORS = {
   text: '#526078', crosshair: '#8b9bb0', panel2: '#10151c',
 };
 
-function LiveChart({ symbol, quote, signals }) {
+function LiveChart({ symbol, quote, signals, levels }) {
   const [timeframe, setTimeframe] = useState('H1');
   const [status, setStatus] = useState('loading'); // loading | ok | empty | error
   const [ohlcReadout, setOhlcReadout] = useState(null);
@@ -1093,6 +1042,7 @@ function LiveChart({ symbol, quote, signals }) {
   const volumeSeriesRef = useRef(null);
   const markersRef = useRef(null);
   const priceLinesRef = useRef([]);
+  const srLinesRef = useRef([]);
   const lastBarRef = useRef(null);
   const lastVolRef = useRef(0);
 
@@ -1256,6 +1206,21 @@ function LiveChart({ symbol, quote, signals }) {
     }
   }, [signals, timeframe]);
 
+  // Support/resistance drawn straight on the price axis (H1 swing high/low
+  // from /api/levels) so it moves with the chart instead of living in a
+  // separate text panel.
+  useEffect(() => {
+    if (!candleSeriesRef.current) return;
+    srLinesRef.current.forEach(l => { try { candleSeriesRef.current.removePriceLine(l); } catch (_) {} });
+    srLinesRef.current = [];
+    const lv = levels?.[symbol];
+    if (!lv) return;
+    const lines = [];
+    if (Number.isFinite(lv.resistance)) lines.push({ price: lv.resistance, color: CHART_COLORS.up, lineStyle: LineStyle.Dotted, title: 'R' });
+    if (Number.isFinite(lv.support)) lines.push({ price: lv.support, color: CHART_COLORS.down, lineStyle: LineStyle.Dotted, title: 'S' });
+    srLinesRef.current = lines.map(opts => candleSeriesRef.current.createPriceLine({ ...opts, lineWidth: 1, axisLabelVisible: true }));
+  }, [levels, symbol]);
+
   return (
     <div>
       <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
@@ -1317,7 +1282,7 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
               {q?.source === 'mt5_ea' && <Pill tone="up">MT5</Pill>}
             </div>
           </div>
-          <LiveChart symbol={chartSymbol} quote={q} signals={chartSignals} />
+          <LiveChart symbol={chartSymbol} quote={q} signals={chartSignals} levels={levels} />
         </div>
 
         <div className="omni-panel overflow-hidden order-1 lg:order-2 flex flex-col max-h-[320px] lg:max-h-[340px]">
@@ -1351,7 +1316,7 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
       </div>
 
       {/* Market voice includes S/R — below ticks */}
-      <MarketVoice now={now || Date.now()} signals={signals} quotes={quotes} outlook={outlook} mode={mode} levels={levels} />
+      <MarketVoice now={now || Date.now()} signals={signals} quotes={quotes} outlook={outlook} mode={mode} />
 
       <div className="omni-panel overflow-hidden">
         <SectionHeader icon={Radio} title="Recent signals" sub={`${recent.length} latest · approved ${approved.length} · all saved to MongoDB`} />
@@ -1578,7 +1543,7 @@ function SignalsTab({ signals, prices, quotes, auditLog }) {
 }
 
 /* ── INTEL ──────────────────────────────────────────────────────────── */
-function IntelTab({ now, outlook, mode, calendar, levels }) {
+function IntelTab({ now, outlook, mode, calendar }) {
   const live = mode === 'live' && outlook;
 
   const narrative = live ? (outlook.narrative || 'No narrative generated yet.') : null;
@@ -1834,7 +1799,6 @@ function NewsTab({ news, mode }) {
   );
 }
 
-
 /* ── MONITOR ────────────────────────────────────────────────────────── */
 function MonitorTab({ auditLog, feedHealth, uptimeSec, mode, fetchErrors }) {
   const liveByName = new Map();
@@ -2066,7 +2030,6 @@ function ValidTab({ signals, journalStats, learningProfiles, mode }) {
     ? clamp((journalStats.winRate / 100) - ((1 - journalStats.winRate / 100) / (journalStats.avgWin / journalStats.avgLoss)), 0, 1) * 100
     : null;
 
-
   const hasValidationData = validated.length > 0;
   const hasAnyValidContent = hasValidationData || hasJournal || (learningProfiles && learningProfiles.length > 0);
 
@@ -2195,7 +2158,6 @@ function TapeTab({ signals, prices, mode }) {
     </div>
   );
 }
-
 
 /* ── DESK (Tape + Risk combined) ───────────────────────────────────── */
 function DeskTab({ signals, prices, quotes, changes, accountBalance, relativeStrength, mode, stats }) {
@@ -2421,7 +2383,7 @@ export default function OmniceeDashboard() {
         <div className="flex-1 overflow-y-auto omni-scroll">
           {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} />}
           {activeTab === 'SIGNALS' && <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} auditLog={feed.auditLog} />}
-          {activeTab === 'INTEL' && <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} calendar={feed.calendar} levels={feed.levels} />}
+          {activeTab === 'INTEL' && <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} calendar={feed.calendar} />}
           {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}
           {activeTab === 'DESK' && <DeskTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} stats={feed.stats} accountBalance={feed.accountBalance} relativeStrength={feed.relativeStrength} mode={feed.mode} />}
           {activeTab === 'VALID' && <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} />}

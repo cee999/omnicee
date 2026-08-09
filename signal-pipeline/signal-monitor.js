@@ -1,29 +1,7 @@
-/**
- * ============================================================
- *  SIGNAL MONITOR — Real-Time Signal Strength & Lifecycle Tracking
- *  AI Trading Assistant · Layer 11 · Signal Monitoring Module
- *  File: signal-pipeline/signal-monitor.js
- * ============================================================
- *
- *  Monitors signals in real-time to detect:
- *  1. Signal strength degradation (weakening)
- *  2. Early reversal warnings
- *  3. Signal confirmation/strengthening
- *  4. Optimal exit timing
- *
- *  This provides the "zero margin of error" requirement by
- *  continuously validating signal integrity and alerting on
- *  any deterioration.
- * ============================================================
- */
 
 'use strict';
 
 const EventEmitter = require('events');
-
-// ─────────────────────────────────────────────
-//  CONSTANTS
-// ─────────────────────────────────────────────
 
 const SIGNAL_STRENGTH_THRESHOLDS = {
   STRONG: 80,
@@ -32,19 +10,15 @@ const SIGNAL_STRENGTH_THRESHOLDS = {
   FAILING: 20,
 };
 
-const WEAKENING_THRESHOLD = 15; // Drop of 15 points = weakening
-const REVERSAL_THRESHOLD = 30; // Drop of 30 points = reversal risk
+const WEAKENING_THRESHOLD = 15;
+const REVERSAL_THRESHOLD = 30;
 
 function round(n, d = 2) { return parseFloat((n ?? 0).toFixed(d)); }
 function clamp(v, lo, hi) { return Math.min(Math.max(v, lo), hi); }
 
-// ─────────────────────────────────────────────
-//  SIGNAL STATE TRACKER
-// ─────────────────────────────────────────────
-
 class SignalStateTracker {
   constructor() {
-    this.signals = new Map(); // signalId → { initialScore, currentScore, history, timestamp, status }
+    this.signals = new Map();
   }
 
   createSignal(signalId, initialScore, metadata = {}) {
@@ -66,16 +40,14 @@ class SignalStateTracker {
 
     const previousScore = signal.currentScore;
     const scoreChange = newScore - previousScore;
-    
+
     signal.currentScore = newScore;
     signal.history.push({ score: newScore, timestamp: Date.now(), context });
-    
-    // Keep only last 100 history points
+
     if (signal.history.length > 100) signal.history.shift();
 
-    // Detect status changes
     const statusChange = this._detectStatusChange(signal, previousScore, newScore);
-    
+
     if (statusChange) {
       signal.status = statusChange.newStatus;
       signal.alerts.push({
@@ -100,8 +72,7 @@ class SignalStateTracker {
 
   _detectStatusChange(signal, previousScore, newScore) {
     const change = newScore - previousScore;
-    
-    // Weakening detection
+
     if (change <= -WEAKENING_THRESHOLD && newScore >= SIGNAL_STRENGTH_THRESHOLDS.MODERATE) {
       return {
         type: 'WEAKENING',
@@ -109,8 +80,7 @@ class SignalStateTracker {
         message: `Signal weakening: ${previousScore} → ${newScore} (change: ${round(change)})`,
       };
     }
-    
-    // Reversal risk
+
     if (change <= -REVERSAL_THRESHOLD) {
       return {
         type: 'REVERSAL_RISK',
@@ -118,8 +88,7 @@ class SignalStateTracker {
         message: `Reversal risk: Signal dropped ${round(Math.abs(change))} points`,
       };
     }
-    
-    // Signal failed
+
     if (newScore <= SIGNAL_STRENGTH_THRESHOLDS.FAILING) {
       return {
         type: 'SIGNAL_FAILED',
@@ -127,8 +96,7 @@ class SignalStateTracker {
         message: `Signal failed: Score dropped to ${newScore}`,
       };
     }
-    
-    // Strengthening
+
     if (change >= WEAKENING_THRESHOLD && newScore > previousScore) {
       return {
         type: 'STRENGTHENING',
@@ -136,8 +104,7 @@ class SignalStateTracker {
         message: `Signal strengthening: ${previousScore} → ${newScore}`,
       };
     }
-    
-    // Recovery
+
     if (signal.status === 'WEAKENING' && newScore >= signal.initialScore - 10) {
       return {
         type: 'RECOVERED',
@@ -145,7 +112,7 @@ class SignalStateTracker {
         message: `Signal recovered to ${newScore}`,
       };
     }
-    
+
     return null;
   }
 
@@ -168,7 +135,7 @@ class SignalStateTracker {
     signal.status = 'TERMINATED';
     signal.terminatedAt = Date.now();
     signal.terminationReason = reason;
-    
+
     signal.alerts.push({
       type: 'TERMINATED',
       message: `Signal terminated: ${reason}`,
@@ -179,47 +146,31 @@ class SignalStateTracker {
   }
 }
 
-// ─────────────────────────────────────────────
-//  SIGNAL STRENGTH CALCULATOR
-// ─────────────────────────────────────────────
-
 class SignalStrengthCalculator {
-  /**
-   * Calculates signal strength based on multiple factors:
-   * - Original signal score
-   * - Price action confirmation
-   * - Volume confirmation
-   * - Time decay
-   * - Market regime alignment
-   */
   static calculate(originalSignal, currentMarketData, timeElapsed) {
     let strength = originalSignal.score || 0;
-    
-    // Time decay: signals weaken over time
-    const timeDecay = Math.min(timeElapsed / (24 * 60 * 60 * 1000), 1) * 10; // Max 10% decay per day
+
+    const timeDecay = Math.min(timeElapsed / (24 * 60 * 60 * 1000), 1) * 10;
     strength -= timeDecay;
-    
-    // Price action confirmation
+
     if (currentMarketData.priceConfirmation) {
-      const priceDirection = currentMarketData.priceDirection; // 'bullish' or 'bearish'
-      const signalDirection = originalSignal.direction; // 'LONG' or 'SHORT'
-      
+      const priceDirection = currentMarketData.priceDirection;
+      const signalDirection = originalSignal.direction;
+
       if ((priceDirection === 'bullish' && signalDirection === 'LONG') ||
           (priceDirection === 'bearish' && signalDirection === 'SHORT')) {
-        strength += 5; // Confirmation adds strength
+        strength += 5;
       } else {
-        strength -= 10; // Divergence reduces strength
+        strength -= 10;
       }
     }
-    
-    // Volume confirmation
+
     if (currentMarketData.volumeConfirmation) {
       strength += 3;
     } else {
       strength -= 3;
     }
-    
-    // Market regime alignment
+
     if (currentMarketData.regime) {
       const regime = currentMarketData.regime;
       if ((regime.includes('BULL') && originalSignal.direction === 'LONG') ||
@@ -229,36 +180,22 @@ class SignalStrengthCalculator {
         strength -= 5;
       }
     }
-    
-    // Volatility penalty (high volatility = less reliable)
+
     if (currentMarketData.volatility && currentMarketData.volatility > 2) {
       strength -= 5;
     }
-    
+
     return clamp(round(strength), 0, 100);
   }
 }
 
-// ─────────────────────────────────────────────
-//  REVERSAL DETECTOR
-// ─────────────────────────────────────────────
-
 class ReversalDetector {
   constructor() {
-    this.patterns = new Map(); // symbol → pattern history
+    this.patterns = new Map();
   }
 
-  /**
-   * Detects early reversal patterns:
-   * - Divergence between price and signal strength
-   * - Key level rejections
-   * - Volume spikes against signal direction
-   * - Momentum shifts
-   */
   detectReversal(signal, marketData) {
     const warnings = [];
-    
-    // Price-signal divergence
 
     if (signal.direction === 'LONG' && marketData.priceDirection === 'bearish') {
       warnings.push({
@@ -273,8 +210,7 @@ class ReversalDetector {
         message: 'Price moving against SHORT signal direction',
       });
     }
-    
-    // Volume spike against direction
+
     if (marketData.volumeSpike) {
       const volumeDirection = marketData.volumeDirection;
       if ((signal.direction === 'LONG' && volumeDirection === 'selling') ||
@@ -286,8 +222,7 @@ class ReversalDetector {
         });
       }
     }
-    
-    // Key level rejection
+
     if (marketData.rejectionLevel) {
       warnings.push({
         type: 'LEVEL_REJECTION',
@@ -295,8 +230,7 @@ class ReversalDetector {
         message: `Price rejected at key level: ${marketData.rejectionLevel}`,
       });
     }
-    
-    // Momentum shift
+
     if (marketData.momentumShift) {
       warnings.push({
         type: 'MOMENTUM_SHIFT',
@@ -304,14 +238,13 @@ class ReversalDetector {
         message: `Momentum shifted to ${marketData.momentumShift}`,
       });
     }
-    
-    // Calculate overall reversal risk
+
     const highSeverityCount = warnings.filter(w => w.severity === 'HIGH').length;
-    const reversalRisk = highSeverityCount >= 2 ? 'CRITICAL' 
-                        : highSeverityCount === 1 ? 'HIGH' 
-                        : warnings.length > 0 ? 'MEDIUM' 
+    const reversalRisk = highSeverityCount >= 2 ? 'CRITICAL'
+                        : highSeverityCount === 1 ? 'HIGH'
+                        : warnings.length > 0 ? 'MEDIUM'
                         : 'LOW';
-    
+
     return {
       reversalRisk,
       warnings,
@@ -320,9 +253,8 @@ class ReversalDetector {
   }
 
   detectPatternReversal(symbol, patternData) {
-    // Detect pattern-specific reversals (e.g., failed patterns)
     const warnings = [];
-    
+
     if (patternData.type === 'HEAD_AND_SHOULDERS' && patternData.status === 'FAILED') {
       warnings.push({
         type: 'PATTERN_FAILURE',
@@ -330,7 +262,7 @@ class ReversalDetector {
         message: 'Head & Shoulders pattern failed',
       });
     }
-    
+
     if (patternData.type === 'DOUBLE_TOP' && patternData.breakout === 'FALSE') {
       warnings.push({
         type: 'PATTERN_FAILURE',
@@ -338,14 +270,10 @@ class ReversalDetector {
         message: 'Double Top failed to break down',
       });
     }
-    
+
     return warnings;
   }
 }
-
-// ─────────────────────────────────────────────
-//  SIGNAL LIFECYCLE MANAGER
-// ─────────────────────────────────────────────
 
 class SignalLifecycleManager {
   constructor() {
@@ -354,16 +282,6 @@ class SignalLifecycleManager {
     this.strengthCalculator = SignalStrengthCalculator;
   }
 
-  /**
-   * Signal lifecycle:
-   * 1. CREATED - Initial signal generated
-   * 2. ACTIVE - Signal is being monitored
-   * 3. WEAKENING - Signal strength declining
-   * 4. REVERSAL_RISK - High probability of reversal
-   * 5. RECOVERING - Signal regaining strength
-   * 6. FAILED - Signal no longer valid
-   * 7. TERMINATED - Signal manually closed or expired
-   */
   createSignal(signalId, signal, metadata = {}) {
     this.tracker.createSignal(signalId, signal.score || 75, {
       ...metadata,
@@ -373,7 +291,7 @@ class SignalLifecycleManager {
       stopLoss: signal.stopLoss,
       takeProfit: signal.takeProfit,
     });
-    
+
     return {
       signalId,
       status: 'CREATED',
@@ -393,8 +311,7 @@ class SignalLifecycleManager {
     );
 
     const update = this.tracker.updateSignal(signalId, newStrength, { marketData });
-    
-    // Check for reversal patterns
+
     const reversalAnalysis = this.reversalDetector.detectReversal(
       { direction: signal.metadata.direction },
       marketData
@@ -439,16 +356,12 @@ class SignalLifecycleManager {
   }
 }
 
-// ─────────────────────────────────────────────
-//  MAIN SIGNAL MONITOR CLASS
-// ─────────────────────────────────────────────
-
 class SignalMonitor extends EventEmitter {
   constructor(config = {}) {
     super();
 
     this.lifecycleManager = new SignalLifecycleManager();
-    this.checkIntervalMs = config.checkIntervalMs || 60000; // 1 minute
+    this.checkIntervalMs = config.checkIntervalMs || 60000;
     this._checkTimer = null;
     this._connected = false;
 
@@ -468,7 +381,7 @@ class SignalMonitor extends EventEmitter {
     this._connected = true;
 
     this._checkTimer = setInterval(() => this._checkAllSignals(), this.checkIntervalMs);
-    
+
     this.emit('ready');
     console.log('[SignalMonitor] Connected successfully');
   }
@@ -477,10 +390,8 @@ class SignalMonitor extends EventEmitter {
     if (!this._connected) return;
 
     const activeSignals = this.lifecycleManager.getAllActiveSignals();
-    
+
     for (const signal of activeSignals) {
-      // Market data would be fetched here from the data feed
-      // For now, we emit an event that should be handled by the caller
       this.emit('check_signal', { signalId: signal.signalId });
     }
   }
@@ -488,9 +399,9 @@ class SignalMonitor extends EventEmitter {
   createSignal(signalId, signal, metadata = {}) {
     const result = this.lifecycleManager.createSignal(signalId, signal, metadata);
     this._stats.signalsCreated++;
-    
+
     this.emit('signal_created', { signalId, ...result });
-    
+
     return result;
   }
 
@@ -567,10 +478,6 @@ class SignalMonitor extends EventEmitter {
     this.emit('closed');
   }
 }
-
-// ─────────────────────────────────────────────
-//  EXPORTS
-// ─────────────────────────────────────────────
 
 module.exports = {
   SignalMonitor,

@@ -1,30 +1,12 @@
 'use strict';
-/**
- * backtest/data-loader.js
- *
- * Fetches historical OHLCV candles for backtesting. Two sources:
- *   1. Binance public REST klines API (crypto symbols, no key needed)
- *   2. CSV file import (forex/stocks/anything else — e.g. exported from
- *      TradingView, Dukascopy, your broker, etc.)
- *
- * IMPORTANT: this must be run somewhere with real internet access to
- * api.binance.com. It will NOT work inside a sandboxed environment whose
- * network egress is restricted to package registries only.
- *
- * Candle shape matches exactly what the live feeds produce (see
- * feeds/binance-ws.js), so it can be fed straight into the real agent
- * pipeline unmodified:
- *   { timestamp, open, high, low, close, volume }
- */
+// exported from TradingView, Dukascopy, your broker, etc.) IMPORTANT: this must be run somewhere with real internet access to api.binance.com.
 
 const fs = require('fs');
 const https = require('https');
 
 const BINANCE_REST = 'https://api.binance.com/api/v3/klines';
-const MAX_LIMIT = 1000; // Binance's per-request cap
+const MAX_LIMIT = 1000;
 
-// MT-style label -> Binance interval (same mapping as feeds/binance-ws.js,
-// duplicated here so this module has zero dependency on the live feed code).
 const MT_TO_BINANCE_INTERVAL = {
   M1: '1m', M3: '3m', M5: '5m', M15: '15m', M30: '30m',
   H1: '1h', H2: '2h', H4: '4h', H6: '6h', H8: '8h', H12: '12h',
@@ -53,22 +35,12 @@ function httpGetJSON(url) {
   });
 }
 
-/**
- * Fetch historical klines from Binance, paginating automatically since
- * Binance caps each request at 1000 candles.
- *
- * @param {string} symbol - e.g. 'BTCUSDT'
- * @param {string} timeframe - MT-style ('H1') or Binance-style ('1h')
- * @param {number} startTime - ms since epoch
- * @param {number} endTime - ms since epoch
- * @returns {Promise<Array>} candles sorted ascending by timestamp
- */
 async function fetchBinanceKlines(symbol, timeframe, startTime, endTime) {
   const interval = toBinanceInterval(timeframe);
   const candles = [];
   let cursor = startTime;
   let guard = 0;
-  const MAX_PAGES = 500; // hard safety cap (~500k candles) against runaway loops
+  const MAX_PAGES = 500;
 
   while (cursor < endTime && guard < MAX_PAGES) {
     guard++;
@@ -89,21 +61,15 @@ async function fetchBinanceKlines(symbol, timeframe, startTime, endTime) {
     }
 
     const lastOpenTime = Number(rows[rows.length - 1][0]);
-    if (lastOpenTime <= cursor) break; // safety: no forward progress, stop
+    if (lastOpenTime <= cursor) break;
     cursor = lastOpenTime + 1;
 
-    // Be polite to Binance's rate limits between pages.
     await new Promise(r => setTimeout(r, 150));
   }
 
   return candles;
 }
 
-/**
- * Load candles from a CSV file. Expects a header row containing at least:
- * timestamp (or date/time — ISO or epoch ms), open, high, low, close, and
- * optionally volume. Column order and casing are flexible.
- */
 function loadCSV(filepath) {
   const raw = fs.readFileSync(filepath, 'utf8').trim();
   const lines = raw.split('\n');
@@ -127,7 +93,6 @@ function loadCSV(filepath) {
     if (!line) continue;
     const cols = line.split(',');
     let ts = cols[idx.timestamp].trim();
-    // Accept either epoch ms or an ISO/parseable date string.
     ts = /^\d+$/.test(ts) ? Number(ts) : new Date(ts).getTime();
     if (!Number.isFinite(ts)) continue;
 
@@ -144,14 +109,7 @@ function loadCSV(filepath) {
   return candles;
 }
 
-/**
- * Generates synthetic-but-plausible OHLCV data purely for testing the
- * backtest engine's mechanics (candle iteration, signal firing, position
- * lifecycle, stats) when no real market data source is reachable. This is
- * NEVER a substitute for real historical data — results from synthetic
- * data say nothing about real strategy performance. It exists only so the
- * engine itself can be verified end-to-end without network access.
- */
+// This is NEVER a substitute for real historical data — results from synthetic data say nothing about real strategy performance.
 function generateSyntheticCandles(count, { startPrice = 100, startTime = Date.now() - count * 3600_000, intervalMs = 3600_000, volatility = 0.006, drift = 0, seed = 42 } = {}) {
   let rngState = seed;
   function rand() { // simple deterministic PRNG (mulberry32) for reproducibility

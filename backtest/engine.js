@@ -1,20 +1,4 @@
 'use strict';
-/**
- * backtest/engine.js
- *
- * Replays historical candles through the REAL production decision pipeline
- * — the same agent classes, the same SignalScorer, the same RiskEngine,
- * DrawdownGuard, InstitutionalGates, EnsembleEngine, and PositionLifecycle
- * that index.js runs live — just driven by a chronological history loop
- * instead of live WebSocket ticks.
- *
- * This deliberately does NOT modify or import index.js itself (the live
- * trading entry point). It mirrors index.js's runAnalysisCycle() sequence
- * exactly, construction-for-construction, so backtest results reflect the
- * actual shipped decision logic rather than a re-implementation of it.
- * If you change the live pipeline's decision sequence in index.js, mirror
- * the change here too — see the "MIRRORS index.js" comments below.
- */
 
 const SMCAgent = require('../agents/smc-agent').SMCAgent;
 const MTFAgent = require('../agents/mtf-agent').MTFAgent;
@@ -39,38 +23,11 @@ const { CorrelationFilter } = require('../risk-engine/correlation');
 const { SessionFilter } = require('../risk-engine/session-filter');
 const { WalkForwardOptimizer } = require('../signal-pipeline/walk-forward-optimizer');
 
-const MIN_LOOKBACK = 50;          // MIRRORS index.js: candles.length < 50 guard
-const MAX_PENDING_CANDLES = 40;   // backtest-only safeguard: expire a signal
-                                   // that never got filled after this many bars,
-                                   // so stale PENDING positions don't pile up
-                                   // forever (no equivalent exists live because
-                                   // live never "runs out" of future candles).
+const MIN_LOOKBACK = 50;
+const MAX_PENDING_CANDLES = 40;
+                                   // that never got filled after this many bars, so stale PENDING positions don't pile up forever (no equivalent exists live because live never "runs out" of future candles).
 
 class BacktestEngine {
-  /**
-   * @param {Object} cfg
-   * @param {string[]} cfg.symbols
-   * @param {string} cfg.timeframe - primary MT-style timeframe to trade (e.g. 'H1')
-   * @param {string[]} [cfg.htfTimeframes] - extra timeframes to also feed the
-   *   MTF agent for HTF alignment context, if you have that data loaded too
-   * @param {number} [cfg.accountBalance=10000]
-   * @param {number} [cfg.riskPct=1.0]
-   * @param {number} [cfg.maxDailyLossPct=3.0]
-   * @param {number} [cfg.maxDrawdownPct=10.0]
-   * @param {number} [cfg.minScore=75]
-   * @param {boolean} [cfg.softGates=true] - MIRRORS index.js's SIGNAL_SOFT_GATES
-   *   (default true, same as live). When true: a session/killzone dead-zone
-   *   no longer hard-blocks — scoring continues and the signal lives or
-   *   dies on score/gates alone, same as crypto always does. When false:
-   *   reproduces the pre-softening behavior (hard session reject + the
-   *   scorer's own internal dead-zone check both active). Pass this
-   *   explicitly and run the same candles twice (true vs false) to measure
-   *   whether softening the gates actually helped or hurt — see
-   *   backtest/compare-gates.js, built for exactly that question.
-   * @param {boolean} [cfg.requireKillzone=false] - MIRRORS index.js's
-   *   REQUIRE_KZ, forwarded to SignalScorer only (the live SessionFilter
-   *   itself is always constructed with no args either way — see index.js).
-   */
   constructor(cfg) {
     this.symbols = cfg.symbols;
     this.timeframe = cfg.timeframe;
@@ -78,16 +35,10 @@ class BacktestEngine {
     this.accountBalance = cfg.accountBalance ?? 10000;
     this.riskPct = cfg.riskPct ?? 1.0;
     this.minScore = cfg.minScore ?? 75;
-    // FIX: this engine previously always ran the pre-softening gate
-    // configuration (hard session block, scorer's own sessionFilter always
-    // on) no matter what SIGNAL_SOFT_GATES was set to live — so no backtest
-    // run through this file could ever reflect (or validate) the softened
-    // gates actually running in production. Defaults now match index.js's
-    // defaults exactly; both are still overridable per-run for comparison.
+    // FIX: this engine previously always ran the pre-softening gate configuration (hard session block, scorer's own sessionFilter always on) no matter what SIGNAL_SOFT_GATES was set to live — so no...
     this.softGates = cfg.softGates ?? true;
     this.requireKillzone = cfg.requireKillzone ?? false;
 
-    // ── Build the exact same singleton pipeline as index.js's buildSingletons() ──
     this.drawdownGuard = new DrawdownGuard({
       maxDailyLossPct: cfg.maxDailyLossPct ?? 3.0,
       maxDrawdownPct: cfg.maxDrawdownPct ?? 10.0,
@@ -95,7 +46,7 @@ class BacktestEngine {
     });
     this.scorer = new SignalScorer({
       minScore: this.minScore,
-      sessionFilter: !this.softGates, // MIRRORS index.js: soft mode skips the scorer's own dead-zone hard reject
+      sessionFilter: !this.softGates,
       newsBlackout: true,
       requireKillzone: this.requireKillzone,
       circuitBreaker: { maxDailyLoss: cfg.maxDailyLossPct ?? 3.0, maxDrawdown: cfg.maxDrawdownPct ?? 10.0 },
@@ -116,19 +67,9 @@ class BacktestEngine {
     this.sessionFilter = new SessionFilter();
     this.correlationFilter = new CorrelationFilter({ maxOpenPositions: 5 });
     this.conflictResolver = new ConflictResolver();
-    // FIX: WalkForwardOptimizer existed and was already wired into the LIVE
-    // pipeline's outcome feedback (index.js/api/server.js feed it real trade
-    // outcomes as they close), but the backtest harness — meant to let you
-    // validate parameters on historical data before going live — never
-    // touched it at all, so a backtest run could never report walk-forward
-    // efficiency (in-sample vs out-of-sample performance decay). Trades close
-    // in chronological order during a single replay, so feeding each one to
-    // recordOutcome() here and calling analyze() at the end gives a real
-    // IS/OOS split — the same mechanism the live pipeline uses, just applied
-    // to one full historical run instead of accumulating over live time.
+    // FIX: WalkForwardOptimizer existed and was already wired into the LIVE pipeline's outcome feedback (index.js/api/server.js feed it real trade outcomes as they close), but the backtest harness — meant...
     this.walkForward = new WalkForwardOptimizer({ minSamples: cfg.wfMinSamples ?? 20 });
 
-    // Per-symbol agent pool — MIRRORS index.js's agentPool[symbol] construction.
     this.agentPool = {};
     for (const symbol of this.symbols) {
       this.agentPool[symbol] = {
@@ -141,16 +82,15 @@ class BacktestEngine {
       };
     }
 
-    this.candleStores = {};   // symbol -> timeframe -> candle[]
-    this.htfStores = {};      // symbol -> timeframe -> candle[] (for MTF context)
-    this.openPositions = {};  // symbol -> { position: PositionLifecycle, signal, pendingBars, openedAt }
+    this.candleStores = {};
+    this.htfStores = {};
+    this.openPositions = {};
     this.closedTrades = [];
-    this.equityCurve = [];    // [{ timestamp, balance }]
+    this.equityCurve = [];
     this.rejections = { gate: 0, correlation: 0, session: 0, drawdown: 0, entryFailed: 0, noSignal: 0 };
     this.balance = this.accountBalance;
   }
 
-  /** Load full historical candle history for a symbol/timeframe before running. */
   loadCandles(symbol, timeframe, candles) {
     if (timeframe === this.timeframe) {
       this.candleStores[symbol] = this.candleStores[symbol] || {};
@@ -168,8 +108,6 @@ class BacktestEngine {
     const htf = this.htfStores[symbol];
     if (htf) {
       for (const tf of Object.keys(htf)) {
-        // Only include HTF candles that closed at or before this point in
-        // time — using future HTF candles here would be look-ahead bias.
         const cutoffTs = main[idx].timestamp;
         data[tf] = htf[tf].filter(c => c.timestamp <= cutoffTs);
       }
@@ -177,9 +115,6 @@ class BacktestEngine {
     return data;
   }
 
-  /** Run the full backtest across all loaded symbols. Chronologically merges
-   *  each symbol's candle stream so multi-symbol correlation/session/
-   *  drawdown state evolves in true time order across symbols. */
   async run() {
     const steps = [];
     for (const symbol of this.symbols) {
@@ -251,17 +186,11 @@ class BacktestEngine {
     if (this.sessionFilter?.check) {
       sessionQuality = this.sessionFilter.check(symbol, candle.timestamp);
       if (!sessionQuality.allowed) {
-        // MIRRORS index.js's runAnalysisCycle(): crypto always continues;
-        // everything else continues too iff softGates is on, otherwise this
-        // is the old hard reject. See the softGates doc comment on the
-        // constructor above for why this needs to be a real toggle here,
-        // not hardcoded to the old behavior.
         const isCrypto = /USDT|USDC|BTC$|ETH$/.test(symbol);
         if (!(this.softGates || isCrypto)) {
           this.rejections.session++;
           return;
         }
-        // soft-block: fall through and keep scoring, same as live.
       }
     }
 
@@ -274,10 +203,6 @@ class BacktestEngine {
     if (!this.scorer) return;
     let signal = await this.scorer.score(resolvedVotes, { symbol, timeframe: this.timeframe, currentPrice, timestamp: candle.timestamp });
     if (!signal || signal.action === 'WAIT') { this.rejections.noSignal++; return; }
-    // MIRRORS index.js: fullSignal always carries `regime` — without this,
-    // WalkForwardOptimizer.recordOutcome() would read signal.regime.regime
-    // as undefined → every record falls into the 'UNKNOWN' regime bucket,
-    // and regime-conditioned degradation detection has nothing to work with.
     signal = { ...signal, regime };
 
     if (this.correlationFilter?.check) {
@@ -394,10 +319,6 @@ class BacktestEngine {
       score: signal.score?.final, openedAt, closedAt: closeTimestamp,
       entryPrice: position.entryPrice, pnlR, pnlPct, riskPct, forced,
       balanceAfter: Math.round(this.balance * 100) / 100,
-      // Doc item 47 (Scenario Simulator): "trending, ranging, volatile,
-      // low-volatility" maps directly onto RegimeEngine's own structure
-      // (DIRECTIONAL/RANGE/CHOP) and volatility (EXPANSION/NORMAL/
-      // COMPRESSION) fields, captured at the moment this trade was opened.
       regime: signal.regime?.regime || 'UNKNOWN',
       structure: signal.regime?.structure || 'UNKNOWN',
       volatility: signal.regime?.volatility || 'UNKNOWN',

@@ -1,28 +1,5 @@
 'use strict';
 
-/**
- * ============================================================
- *  MICROSTRUCTURE AGENT — Order Flow & Volume Profile Analysis
- *  Institutional-Grade Market Microstructure Intelligence
- * ============================================================
- *
- *  Analyzes:
- *    - Volume Profile (POC, Value Area High/Low, HVN, LVN)
- *    - Cumulative Volume Delta (CVD) — buy vs sell pressure
- *    - Order Flow Imbalance — bid/ask volume asymmetry
- *    - Absorption Detection — large volume without price movement
- *    - Initiative vs Responsive Activity
- *    - Volume-Weighted Price Analysis
- *    - Footprint Chart Analysis (simulated from OHLCV)
- *    - Delta Divergence — CVD vs price divergence
- *    - Liquidity Void Detection
- *    - Institutional Accumulation/Distribution Patterns
- *
- *  Output: { direction, score, reasons, analysis }
- *  Compatible with signal-scorer.js agent vote format
- * ============================================================
- */
-
 const EventEmitter = require('events');
 
 function round(n, d = 4) {
@@ -43,9 +20,6 @@ function clamp(v, lo, hi) {
   return Math.min(Math.max(v, lo), hi);
 }
 
-/**
- * Volume Profile Builder — constructs TPO-like volume profile from candle data
- */
 class VolumeProfileBuilder {
   static build(candles, bins = 50) {
     if (!candles || candles.length < 20) return null;
@@ -80,7 +54,6 @@ class VolumeProfileBuilder {
       }
     }
 
-    // Point of Control (POC) — price level with highest volume
     let pocBin = 0;
     let maxVol = 0;
     for (let i = 0; i < bins; i++) {
@@ -91,7 +64,6 @@ class VolumeProfileBuilder {
     }
     const poc = lowest + (pocBin + 0.5) * binSize;
 
-    // Value Area (70% of total volume around POC)
     const totalVol = profile.reduce((s, v) => s + v, 0);
     const vaTarget = totalVol * 0.70;
     let vaVol = profile[pocBin];
@@ -114,7 +86,6 @@ class VolumeProfileBuilder {
     const vah = lowest + (vaHigh + 1) * binSize;
     const val = lowest + vaLow * binSize;
 
-    // High Volume Nodes (HVN) — above average volume
     const avgBinVol = totalVol / bins;
     const hvn = [];
     const lvn = [];
@@ -151,17 +122,14 @@ class VolumeProfileBuilder {
     if (total === 0) return 'FLAT';
     const lPct = lower / total, mPct = middle / total, uPct = upper / total;
 
-    if (mPct > 0.45) return 'NORMAL'; // bell-shaped = balanced
-    if (lPct > 0.45) return 'P_SHAPED'; // heavy volume at bottom = accumulation
-    if (uPct > 0.45) return 'B_SHAPED'; // heavy volume at top = distribution
-    if (lPct > 0.35 && uPct > 0.35) return 'D_SHAPED'; // bimodal = indecision
-    return 'LEAN'; // skewed
+    if (mPct > 0.45) return 'NORMAL';
+    if (lPct > 0.45) return 'P_SHAPED';
+    if (uPct > 0.45) return 'B_SHAPED';
+    if (lPct > 0.35 && uPct > 0.35) return 'D_SHAPED';
+    return 'LEAN';
   }
 }
 
-/**
- * Cumulative Volume Delta Analysis
- */
 class CVDAnalyzer {
   static analyze(candles) {
     if (!candles || candles.length < 10) return null;
@@ -174,14 +142,12 @@ class CVDAnalyzer {
       const vol = c.volume || 1;
       const range = c.high - c.low;
 
-      // Estimate buy/sell volume from candle shape
       let buyPct;
       if (range === 0) {
         buyPct = 0.5;
       } else {
-        // Close location value determines buy/sell split
         const clv = ((c.close - c.low) - (c.high - c.close)) / range;
-        buyPct = (clv + 1) / 2; // normalize to 0-1
+        buyPct = (clv + 1) / 2;
       }
 
       const buyVol = vol * buyPct;
@@ -193,17 +159,14 @@ class CVDAnalyzer {
       cvd.push(cumDelta);
     }
 
-    // CVD trend
     const cvdSlope = CVDAnalyzer._slope(cvd.slice(-20));
     const priceSlope = CVDAnalyzer._slope(candles.slice(-20).map(c => c.close));
 
-    // Divergence detection
     const divergence = CVDAnalyzer._detectDivergence(
       candles.slice(-30).map(c => c.close),
       cvd.slice(-30)
     );
 
-    // Absorption: high volume, small price movement
     const absorption = CVDAnalyzer._detectAbsorption(candles.slice(-10));
 
     return {
@@ -242,11 +205,9 @@ class CVDAnalyzer {
     const cvdL1 = Math.min(...cvd.slice(0, half));
     const cvdL2 = Math.min(...cvd.slice(half));
 
-    // Bearish: price higher high, CVD lower high
     if (priceH2 > priceH1 * 1.001 && cvdH2 < cvdH1 * 0.999) {
       return { type: 'BEARISH_DIVERGENCE', note: 'Price making higher highs but buying pressure declining' };
     }
-    // Bullish: price lower low, CVD higher low
     if (priceL2 < priceL1 * 0.999 && cvdL2 > cvdL1 * 1.001) {
       return { type: 'BULLISH_DIVERGENCE', note: 'Price making lower lows but selling pressure declining' };
     }
@@ -265,7 +226,6 @@ class CVDAnalyzer {
       const body = Math.abs(c.close - c.open);
       const bodyRatio = range > 0 ? body / range : 0;
 
-      // High volume + small body = absorption
       if (vol > avgVol * 1.5 && bodyRatio < 0.35) {
         absorptions.push({
           type: c.close > c.open ? 'BUY_ABSORPTION' : 'SELL_ABSORPTION',
@@ -280,9 +240,6 @@ class CVDAnalyzer {
   }
 }
 
-/**
- * Initiative vs Responsive Activity Detector
- */
 class InitiativeDetector {
   static analyze(candles, volumeProfile) {
     if (!candles || candles.length < 10 || !volumeProfile) return null;
@@ -291,8 +248,6 @@ class InitiativeDetector {
     const price = last.close;
     const { poc, vah, val } = volumeProfile;
 
-    // Initiative = trading OUTSIDE value area with conviction
-    // Responsive = trading INSIDE value area (mean reversion)
     const isAboveVA = price > vah;
     const isBelowVA = price < val;
     const isInsideVA = !isAboveVA && !isBelowVA;
@@ -325,9 +280,6 @@ class InitiativeDetector {
   }
 }
 
-/**
- * Main Microstructure Agent
- */
 class MicrostructureAgent extends EventEmitter {
   constructor(config = {}) {
     super();
@@ -345,23 +297,19 @@ class MicrostructureAgent extends EventEmitter {
     let longScore = 45;
     let shortScore = 45;
 
-    // Volume Profile
     const profile = VolumeProfileBuilder.build(candles.slice(-100), this.profileBins);
     if (profile) {
       const price = candles[candles.length - 1].close;
 
-      // Price below POC in accumulation shape = bullish
       if (price < profile.poc && profile.profileShape === 'P_SHAPED') {
         longScore += 15;
         reasons.push('Price below POC in accumulation (P-shaped) profile');
       }
-      // Price above POC in distribution shape = bearish
       if (price > profile.poc && profile.profileShape === 'B_SHAPED') {
         shortScore += 15;
         reasons.push('Price above POC in distribution (B-shaped) profile');
       }
 
-      // Price at LVN = fast move expected
       const nearLVN = profile.lvn.some(n => Math.abs(price - n.price) / price < 0.003);
       if (nearLVN) {
         reasons.push('Price at Low Volume Node — expect fast directional move');
@@ -369,13 +317,11 @@ class MicrostructureAgent extends EventEmitter {
         shortScore += 5;
       }
 
-      // Price at HVN = support/resistance
       const nearHVN = profile.hvn.some(n => Math.abs(price - n.price) / price < 0.003);
       if (nearHVN) {
         reasons.push('Price at High Volume Node — strong support/resistance');
       }
 
-      // Buy dominance
       if (profile.buyDominance > 0.58) {
         longScore += 10;
         reasons.push(`Buy dominance ${round(profile.buyDominance * 100, 1)}% in volume profile`);
@@ -385,7 +331,6 @@ class MicrostructureAgent extends EventEmitter {
       }
     }
 
-    // CVD Analysis
     const cvd = CVDAnalyzer.analyze(candles);
     if (cvd) {
       if (cvd.cvdTrend === 'ACCUMULATION' && cvd.cvdSlope > 0) {
@@ -404,7 +349,6 @@ class MicrostructureAgent extends EventEmitter {
         reasons.push(`CVD ${cvd.divergence.note}`);
       }
 
-      // Absorption
       for (const abs of cvd.absorption) {
         if (abs.type === 'BUY_ABSORPTION') {
           shortScore += 6;
@@ -416,7 +360,6 @@ class MicrostructureAgent extends EventEmitter {
       }
     }
 
-    // Initiative Detection
     if (profile) {
       const initiative = InitiativeDetector.analyze(candles, profile);
       if (initiative) {
@@ -430,7 +373,6 @@ class MicrostructureAgent extends EventEmitter {
       }
     }
 
-    // Final direction
     longScore = clamp(longScore, 0, 100);
     shortScore = clamp(shortScore, 0, 100);
     const edge = Math.abs(longScore - shortScore);

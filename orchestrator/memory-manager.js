@@ -1,59 +1,18 @@
-/**
- * ============================================================
- *  MEMORY MANAGER — Agent Context + Signal History + Vector DB
- *  AI Trading Assistant · Layer 2 · Orchestrator
- * ============================================================
- *
- *  Storage layers:
- *    L1 — In-memory LRU cache (hot data, sub-ms access)
- *    L2 — Redis (warm data, session-level, TTL-based)
- *    L3 — PostgreSQL (cold data, permanent trade history)
- *    L4 — Pinecone Vector DB (semantic agent memory + RAG)
- *
- *  What gets stored:
- *    - Every signal fired (full payload + outcome)
- *    - Agent vote history per symbol/timeframe
- *    - Indicator state snapshots
- *    - Trade outcomes (win/loss/breakeven, R multiple)
- *    - Pattern performance statistics
- *    - Symbol-level context (regime, recent structure)
- *    - Session-level analytics
- *    - User preferences + settings
- *    - System events + errors
- *
- *  Vector memory (Pinecone):
- *    - Embeds signal context as vector
- *    - Retrieves similar past setups on new signals
- *    - Surfaces "last time this pattern appeared = result"
- *    - Feeds into conflict-resolver for better arbitration
- *
- *  Events emitted:
- *    'signal_saved'    → signal persisted to all layers
- *    'memory_hit'      → retrieved from cache
- *    'similar_found'   → vector similarity match found
- *    'stats_updated'   → performance stats recalculated
- *    'error'           → storage operation failed
- * ============================================================
- */
 
 'use strict';
 
 const EventEmitter = require('events');
 const https        = require('https');
 
-// ─────────────────────────────────────────────
-//  CONSTANTS
-// ─────────────────────────────────────────────
-
 const LRU_MAX_SIZE         = 2000;
-const LRU_DEFAULT_TTL      = 5 * 60 * 1000;      // 5 min
-const REDIS_SIGNAL_TTL     = 60 * 60 * 24 * 7;   // 7 days (seconds)
-const REDIS_CONTEXT_TTL    = 60 * 60 * 24;        // 24 hours
-const REDIS_STATS_TTL      = 60 * 60 * 24 * 30;  // 30 days
-const VECTOR_DIMENSION     = 128;                  // embedding size
-const VECTOR_TOP_K         = 5;                    // similar results to fetch
-const SIGNAL_HISTORY_MAX   = 5000;                 // in-memory cap
-const STATS_RECALC_INTERVAL = 60 * 1000;          // recalc every 60s
+const LRU_DEFAULT_TTL      = 5 * 60 * 1000;
+const REDIS_SIGNAL_TTL     = 60 * 60 * 24 * 7;
+const REDIS_CONTEXT_TTL    = 60 * 60 * 24;
+const REDIS_STATS_TTL      = 60 * 60 * 24 * 30;
+const VECTOR_DIMENSION     = 128;
+const VECTOR_TOP_K         = 5;
+const SIGNAL_HISTORY_MAX   = 5000;
+const STATS_RECALC_INTERVAL = 60 * 1000;
 
 function _now()          { return Date.now(); }
 function _round(n, d=4)  { return parseFloat((+n).toFixed(d)); }
@@ -64,15 +23,7 @@ function _uuid()         {
   });
 }
 
-// ─────────────────────────────────────────────
-//  L1 — LRU CACHE
-// ─────────────────────────────────────────────
-
 class LRUCache {
-  /**
-   * Fast in-memory LRU cache with TTL support.
-   * O(1) get/set using Map (insertion-order preserved).
-   */
   constructor(maxSize = LRU_MAX_SIZE, defaultTTL = LRU_DEFAULT_TTL) {
     this._max     = maxSize;
     this._ttl     = defaultTTL;
@@ -90,7 +41,6 @@ class LRUCache {
       this._misses++;
       return null;
     }
-    // Move to end (most recently used)
     this._cache.delete(key);
     this._cache.set(key, entry);
     this._hits++;
@@ -100,7 +50,6 @@ class LRUCache {
   set(key, value, ttl) {
     if (this._cache.has(key)) this._cache.delete(key);
     else if (this._cache.size >= this._max) {
-      // Evict least recently used (first entry)
       const firstKey = this._cache.keys().next().value;
       this._cache.delete(firstKey);
       this._evicted++;
@@ -117,7 +66,6 @@ class LRUCache {
   clear()        { this._cache.clear(); }
   get size()     { return this._cache.size; }
 
-  // Scan keys matching a prefix
   scan(prefix) {
     const results = [];
     for (const [k, v] of this._cache) {
@@ -140,31 +88,11 @@ class LRUCache {
   }
 }
 
-// ─────────────────────────────────────────────
-//  SIGNAL EMBEDDER (lightweight, no external ML)
-// ─────────────────────────────────────────────
-
 class SignalEmbedder {
-  /**
-   * Converts a signal into a fixed-dimension float vector.
-   * Uses hand-crafted features — no external ML dependency.
-   * Suitable for cosine similarity matching of "similar setups".
-   *
-   * Feature groups (total 128 dims):
-   *   [0-9]   Price action features
-   *   [10-29] Indicator scores (RSI, MACD, EMA, Ichi, etc.)
-   *   [30-49] SMC features (OB, FVG, sweep, CHoCH)
-   *   [50-59] MTF alignment features
-   *   [60-79] Market regime features (ATR, volume, OI)
-   *   [80-99] Temporal features (session, day of week, hour)
-   *   [100-119] Agent vote features
-   *   [120-127] Outcome features (filled after trade closes)
-   */
   static embed(signal) {
     const vec = new Float32Array(VECTOR_DIMENSION);
     const s   = signal;
 
-    // ── Price action [0-9] ──
     vec[0]  = s.action === 'LONG' ? 1 : -1;
     vec[1]  = s.score?.final ? s.score.final / 100 : 0;
     vec[2]  = s.stopLoss?.riskPct ? s.stopLoss.riskPct / 5 : 0;
@@ -176,7 +104,6 @@ class SignalEmbedder {
     vec[8]  = s.htfBias?.direction === 'LONG' ? 1 : s.htfBias?.direction === 'SHORT' ? -1 : 0;
     vec[9]  = s.htfBias?.strength ? s.htfBias.strength / 100 : 0;
 
-    // ── Indicator scores [10-29] ──
     const mom = s.agentVotes?.momentum?.analysis || {};
     vec[10] = mom.rsi?.value         ? (mom.rsi.value - 50) / 50 : 0;
     vec[11] = mom.macd?.aboveZero    ? 1 : -1;
@@ -199,7 +126,6 @@ class SignalEmbedder {
     vec[28] = mom.ichimoku?.cloudBull ? 1 : mom.ichimoku?.cloudBear ? -1 : 0;
     vec[29] = (s.agentVotes?.momentum?.score || 0) > 70 ? 1 : 0;
 
-    // ── SMC features [30-49] ──
     const smc = s.agentVotes?.smc?.analysis || {};
     vec[30] = smc.orderBlocks?.bullish?.length ? Math.min(smc.orderBlocks.bullish.length / 3, 1) : 0;
     vec[31] = smc.orderBlocks?.bearish?.length ? Math.min(smc.orderBlocks.bearish.length / 3, 1) : 0;
@@ -222,7 +148,6 @@ class SignalEmbedder {
     vec[48] = smc.fvgs?.bearish?.[0]?.age ? Math.max(0, 1 - smc.fvgs.bearish[0].age / 50) : 0;
     vec[49] = s.confluence?.smcGrade === 'A' ? 1 : s.confluence?.smcGrade === 'B' ? 0.6 : 0.3;
 
-    // ── MTF features [50-59] ──
     const mtf = s.agentVotes?.mtf || {};
     vec[50] = mtf.direction === 'LONG' ? 1 : mtf.direction === 'SHORT' ? -1 : 0;
     vec[51] = (mtf.score || 0) / 100;
@@ -235,7 +160,6 @@ class SignalEmbedder {
     vec[58] = mtf.analysis?.divergence ? -0.5 : 0;
     vec[59] = mtf.analysis?.allAligned  ? 1 : 0;
 
-    // ── Market regime [60-79] ──
     vec[60] = s.risk?.atrPct ? Math.min(s.risk.atrPct / 2, 1) : 0;
     vec[61] = s.marketContext?.volatilityLabel === 'HIGH' ? 1 : s.marketContext?.volatilityLabel === 'LOW' ? -1 : 0;
     vec[62] = s.agentVotes?.volumeOI?.direction === 'LONG' ? 1 : s.agentVotes?.volumeOI?.direction === 'SHORT' ? -1 : 0;
@@ -252,7 +176,6 @@ class SignalEmbedder {
     vec[73] = (s.agentVotes?.macroSent?.score || 50) / 100;
     vec[74] = s.marketContext?.smcLiquidityTarget ? 1 : 0;
 
-    // ── Temporal [80-99] ──
     const ts = new Date(s.timestamp || _now());
     vec[80] = ts.getUTCHours() / 24;
     vec[81] = ts.getUTCDay() / 7;
@@ -262,10 +185,9 @@ class SignalEmbedder {
     vec[85] = s.session?.current === 'NEW_YORK' ? 1 : 0;
     vec[86] = s.session?.current === 'ASIA'     ? 1 : 0;
     vec[87] = s.session?.current === 'OVERLAP'  ? 1 : 0;
-    vec[88] = ts.getUTCDay() === 1 ? 1 : ts.getUTCDay() === 5 ? -0.5 : 0; // Monday vs Friday
-    vec[89] = ts.getUTCHours() >= 8 && ts.getUTCHours() <= 16 ? 1 : 0;  // peak hours
+    vec[88] = ts.getUTCDay() === 1 ? 1 : ts.getUTCDay() === 5 ? -0.5 : 0;
+    vec[89] = ts.getUTCHours() >= 8 && ts.getUTCHours() <= 16 ? 1 : 0;
 
-    // ── Agent votes [100-119] ──
     const agents = ['smc','mtf','momentum','volumeOI','macroSent'];
     agents.forEach((a, i) => {
       const v = s.agentVotes?.[a] || {};
@@ -275,8 +197,6 @@ class SignalEmbedder {
       vec[100 + i*4 + 3] = v.reasons?.length ? Math.min(v.reasons.length / 10, 1) : 0;
     });
 
-    // ── Outcome (filled post-trade) [120-127] ──
-    // Initially zero, updated when trade closes
     vec[120] = s.outcome?.pnlR     ? Math.max(-1, Math.min(1, s.outcome.pnlR / 5)) : 0;
     vec[121] = s.outcome?.won      ? 1 : s.outcome?.lost ? -1 : 0;
     vec[122] = s.outcome?.tpHit    ? s.outcome.tpHit / 3 : 0;
@@ -291,7 +211,6 @@ class SignalEmbedder {
     return map[tf] || 0.25;
   }
 
-  // Cosine similarity between two vectors
   static cosineSim(a, b) {
     if (a.length !== b.length) return 0;
     let dot = 0, normA = 0, normB = 0;
@@ -305,15 +224,7 @@ class SignalEmbedder {
   }
 }
 
-// ─────────────────────────────────────────────
-//  L2 — REDIS ADAPTER
-// ─────────────────────────────────────────────
-
 class RedisAdapter {
-  /**
-   * Thin wrapper around Redis client (ioredis or node-redis compatible).
-   * Falls back gracefully if Redis is not connected.
-   */
   constructor(client) {
     this._client    = client || null;
     this._connected = false;
@@ -429,20 +340,7 @@ class RedisAdapter {
   }
 }
 
-// ─────────────────────────────────────────────
-//  L4 — PINECONE ADAPTER
-// ─────────────────────────────────────────────
-
 class PineconeAdapter {
-  /**
-   * Wraps Pinecone REST API for vector storage + similarity search.
-   * Used to surface "similar past setups" for conflict resolution.
-   *
-   * @param {Object} config
-   * @param {string} config.apiKey    - Pinecone API key
-   * @param {string} config.indexUrl  - Pinecone index URL
-   * @param {string} config.namespace - Namespace for isolation
-   */
   constructor(config = {}) {
     this._apiKey    = config.apiKey    || null;
     this._indexUrl  = config.indexUrl  || null;
@@ -453,9 +351,6 @@ class PineconeAdapter {
     this._errors    = 0;
   }
 
-  /**
-   * Upsert a signal vector into Pinecone.
-   */
   async upsert(id, vector, metadata = {}) {
     if (!this._enabled) return false;
 
@@ -487,10 +382,6 @@ class PineconeAdapter {
     }
   }
 
-  /**
-   * Query Pinecone for top-K similar signals.
-   * Returns array of { id, score, metadata }
-   */
   async query(vector, topK = VECTOR_TOP_K, filter = {}) {
     if (!this._enabled) return [];
 
@@ -516,9 +407,6 @@ class PineconeAdapter {
     }
   }
 
-  /**
-   * Update metadata for an existing vector (e.g. after trade closes).
-   */
   async updateMetadata(id, metadata) {
     if (!this._enabled) return false;
 
@@ -579,13 +467,9 @@ class PineconeAdapter {
   }
 }
 
-// ─────────────────────────────────────────────
-//  PERFORMANCE STATS ENGINE
-// ─────────────────────────────────────────────
-
 class PerformanceStats {
   constructor() {
-    this._signals  = [];   // all signals with outcomes
+    this._signals  = [];
     this._lastCalc = 0;
     this._cache    = null;
   }
@@ -593,7 +477,7 @@ class PerformanceStats {
   add(signal) {
     this._signals.push(signal);
     if (this._signals.length > SIGNAL_HISTORY_MAX) this._signals.shift();
-    this._cache = null; // invalidate
+    this._cache = null;
   }
 
   update(signalId, outcome) {
@@ -632,7 +516,6 @@ class PerformanceStats {
     const avgLoss   = lossPnl.length ? _round(lossPnl.reduce((a, b) => a + b, 0) / lossPnl.length, 4) : 0;
     const pf        = avgLoss > 0 ? _round((avgWin * wins) / (avgLoss * losses), 3) : Infinity;
 
-    // Max drawdown on equity curve
     let peak = 0, maxDD = 0, running = 0;
     for (const r of pnlValues) {
       running += r;
@@ -641,7 +524,6 @@ class PerformanceStats {
       if (dd > maxDD) maxDD = dd;
     }
 
-    // By grade
     const byGrade = {};
     for (const g of ['A', 'B', 'C', 'D']) {
       const gs = signals.filter(s => s.score?.grade === g);
@@ -652,7 +534,6 @@ class PerformanceStats {
       };
     }
 
-    // By symbol
     const bySymbol = {};
     const symbols  = [...new Set(signals.map(s => s.symbol))];
     for (const sym of symbols) {
@@ -665,7 +546,6 @@ class PerformanceStats {
       };
     }
 
-    // By session
     const bySess = {};
     for (const sess of ['LONDON', 'NEW_YORK', 'OVERLAP', 'ASIA', 'DEAD']) {
       const ss = signals.filter(s => s.session?.current === sess);
@@ -678,14 +558,12 @@ class PerformanceStats {
       };
     }
 
-    // Consecutive stats
     let maxConsecWins = 0, maxConsecLoss = 0, curW = 0, curL = 0;
     for (const s of signals) {
       if (s.outcome.won) { curW++; curL = 0; maxConsecWins = Math.max(maxConsecWins, curW); }
       else               { curL++; curW = 0; maxConsecLoss = Math.max(maxConsecLoss, curL); }
     }
 
-    // Kelly criterion
     const kellyF = avgLoss > 0
       ? Math.max(0, (winRate / 100 - (1 - winRate / 100) / (avgWin / avgLoss)))
       : 0;
@@ -721,21 +599,9 @@ class PerformanceStats {
   }
 }
 
-// ─────────────────────────────────────────────
-//  SYMBOL CONTEXT STORE
-// ─────────────────────────────────────────────
-
 class SymbolContext {
-  /**
-   * Stores per-symbol market context:
-   * - Recent signals + outcomes
-   * - Current HTF regime
-   * - Key structure levels
-   * - Agent vote history
-   * - Performance stats
-   */
   constructor() {
-    this._contexts = new Map(); // symbol → context
+    this._contexts = new Map();
   }
 
   update(symbol, data) {
@@ -793,23 +659,10 @@ class SymbolContext {
   }
 }
 
-// ─────────────────────────────────────────────
-//  MAIN MEMORY MANAGER
-// ─────────────────────────────────────────────
-
 class MemoryManager extends EventEmitter {
-  /**
-   * @param {Object} config
-   * @param {Object}  [config.redis]      - Redis client (ioredis / node-redis)
-   * @param {Object}  [config.postgres]   - PostgreSQL pool (pg)
-   * @param {Object}  [config.pinecone]   - { apiKey, indexUrl, namespace }
-   * @param {boolean} [config.vectorize]  - Enable Pinecone embeddings (default false)
-   * @param {number}  [config.lruSize]    - L1 cache max size (default 2000)
-   */
   constructor(config = {}) {
     super();
 
-    // Storage layers
     this._lru     = new LRUCache(config.lruSize || LRU_MAX_SIZE);
     this._redis   = new RedisAdapter(config.redis || null);
     this._pg      = config.postgres || null;
@@ -819,18 +672,14 @@ class MemoryManager extends EventEmitter {
 
     this._vectorize = config.vectorize || false;
 
-    // Domain objects
     this._perf    = new PerformanceStats();
     this._symCtx  = new SymbolContext();
     this._embedder = SignalEmbedder;
 
-    // Settings store (user preferences)
     this._settings = new Map();
 
-    // System event log
     this._eventLog = [];
 
-    // Stats
     this._ops = { saves: 0, reads: 0, updates: 0, errors: 0 };
 
     this._log('MemoryManager initialized', {
@@ -839,33 +688,21 @@ class MemoryManager extends EventEmitter {
       pinecone: this._pinecone._enabled,
     });
 
-    // Periodic persistence
     this._startPeriodicFlush();
   }
 
-  // ─────────────────────────────────────────────
-  //  SIGNAL STORAGE
-  // ─────────────────────────────────────────────
-
-  /**
-   * Persist a new signal across all storage layers.
-   * L1 → immediate  |  L2 → async  |  L3 → async  |  L4 → async
-   */
   async saveSignal(signal) {
     if (!signal?.id) return;
     this._ops.saves++;
 
     const key   = `signal:${signal.id}`;
-    const light = this._lightSignal(signal); // compressed version
+    const light = this._lightSignal(signal);
 
-    // ── L1: In-memory ──
-    this._lru.set(key, signal, 30 * 60 * 1000); // 30 min hot cache
+    this._lru.set(key, signal, 30 * 60 * 1000);
 
-    // ── Domain objects ──
     this._perf.add(signal);
     this._symCtx.addSignal(signal.symbol, signal);
 
-    // ── L2: Redis (async, non-blocking) ──
     this._redis.set(key, light, REDIS_SIGNAL_TTL).catch(() => {});
     this._redis.lpush(`signals:history:${signal.symbol}`, light, 200).catch(() => {});
     this._redis.lpush('signals:all', light, 1000).catch(() => {});
@@ -875,10 +712,8 @@ class MemoryManager extends EventEmitter {
     }
     this._redis.publish('signals:all', signal).catch(() => {});
 
-    // ── L3: PostgreSQL (async) ──
     this._pgSaveSignal(signal).catch(e => this._log('PG save error:', e.message));
 
-    // ── L4: Pinecone embedding (async, optional) ──
     if (this._vectorize) {
       const vec = this._embedder.embed(signal);
       this._pinecone.upsert(signal.id, vec, {
@@ -894,19 +729,13 @@ class MemoryManager extends EventEmitter {
     this.emit('signal_saved', { id: signal.id, symbol: signal.symbol });
   }
 
-  /**
-   * Retrieve a signal by ID.
-   * L1 → L2 → L3 cascade.
-   */
   async getSignal(signalId) {
     this._ops.reads++;
     const key = `signal:${signalId}`;
 
-    // L1
     const l1 = this._lru.get(key);
     if (l1) { this.emit('memory_hit', { layer: 'L1', key }); return l1; }
 
-    // L2
     const l2 = await this._redis.get(key);
     if (l2) {
       this._lru.set(key, l2);
@@ -914,7 +743,6 @@ class MemoryManager extends EventEmitter {
       return l2;
     }
 
-    // L3
     const l3 = await this._pgGetSignal(signalId);
     if (l3) {
       this._lru.set(key, l3);
@@ -924,9 +752,6 @@ class MemoryManager extends EventEmitter {
     return null;
   }
 
-  /**
-   * Update signal with trade outcome (called when trade closes).
-   */
   async updateOutcome(signalId, outcome) {
     this._ops.updates++;
 
@@ -935,13 +760,11 @@ class MemoryManager extends EventEmitter {
 
     signal.outcome = { ...outcome, closedAt: _now() };
 
-    // Update all layers
     this._lru.set(`signal:${signalId}`, signal);
     this._perf.update(signalId, outcome);
     this._redis.set(`signal:${signalId}`, this._lightSignal(signal), REDIS_SIGNAL_TTL).catch(() => {});
     this._pgUpdateOutcome(signalId, outcome).catch(() => {});
 
-    // Update Pinecone vector metadata
     if (this._vectorize) {
       this._pinecone.updateMetadata(signalId, {
         pnlR: outcome.pnlR,
@@ -954,22 +777,15 @@ class MemoryManager extends EventEmitter {
     return true;
   }
 
-  // ─────────────────────────────────────────────
-  //  SIGNAL HISTORY + RETRIEVAL
-  // ─────────────────────────────────────────────
-
   async getRecentSignals(n = 20, filter = {}) {
     this._ops.reads++;
 
-    // Try Redis first for speed
     let signals = await this._redis.lrange('signals:all', 0, n * 2);
 
     if (!signals.length) {
-      // Fallback to in-memory performance store
       signals = this._perf.getRecent(n);
     }
 
-    // Apply filters
     if (filter.symbol)    signals = signals.filter(s => s.symbol    === filter.symbol);
     if (filter.direction) signals = signals.filter(s => s.action    === filter.direction);
     if (filter.grade)     signals = signals.filter(s => s.score?.grade === filter.grade);
@@ -979,11 +795,7 @@ class MemoryManager extends EventEmitter {
   }
 
   async getSignalsBySymbol(symbol, n = 50) {
-    // FIX: signals are cached under `signal:<id>` (keyed by signal ID), not
-    // `signal:<symbol>...`, so scanning by a `signal:<symbol>` prefix could
-    // never match anything — this L1 fast-path was silently dead code,
-    // always falling through to the slower Redis lookup below. Scan all
-    // cached signals and filter by the symbol field on the value instead.
+    // FIX: signals are cached under `signal:<id>` (keyed by signal ID), not `signal:<symbol>...`, so scanning by a `signal:<symbol>` prefix could never match anything — this L1 fast-path was silently dead...
     const l1 = this._lru.scan('signal:').filter(e => e.value?.symbol === symbol);
     if (l1.length >= 5) return l1.map(e => e.value).slice(0, n);
 
@@ -991,24 +803,11 @@ class MemoryManager extends EventEmitter {
     return l2;
   }
 
-  // ─────────────────────────────────────────────
-  //  VECTOR SIMILARITY SEARCH
-  // ─────────────────────────────────────────────
-
-  /**
-   * Find similar past setups for a new signal.
-   * Falls back to in-memory brute-force if Pinecone unavailable.
-   *
-   * @param {Object} signal - new signal to match
-   * @param {Object} opts   - { topK, minSimilarity, filter }
-   * @returns {Array} similar signals with similarity score + outcome
-   */
   async findSimilar(signal, opts = {}) {
     const topK          = opts.topK          || VECTOR_TOP_K;
     const minSimilarity = opts.minSimilarity || 0.75;
     const vec           = this._embedder.embed(signal);
 
-    // ── Pinecone ──
     if (this._vectorize && this._pinecone._enabled) {
       const filter = opts.filter || {};
       if (signal.symbol)    filter.symbol    = { $eq: signal.symbol };
@@ -1023,7 +822,6 @@ class MemoryManager extends EventEmitter {
       }
     }
 
-    // ── In-memory brute force fallback ──
     const candidates = this._perf.getRecent(200).filter(s => s.id !== signal.id && s.outcome);
     const scored = candidates.map(s => ({
       id:         s.id,
@@ -1044,10 +842,6 @@ class MemoryManager extends EventEmitter {
     return scored;
   }
 
-  // ─────────────────────────────────────────────
-  //  PERFORMANCE STATS
-  // ─────────────────────────────────────────────
-
   getStats(filter = {}) {
     return this._perf.calculate(filter);
   }
@@ -1066,19 +860,14 @@ class MemoryManager extends EventEmitter {
     return this._perf.calculate({ grade });
   }
 
-  // ─────────────────────────────────────────────
-  //  SYMBOL CONTEXT
-  // ─────────────────────────────────────────────
-
   updateSymbolContext(symbol, data) {
     this._symCtx.update(symbol, data);
     const key = `ctx:${symbol}`;
-    this._lru.set(key, data, 60 * 60 * 1000); // 1 hour
+    this._lru.set(key, data, 60 * 60 * 1000);
     this._redis.set(key, data, REDIS_CONTEXT_TTL).catch(() => {});
   }
 
   getSymbolContext(symbol) {
-    // L1 first
     const l1 = this._lru.get(`ctx:${symbol}`);
     if (l1) return l1;
     return this._symCtx.get(symbol);
@@ -1086,7 +875,7 @@ class MemoryManager extends EventEmitter {
 
   updateHTFRegime(symbol, regime) {
     this._symCtx.updateRegime(symbol, regime);
-    this._lru.set(`regime:${symbol}`, regime, 4 * 60 * 60 * 1000); // 4 hours
+    this._lru.set(`regime:${symbol}`, regime, 4 * 60 * 60 * 1000);
   }
 
   getHTFRegime(symbol) {
@@ -1097,10 +886,6 @@ class MemoryManager extends EventEmitter {
     this._symCtx.addStructureLevel(symbol, level);
   }
 
-  // ─────────────────────────────────────────────
-  //  SETTINGS / USER PREFERENCES
-  // ─────────────────────────────────────────────
-
   async setSetting(key, value) {
     this._settings.set(key, value);
     await this._redis.hset('settings', key, value);
@@ -1108,14 +893,11 @@ class MemoryManager extends EventEmitter {
   }
 
   async getSetting(key, defaultVal = null) {
-    // L1
     const l1 = this._lru.get(`setting:${key}`);
     if (l1 !== null) return l1;
 
-    // Memory
     if (this._settings.has(key)) return this._settings.get(key);
 
-    // L2
     const l2 = await this._redis.hget('settings', key);
     if (l2 !== null) {
       this._settings.set(key, l2);
@@ -1132,10 +914,6 @@ class MemoryManager extends EventEmitter {
     return Object.fromEntries(this._settings);
   }
 
-  // ─────────────────────────────────────────────
-  //  SYSTEM EVENT LOG
-  // ─────────────────────────────────────────────
-
   logEvent(type, data) {
     const entry = { type, data, timestamp: _now() };
     this._eventLog.push(entry);
@@ -1149,27 +927,19 @@ class MemoryManager extends EventEmitter {
     return log;
   }
 
-  // ─────────────────────────────────────────────
-  //  AGENT VOTE HISTORY
-  // ─────────────────────────────────────────────
-
   async saveAgentVote(agentName, symbol, timeframe, vote) {
     const key = `votes:${agentName}:${symbol}:${timeframe}`;
     const entry = { ...vote, savedAt: _now() };
 
-    this._lru.set(key, entry, 60 * 60 * 1000); // 1 hour
+    this._lru.set(key, entry, 60 * 60 * 1000);
     await this._redis.lpush(key, entry, 50);
-    await this._redis.expire(key, 24 * 60 * 60); // 24 hour TTL
+    await this._redis.expire(key, 24 * 60 * 60);
   }
 
   async getAgentVoteHistory(agentName, symbol, timeframe, n = 20) {
     const key = `votes:${agentName}:${symbol}:${timeframe}`;
     return this._redis.lrange(key, 0, n - 1);
   }
-
-  // ─────────────────────────────────────────────
-  //  POSTGRES HELPERS
-  // ─────────────────────────────────────────────
 
   async _pgSaveSignal(signal) {
     if (!this._pg) return;
@@ -1218,19 +988,13 @@ class MemoryManager extends EventEmitter {
     ]).catch(e => this._log('PG update error:', e.message));
   }
 
-  // ─────────────────────────────────────────────
-  //  PERIODIC FLUSH
-  // ─────────────────────────────────────────────
-
   _startPeriodicFlush() {
-    // Persist settings to Redis every 5 min
     setInterval(async () => {
       for (const [k, v] of this._settings) {
         await this._redis.hset('settings', k, v).catch(() => {});
       }
     }, 5 * 60 * 1000);
 
-    // Persist performance stats summary every 10 min
     setInterval(async () => {
       const stats = this._perf.calculate();
       await this._redis.set('stats:performance', stats, REDIS_STATS_TTL).catch(() => {});
@@ -1238,11 +1002,6 @@ class MemoryManager extends EventEmitter {
     }, 10 * 60 * 1000);
   }
 
-  // ─────────────────────────────────────────────
-  //  UTILS
-  // ─────────────────────────────────────────────
-
-  // Compressed signal for Redis (drops heavy nested analysis)
   _lightSignal(signal) {
     const { agentVotes, ...rest } = signal;
     return {
@@ -1269,10 +1028,6 @@ class MemoryManager extends EventEmitter {
     data ? console.log(`[MemoryManager] ${msg}`, data) : console.log(`[MemoryManager] ${msg}`);
   }
 }
-
-// ─────────────────────────────────────────────
-//  EXPORTS
-// ─────────────────────────────────────────────
 
 module.exports = {
   MemoryManager,

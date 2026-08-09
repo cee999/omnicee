@@ -1,44 +1,3 @@
-/**
- * ============================================================
- *  TIME CYCLE ENGINE
- *  AI Trading Assistant · Layer 5 · Signal Pipeline
- * ============================================================
- *
- *  Doc item #30: "Tracks recurring seasonal and intraday behavior."
- *
- *  Rather than a vague seasonality claim, this answers a concrete
- *  question with actual historical evidence from the candles this
- *  system already stores: "at this hour of day / day of week / month,
- *  has this symbol historically trended up, down, or chopped — and
- *  how reliable is that pattern (sample size, consistency)?"
- *
- *  Three cycle dimensions, each computed the same way: bucket every
- *  historical candle's forward return by its time bucket, then report
- *  the bucket's average forward return, win rate, and sample count.
- *
- *    - Hour-of-day (0-23, in the timestamp's UTC hour unless a
- *      timezone offset is supplied)
- *    - Day-of-week (0=Sun .. 6=Sat)
- *    - Month-of-year (1-12) — needs daily+ candles with real history
- *      to be meaningful; flags itself as low-confidence otherwise
- *
- *  This is descriptive statistics over the symbol's own history, not
- *  a prediction — every bucket reports its sample size so a thin
- *  bucket (e.g. 4 observations) can be told apart from a robust one
- *  (e.g. 400 observations), and the engine refuses to call a bucket
- *  "significant" below a minimum sample floor.
- *
- *  Input:  candles (OHLCV with timestamp/time), forwardBars (how many
- *          bars ahead defines "the move" attributed to that bucket)
- *  Output: { hourOfDay: [...], dayOfWeek: [...], monthOfYear: [...],
- *            currentBucket: {...} }
- *
- *  Usage:
- *    const { TimeCycleEngine } = require('./time-cycle-engine');
- *    const engine = new TimeCycleEngine();
- *    const result = engine.analyze({ candles, forwardBars: 4 });
- * ============================================================
- */
 
 'use strict';
 
@@ -56,24 +15,17 @@ function avg(arr) {
 function candleTime(c) {
   const ts = c.timestamp ?? c.time ?? null;
   if (ts == null) return null;
-  // Accept both ms and second epoch timestamps.
   return ts > 1e12 ? ts : ts * 1000;
 }
 
 class TimeCycleEngine {
   constructor(config = {}) {
     this.minSampleSize = config.minSampleSize ?? 20;
-    this.utcOffsetHours = config.utcOffsetHours ?? 0; // shift bucket to a trading-desk timezone if desired
+    this.utcOffsetHours = config.utcOffsetHours ?? 0;
   }
 
-  /**
-   * Build forward returns keyed by an arbitrary time-bucket function.
-   * @param {Array} candles
-   * @param {number} forwardBars
-   * @param {(date: Date) => (number|string)} bucketFn
-   */
   _bucketReturns(candles, forwardBars, bucketFn) {
-    const buckets = new Map(); // key -> [] returns
+    const buckets = new Map();
 
     for (let i = 0; i < candles.length - forwardBars; i++) {
       const c = candles[i];
@@ -112,13 +64,6 @@ class TimeCycleEngine {
     return rows.sort((a, b) => (typeof a.bucket === 'number' && typeof b.bucket === 'number' ? a.bucket - b.bucket : String(a.bucket).localeCompare(String(b.bucket))));
   }
 
-  /**
-   * @param {Object} params
-   * @param {Array}  params.candles      OHLCV array, most recent last, needs
-   *                                     timestamp/time on each candle
-   * @param {number} [params.forwardBars=4] bars ahead used to define "the move"
-   * @returns {Object}
-   */
   analyze({ candles, forwardBars = 4 } = {}) {
     if (!Array.isArray(candles) || candles.length < this.minSampleSize * 2) {
       return { hourOfDay: [], dayOfWeek: [], monthOfYear: [], currentBucket: null, reason: 'insufficient_candles' };
@@ -132,8 +77,6 @@ class TimeCycleEngine {
     const dayOfWeek = this._summarize(dowBuckets, d => DAY_NAMES[d]);
     const monthOfYear = this._summarize(monthBuckets, m => m);
 
-    // Where does "right now" (the most recent candle's timestamp) sit,
-    // and what does its historical bucket say?
     const lastTime = candleTime(candles[candles.length - 1]);
     let currentBucket = null;
     if (lastTime != null) {
@@ -155,12 +98,6 @@ class TimeCycleEngine {
     };
   }
 
-  /**
-   * Convenience: is right now historically a favorable, unfavorable, or
-   * neutral window for this symbol, based on hour-of-day + day-of-week
-   * evidence only (the two buckets that get meaningful sample sizes from
-   * a single instrument's intraday history)?
-   */
   currentWindowBias({ candles, forwardBars = 4, minWinRateEdge = 0.08 } = {}) {
     const { currentBucket } = this.analyze({ candles, forwardBars });
     if (!currentBucket) return { bias: 'UNKNOWN', reason: 'no_data' };

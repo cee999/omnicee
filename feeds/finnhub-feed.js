@@ -3,27 +3,6 @@ const https = require('https');
 const EventEmitter = require('events');
 const WebSocket = require('ws');
 
-// ─────────────────────────────────────────────
-//  CANDLE SUPPORT — ADDED
-// ─────────────────────────────────────────────
-//
-// Finnhub's free tier restricts intraday/historical candle endpoints on
-// STOCK symbols (confirmed: returns 403 "You don't have access to this
-// resource"). Whether that same restriction applies to /forex/candle for
-// non-stock symbols was NOT confirmed while writing this — Finnhub's
-// public docs list forex_candles as a real endpoint, but multiple
-// third-party summaries only specifically call out STOCK candles as
-// premium-gated. Treat this as unverified: the circuit breaker below
-// means if your account also gets a 403 here, the feed disables itself
-// cleanly after one failed attempt rather than burning further requests
-// or spamming logs — but you should confirm access on your own Finnhub
-// plan before relying on this in production.
-//
-// Symbol format is ALSO unverified for gold/commodities specifically —
-// Finnhub forex candles expect broker-prefixed symbols like
-// 'OANDA:XAU_USD', taken from their own /forex/symbol?exchange=oanda
-// lookup. The defaults below are best-effort guesses. Override via
-// config.forexSymbolMap if your account's actual symbol list differs.
 const DEFAULT_FOREX_SYMBOL_MAP = {
   XAUUSD: 'OANDA:XAU_USD',
   XAGUSD: 'OANDA:XAG_USD',
@@ -36,16 +15,13 @@ const DEFAULT_FOREX_SYMBOL_MAP = {
   USDCHF: 'OANDA:USD_CHF',
 };
 
-// Finnhub candle 'resolution' values: 1, 5, 15, 30, 60, D, W, M.
-// There is no native 4-hour resolution — H4 is served by fetching 60min
-// candles and aggregating 4 at a time (see _aggregateHourly()).
 const TF_TO_FINNHUB_RESOLUTION = {
   M1: '1', M5: '5', M15: '15', M30: '30',
-  H1: '60', H4: '60', // H4 aggregated from 60min, see getLatestCandles()
+  H1: '60', H4: '60',
   D1: 'D', W1: 'W',
 };
 
-const CANDLE_ACCESS_BLOCK_MS = 24 * 3600 * 1000; // stop retrying for 24h after a confirmed 403
+const CANDLE_ACCESS_BLOCK_MS = 24 * 3600 * 1000;
 
 class FinnhubFeed extends EventEmitter {
   constructor(config = {}) {
@@ -55,12 +31,11 @@ class FinnhubFeed extends EventEmitter {
     this._cache = new Map();
     this._baseUrl = 'https://finnhub.io/api/v1';
 
-    // Candle circuit breaker — see note above. Null until we know either way.
+    // Candle circuit breaker — see note above.
     this._candleAccessBlockedUntil = null;
-    this._candleAccessConfirmed = null; // true | false | null (unknown)
+    this._candleAccessConfirmed = null;
     this.forexSymbolMap = { ...DEFAULT_FOREX_SYMBOL_MAP, ...(config.forexSymbolMap || {}) };
 
-    // Live price stream (WS) state — see connectPriceStream() below.
     this._ws = null;
     this._wsSymbols = [];
     this._wsReconnectAttempts = 0;
@@ -103,8 +78,6 @@ class FinnhubFeed extends EventEmitter {
     );
   }
 
-  // Real macro-release data for EconomicCalendarTierSystem's blackout/
-  // pre-event size-reduction gate — unchanged from before.
   async economicCalendar(from, to) {
     if (!this.apiKey) return [];
     const start = from || new Date().toISOString().slice(0, 10);
@@ -112,7 +85,6 @@ class FinnhubFeed extends EventEmitter {
     const result = await this._cached(`econ-cal:${start}:${end}`, async () =>
       (await this._get(`/calendar/economic?from=${start}&to=${end}`)).body
     );
-    // Finnhub shape varies by plan: { economicCalendar: [...] } or bare array
     let events = [];
     if (Array.isArray(result)) events = result;
     else if (Array.isArray(result?.economicCalendar)) events = result.economicCalendar;
@@ -171,8 +143,6 @@ class FinnhubFeed extends EventEmitter {
     return value;
   }
 
-  // ── Candle access (fallback data source for a rate-limited primary feed) ──
-
   candleAccessAvailable() {
     if (this._candleAccessConfirmed === false && this._candleAccessBlockedUntil && Date.now() < this._candleAccessBlockedUntil) {
       return false;
@@ -186,15 +156,7 @@ class FinnhubFeed extends EventEmitter {
     console.warn(`[FinnhubFeed] Candle access blocked for 24h — ${reason}. Falling back to whatever other source/cache is configured.`);
   }
 
-  /**
-   * Fetch the most recent `count` candles for a symbol/timeframe, returned
-   * in the same normalized shape TwelveDataFeed uses:
-   * { timestamp, open, high, low, close, volume, isClosed }
-   *
-   * Returns [] on any failure (no access, no data, network error) — never
-   * throws. Callers should treat an empty array as "fallback unavailable
-   * right now", not as a hard error.
-   */
+  // never throws. Callers should treat an empty array as "fallback unavailable right now", not as a hard error.
   async getLatestCandles(symbol, tf, count = 2) {
     if (!this.apiKey || !this.candleAccessAvailable()) return [];
 
@@ -204,7 +166,6 @@ class FinnhubFeed extends EventEmitter {
       return [];
     }
 
-    // H4 has no native resolution — pull enough 60min candles and aggregate.
     if (tf === 'H4') {
       const hourly = await this._fetchCandles(symbol, '60', count * 4 + 4);
       if (!hourly.length) return [];
@@ -218,8 +179,6 @@ class FinnhubFeed extends EventEmitter {
   async _fetchCandles(symbol, resolution, count) {
     const tdLikeSymbol = this.forexSymbolMap[symbol] || symbol;
     const now = Math.floor(Date.now() / 1000);
-    // Pull a comfortable multiple of `count` candles worth of range —
-    // resolution is in minutes except 'D'/'W'.
     const resMinutes = resolution === 'D' ? 1440 : resolution === 'W' ? 10080 : Number(resolution);
     const rangeSeconds = resMinutes * 60 * (count + 5);
     const from = now - rangeSeconds;
@@ -235,9 +194,6 @@ class FinnhubFeed extends EventEmitter {
       }
 
       if (body?.s !== 'ok' || !Array.isArray(body?.c) || body.c.length === 0) {
-        // 'no_data' or malformed — not necessarily a permissions problem,
-        // could just be an unmapped/unsupported symbol. Don't trip the
-        // circuit breaker for this, just return empty.
         return [];
       }
 
@@ -275,25 +231,7 @@ class FinnhubFeed extends EventEmitter {
     return out;
   }
 
-  // ─────────────────────────────────────────────
-  //  LIVE PRICE STREAM (WebSocket) — ADDED
-  // ─────────────────────────────────────────────
-  //
-  // Separate from the REST candle machinery above, which is 403-gated on
-  // an unconfirmed basis (see the note at the top of this file) — this
-  // path is confirmed free-tier per Finnhub's own docs (finnhub.io/docs/
-  // api/websocket-trades): real-time trade streaming, "1 API key can only
-  // open 1 connection at a time" is the only stated constraint, no
-  // paid-plan gate. Used here specifically for FOREX — crypto already has
-  // a strictly better source (Binance's own WS: no third-party hop, no
-  // key, no per-connection limit) so this is never subscribed for crypto
-  // symbols. Finnhub's docs also note some FX brokers don't support
-  // streaming (FXCM, Forex.com, FHFX) — the default forexSymbolMap above
-  // uses OANDA-sourced symbols, which isn't on that exclusion list, but
-  // this is genuinely a supplementary tick source layered on top of
-  // TwelveData's own polling, not a replacement for it — TwelveData
-  // remains the source of the OHLC candles the agents actually analyze;
-  // this only feeds the live price ticker (see the 'price' event below).
+  // Used here specifically for FOREX — crypto already has a strictly better source (Binance's own WS: no third-party hop, no key, no per-connection limit) so this is never subscribed for crypto symbols.
   connectPriceStream(symbols = []) {
     if (!this.apiKey) {
       console.warn('[FinnhubFeed] connectPriceStream: no apiKey configured, skipping');
@@ -312,17 +250,12 @@ class FinnhubFeed extends EventEmitter {
     this._wsClosedByUser = true;
     this._wsConnected = false;
     if (this._ws) {
-      try { this._ws.close(); } catch (_) { /* already closed */ }
+      try { this._ws.close(); } catch (_) { }
       this._ws = null;
     }
   }
 
-  /** DataIntegrityMonitor calls this (see feeds/data-integrity-monitor.js) —
-   * without it, this feed's status was indistinguishable from "not tracked"
-   * and always rendered as an ambiguous unknown/down state regardless of
-   * whether the price stream was actually up. */
   isConnected() {
-    // REST news/calendar work with a key even if the optional FX WS is down
     if (!this.apiKey) return false;
     return true;
   }
@@ -348,8 +281,6 @@ class FinnhubFeed extends EventEmitter {
       const reverse = this._reverseSymbolMap();
       for (const trade of msg.data) {
         const omniceeSymbol = reverse[trade.s];
-        // volume 0 means "price update, no actual trade" per Finnhub's own
-        // docs — still a real, usable price tick, not fabricated data.
         if (!omniceeSymbol || trade.p == null) continue;
         this.emit('price', { symbol: omniceeSymbol, price: Number(trade.p), timestamp: trade.t || Date.now() });
       }

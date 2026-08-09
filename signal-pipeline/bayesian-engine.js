@@ -1,37 +1,5 @@
 'use strict';
 
-/**
- * ============================================================
- *  BAYESIAN PROBABILITY ENGINE
- *  Real-Time Posterior Updates for Trade Success
- * ============================================================
- *
- *  Uses Bayes' theorem to continuously update the probability
- *  that a signal will be profitable, given multiple evidence
- *  streams:
- *
- *    P(Win | Evidence) = P(Evidence | Win) * P(Win) / P(Evidence)
- *
- *  Evidence factors:
- *    - Agent agreement level
- *    - Regime classification
- *    - Historical pattern win rate
- *    - Volume confirmation strength
- *    - Session quality
- *    - Momentum alignment
- *    - Structure confirmation
- *    - Entry quality score
- *    - Risk/reward ratio
- *    - Correlation exposure
- *    - Volatility regime
- *    - Time-of-day performance
- *
- *  Also maintains a Naive Bayes classifier trained on historical
- *  outcomes, and a Beta-Binomial model for win rate estimation
- *  with uncertainty quantification.
- * ============================================================
- */
-
 function round(n, d = 4) {
   return Number.isFinite(+n) ? parseFloat((+n).toFixed(d)) : 0;
 }
@@ -40,20 +8,17 @@ function clamp(v, lo, hi) {
   return Math.min(Math.max(v, lo), hi);
 }
 
-// Beta distribution PDF (unnormalized, for comparison)
 function betaPDF(x, a, b) {
   if (x <= 0 || x >= 1) return 0;
   return Math.pow(x, a - 1) * Math.pow(1 - x, b - 1);
 }
 
-// Beta distribution mean and variance
 function betaStats(a, b) {
   const mean = a / (a + b);
   const variance = (a * b) / ((a + b) ** 2 * (a + b + 1));
   return { mean: round(mean, 4), variance: round(variance, 6), stddev: round(Math.sqrt(variance), 4) };
 }
 
-// Log-gamma (Stirling approximation for large values)
 function logGamma(x) {
   if (x <= 0) return 0;
   if (x < 7) {
@@ -66,20 +31,15 @@ function logGamma(x) {
     + 1 / (12 * x) - 1 / (360 * x ** 3);
 }
 
-// Beta function B(a, b)
 function logBeta(a, b) {
   return logGamma(a) + logGamma(b) - logGamma(a + b);
 }
 
-/**
- * Evidence Factor: defines a likelihood ratio for a single piece of evidence.
- * P(evidence | win) / P(evidence | loss)
- */
 class EvidenceFactor {
   constructor(name, likelihoodWin, likelihoodLoss) {
     this.name = name;
-    this.likelihoodWin = likelihoodWin;   // P(this evidence | trade wins)
-    this.likelihoodLoss = likelihoodLoss; // P(this evidence | trade loses)
+    this.likelihoodWin = likelihoodWin;
+    this.likelihoodLoss = likelihoodLoss;
   }
 
   likelihoodRatio() {
@@ -88,13 +48,10 @@ class EvidenceFactor {
   }
 }
 
-/**
- * Naive Bayes classifier trained on historical trade features
- */
 class NaiveBayesClassifier {
   constructor() {
     this._classCounts = { WIN: 0, LOSS: 0 };
-    this._featureStats = {}; // feature -> { WIN: { sum, sumSq, count }, LOSS: {...} }
+    this._featureStats = {};
     this._totalSamples = 0;
   }
 
@@ -141,7 +98,6 @@ class NaiveBayesClassifier {
       logProbLoss += Math.log(Math.max(lossLik, 1e-10));
     }
 
-    // Normalize via log-sum-exp
     const maxLog = Math.max(logProbWin, logProbLoss);
     const probWin = Math.exp(logProbWin - maxLog);
     const probLoss = Math.exp(logProbLoss - maxLog);
@@ -160,7 +116,7 @@ class NaiveBayesClassifier {
   }
 
   _gaussianLikelihood(x, stat) {
-    if (stat.count < 3) return 0.5; // uniform if not enough data
+    if (stat.count < 3) return 0.5;
     const mean = stat.sum / stat.count;
     const variance = Math.max(
       (stat.sumSq / stat.count - mean * mean),
@@ -181,12 +137,8 @@ class NaiveBayesClassifier {
   }
 }
 
-/**
- * Beta-Binomial model for win rate estimation with uncertainty
- */
 class BetaBinomialModel {
   constructor(priorAlpha = 2, priorBeta = 2) {
-    // Weakly informative prior (slightly biased toward 50%)
     this._alpha = priorAlpha;
     this._beta = priorBeta;
     this._history = [];
@@ -198,14 +150,11 @@ class BetaBinomialModel {
     this._history.push({ isWin, timestamp: Date.now() });
   }
 
-  // Posterior mean (point estimate of win rate)
   posteriorMean() {
     return round(this._alpha / (this._alpha + this._beta), 4);
   }
 
-  // Credible interval (Bayesian confidence interval)
   credibleInterval(level = 0.95) {
-    // Use normal approximation for Beta distribution
     const stats = betaStats(this._alpha, this._beta);
     const z = level === 0.99 ? 2.576 : level === 0.95 ? 1.96 : 1.645;
     return {
@@ -216,9 +165,7 @@ class BetaBinomialModel {
     };
   }
 
-  // Probability that true win rate > threshold
   probAboveThreshold(threshold = 0.5) {
-    // Numerical integration using Simpson's rule
     const n = 1000;
     const h = (1 - threshold) / n;
     let sum = 0;
@@ -230,13 +177,7 @@ class BetaBinomialModel {
     }
     const integralAbove = (h / 3) * sum;
 
-    // FIX: betaPDF() is explicitly documented as unnormalized (x^(a-1)*(1-x)^(b-1)
-    // without dividing by B(a,b)). To get a true probability, the integral of the
-    // unnormalized density must be DIVIDED by B(a,b) = exp(logBeta(a,b)), not
-    // multiplied by it. The old code did `integralAbove * total`, which for any
-    // non-trivial alpha/beta (i.e. after real trade history accumulates) collapses
-    // toward ~0 regardless of the true win rate — verified numerically: a 50-10
-    // win/loss record produced probAbove50 ≈ 1e-27 instead of the correct ≈ 0.9999999.
+    // FIX: betaPDF() is explicitly documented as unnormalized (x^(a-1)(1-x)^(b-1) without dividing by B(a,b)).
     const total = Math.exp(logBeta(this._alpha, this._beta));
     return round(total > 0 ? integralAbove / total : 0.5, 4);
   }
@@ -248,45 +189,34 @@ class BetaBinomialModel {
       beta: this._beta,
       posteriorMean: this.posteriorMean(),
       ci95: ci,
-      samples: this._alpha + this._beta - 4, // subtract prior
+      samples: this._alpha + this._beta - 4,
       probAbove50: this.probAboveThreshold(0.5),
       probAbove55: this.probAboveThreshold(0.55),
     };
   }
 }
 
-/**
- * Main Bayesian Engine
- */
 class BayesianEngine {
   constructor(config = {}) {
-    this.basePrior = config.basePrior || 0.50; // 50% base rate
+    this.basePrior = config.basePrior || 0.50;
     this.minPosterior = config.minPosterior || 0.52;
     this.classifier = new NaiveBayesClassifier();
-    this._symbolModels = {}; // symbol -> BetaBinomialModel
-    this._regimeModels = {}; // regime -> BetaBinomialModel
-    this._sessionModels = {}; // session -> BetaBinomialModel
+    this._symbolModels = {};
+    this._regimeModels = {};
+    this._sessionModels = {};
   }
 
-  /**
-   * Compute posterior probability that a signal will win.
-   * Combines likelihood ratios from multiple evidence streams.
-   */
   evaluate({ signal, tradePlan, regime, entryOptimization, riskEvaluation, votes, session }) {
     const evidence = this._extractEvidence({
       signal, tradePlan, regime, entryOptimization, riskEvaluation, votes, session,
     });
 
-    // Method 1: Likelihood ratio chain
     const lrResult = this._likelihoodRatioUpdate(evidence);
 
-    // Method 2: Naive Bayes classifier
     const nbResult = this.classifier.predict(evidence.features);
 
-    // Method 3: Beta-Binomial model (if data available)
     const bbResult = this._betaBinomialEstimate(signal, regime, session);
 
-    // Ensemble: weighted combination
     const weights = { lr: 0.40, nb: 0.25, bb: 0.35 };
     const nbWeight = nbResult.confidence > 20 ? weights.nb : 0;
     const bbWeight = bbResult.confidence > 10 ? weights.bb : 0;
@@ -336,16 +266,12 @@ class BayesianEngine {
     };
   }
 
-  /**
-   * Record a trade outcome for learning
-   */
   recordOutcome({ signal, outcome, regime, session }) {
     const isWin = outcome === 'WIN' || (outcome?.pnlR > 0);
     const symbol = signal?.symbol || 'UNKNOWN';
     const regimeKey = regime?.regime || signal?.regime?.regime || 'UNKNOWN';
     const sessionKey = session?.best?.name || 'UNKNOWN';
 
-    // Update Beta-Binomial models
     if (!this._symbolModels[symbol]) this._symbolModels[symbol] = new BetaBinomialModel();
     this._symbolModels[symbol].update(isWin);
 
@@ -355,17 +281,16 @@ class BayesianEngine {
     if (!this._sessionModels[sessionKey]) this._sessionModels[sessionKey] = new BetaBinomialModel();
     this._sessionModels[sessionKey].update(isWin);
 
-    // Update Naive Bayes classifier
     const features = this._buildFeatures({ signal, regime, session });
     this.classifier.train(features, isWin ? 'WIN' : 'LOSS');
   }
 
   _likelihoodRatioUpdate(evidence) {
-    let odds = this.basePrior / (1 - this.basePrior); // prior odds
+    let odds = this.basePrior / (1 - this.basePrior);
 
     for (const factor of evidence.factors) {
       const lr = factor.likelihoodRatio();
-      odds *= clamp(lr, 0.1, 10); // cap extreme LRs
+      odds *= clamp(lr, 0.1, 10);
     }
 
     const posterior = odds / (1 + odds);
@@ -389,7 +314,6 @@ class BayesianEngine {
       return { posteriorMean: this.basePrior, ci95: { lower: 0.3, upper: 0.7 }, confidence: 0 };
     }
 
-    // Weighted average of Beta-Binomial posteriors
     const means = models.map(m => m.posteriorMean());
     const totalSamples = models.reduce((s, m) => s + (m._alpha + m._beta - 4), 0);
     const posteriorMean = means.reduce((s, m) => s + m, 0) / means.length;
@@ -411,7 +335,6 @@ class BayesianEngine {
     const factors = [];
     const features = {};
 
-    // Agent agreement
     const agentDirs = Object.values(votes || {}).filter(v => v?.direction).map(v => v.direction.toUpperCase());
     const mainDir = (signal?.action || signal?.direction || 'WAIT').toUpperCase();
     const agreeing = agentDirs.filter(d => d === mainDir).length;
@@ -427,7 +350,6 @@ class BayesianEngine {
       factors.push(new EvidenceFactor('Low agent agreement', 0.35, 0.65));
     }
 
-    // Score quality
     const score = signal?.score?.final || 0;
     features.score = score;
     if (score >= 85) {
@@ -438,7 +360,6 @@ class BayesianEngine {
       factors.push(new EvidenceFactor('Below threshold score', 0.35, 0.60));
     }
 
-    // Regime tradeability
     const tradeability = regime?.tradeability || 50;
     features.tradeability = tradeability;
     if (tradeability >= 75) {
@@ -449,7 +370,6 @@ class BayesianEngine {
       factors.push(new EvidenceFactor('Low tradeability regime', 0.30, 0.65));
     }
 
-    // Structure
     const structure = regime?.structure || 'UNKNOWN';
     features.directional = structure === 'DIRECTIONAL' ? 1 : 0;
     if (structure === 'DIRECTIONAL') {
@@ -458,7 +378,6 @@ class BayesianEngine {
       factors.push(new EvidenceFactor('Choppy structure', 0.25, 0.70));
     }
 
-    // Risk/reward
     const rr = tradePlan?.targets?.tp1?.rr || signal?.targets?.tp1?.rr || 0;
     features.rr = rr;
     if (rr >= 3) {
@@ -471,7 +390,6 @@ class BayesianEngine {
       factors.push(new EvidenceFactor('Poor R:R < 1.5', 0.30, 0.65));
     }
 
-    // Entry quality
     const entryQ = entryOptimization?.qualityScore || 0;
     features.entryQuality = entryQ;
     if (entryQ >= 80) {
@@ -480,7 +398,6 @@ class BayesianEngine {
       factors.push(new EvidenceFactor('Moderate entry quality', 0.55, 0.45));
     }
 
-    // Volatility regime
     const vol = regime?.volatility || 'NORMAL';
     features.volExpansion = vol === 'EXPANSION' ? 1 : 0;
     if (vol === 'EXPANSION') {
@@ -489,7 +406,6 @@ class BayesianEngine {
       factors.push(new EvidenceFactor('Volatility compression', 0.48, 0.52));
     }
 
-    // Session quality
     const sessQuality = session?.best?.quality || 'LOW';
     features.sessionQuality = sessQuality === 'HIGHEST' ? 1.0 : sessQuality === 'HIGH' ? 0.7 : 0.3;
     if (sessQuality === 'HIGHEST') {
@@ -498,7 +414,6 @@ class BayesianEngine {
       factors.push(new EvidenceFactor('High quality session', 0.58, 0.45));
     }
 
-    // Risk approval
     if (riskEvaluation?.approved === false) {
       factors.push(new EvidenceFactor('Risk engine rejected', 0.15, 0.80));
       features.riskRejected = 1;

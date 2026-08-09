@@ -1,20 +1,3 @@
-/**
- * ============================================================
- *  FMP FEED — Economic Calendar (redundant source)
- *  File: feeds/fmp-feed.js
- * ============================================================
- *  Financial Modeling Prep's economic calendar, normalized to the
- *  exact same {name, currency, time, impact, actual, estimate,
- *  prev, unit} shape FinnhubFeed.economicCalendar() already
- *  produces (feeds/finnhub-feed.js). This exists specifically as
- *  a second, independent source for sessionFilter's
- *  EconomicCalendarTierSystem blackout gate — if FINNHUB_API_KEY
- *  is unset or Finnhub has an outage/quota issue, that safety
- *  gate would otherwise silently report "CLEAR" with zero real
- *  event awareness (see index.js's pollEconomicCalendar). Optional
- *  — if FMP_API_KEY is unset, this feed simply reports disabled.
- * ============================================================
- */
 
 'use strict';
 
@@ -26,10 +9,6 @@ class FMPFeed {
     this.cacheMs = Number(config.cacheMs || process.env.FMP_CACHE_MS || 30 * 60000);
     this._cache = new Map();
     // FIX: /api/v3/economic_calendar is FMP's deprecated legacy endpoint.
-    // Current endpoint is /stable/economic-calendar (confirmed against FMP's
-    // live docs). Response field names are unchanged (date, country, event,
-    // currency, previous, estimate, actual, impact, change, changePercentage)
-    // — only the path structure changed — plus a new 'unit' field was added.
     this._baseUrl = 'https://financialmodelingprep.com/stable';
   }
 
@@ -61,10 +40,7 @@ class FMPFeed {
       this._get(`/economic-calendar?from=${start}&to=${end}`)
     );
 
-    // FMP returns a plain object (often {"Error Message": "..."}) instead of
-    // an array on bad/missing key or rate-limit — same silent-shape risk
-    // Alpha Vantage's Note/Information has, so check explicitly rather than
-    // let Array.isArray's false fall through unnoticed.
+    // Note/Information has, so check explicitly rather than let Array.isArray's false fall through unnoticed.
     if (!Array.isArray(result)) {
       throw new Error(result?.['Error Message'] || 'FMP economic_calendar returned a non-array response');
     }
@@ -75,7 +51,7 @@ class FMPFeed {
         name: e.event || 'Economic Event',
         currency: this._countryToCurrency(e.country),
         time: new Date(e.date).getTime(),
-        impact: (e.impact || '').toLowerCase() || null, // FMP: 'Low' | 'Medium' | 'High'
+        impact: (e.impact || '').toLowerCase() || null,
         actual: e.actual ?? null,
         estimate: e.estimate ?? null,
         prev: e.previous ?? null,
@@ -84,10 +60,6 @@ class FMPFeed {
       .filter(e => e.currency && Number.isFinite(e.time));
   }
 
-  // Same mapping as FinnhubFeed._countryToCurrency (feeds/finnhub-feed.js) —
-  // kept as an independent copy rather than a shared import so this feed has
-  // no dependency on Finnhub being present, matching every other feed's
-  // fully self-contained convention in this codebase.
   _countryToCurrency(country) {
     const map = {
       US: 'USD', EU: 'EUR', 'United States': 'USD', 'Euro Area': 'EUR',

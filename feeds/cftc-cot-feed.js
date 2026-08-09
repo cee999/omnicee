@@ -2,28 +2,7 @@
 
 const https = require('https');
 
-/**
- * CFTCCotFeed
- * ─────────────────────────────────────────────
- * Fetches real weekly Commitment of Traders (Legacy Futures-Only) data from
- * CFTC's free public Socrata API — no API key required. Published every
- * Friday ~3:30pm ET, covering the prior Tuesday's positioning.
- *
- * This was the missing real data source for feeds/cot-report-parser.js's
- * COTReportParser/COTAnalyzer, which are fully built (percentile extremity,
- * week-over-week change, contrarian signal generation) but had zero call
- * sites feeding them real data anywhere in the codebase.
- *
- * IMPORTANT — direction convention: CFTC currency futures are always quoted
- * as "foreign currency per USD" from the perspective of the futures contract
- * itself (e.g. long "JAPANESE YEN" future = long JPY = betting JPY
- * strengthens vs USD). For symbols where the foreign currency is the BASE
- * (EURUSD, GBPUSD, AUDUSD, NZDUSD), that maps directly onto "bullish the
- * symbol". For symbols where USD is the BASE and the foreign currency is
- * the QUOTE (USDJPY, USDCHF, USDCAD), it's INVERTED: long JPY futures means
- * bearish USDJPY. Getting this backwards would silently flip the COT bias
- * for exactly those three pairs. See `inverted` below.
- */
+// IMPORTANT — direction convention: CFTC currency futures are always quoted as "foreign currency per USD" from the perspective of the futures contract itself (e.g.
 const SYMBOL_TO_CFTC_CONTRACT = {
   EURUSD:  { contract: 'EURO FX - CHICAGO MERCANTILE EXCHANGE',                 inverted: false },
   GBPUSD:  { contract: 'BRITISH POUND STERLING - CHICAGO MERCANTILE EXCHANGE',  inverted: false },
@@ -43,30 +22,16 @@ const USER_AGENT = 'omnicee-trading-system/1.0 (+https://github.com/cee999/omnic
 
 class CFTCCotFeed {
   constructor(config = {}) {
-    // CFTC only publishes once a week (Friday ~15:30 ET) — an aggressive
-    // cache is correct here, not a workaround. Default 12h.
     this.cacheMs = Number(config.cacheMs || 12 * 3600000);
     this.timeoutMs = Number(config.timeoutMs || 15000);
-    this._cache = new Map(); // contract name -> { rows, ts }
+    this._cache = new Map();
   }
 
-  enabled() { return true; } // free public API, no key required
+  enabled() { return true; }
   isConnected() { return true; }
 
-  /** List of trading symbols this feed knows how to map to a CFTC contract. */
   supportedSymbols() { return Object.keys(SYMBOL_TO_CFTC_CONTRACT); }
 
-  /**
-   * Fetch the two most recent Legacy report rows for a trading symbol
-   * (latest + previous, so COTReportParser can compute week-over-week
-   * change from a single call), with the sign of every long/short field
-   * flipped if this symbol's CFTC contract is direction-inverted.
-   *
-   * @returns {Promise<Array|null>} rows in oldest→newest order, ready to
-   *          pass straight into COTReportParser.ingest(symbol, row), or
-   *          null if this symbol has no known CFTC mapping or the fetch
-   *          failed.
-   */
   async fetchForSymbol(symbol) {
     const mapping = SYMBOL_TO_CFTC_CONTRACT[symbol];
     if (!mapping) return null;
@@ -74,12 +39,10 @@ class CFTCCotFeed {
     const rows = await this._fetchContract(mapping.contract);
     if (!rows || rows.length === 0) return null;
 
-    const ordered = [...rows].reverse(); // API returns newest-first; parser expects oldest-first
+    const ordered = [...rows].reverse();
     if (!mapping.inverted) return ordered;
 
-    // FIX-in-advance: without this, USDJPY/USDCHF/USDCAD would silently get
-    // the exact opposite COT bias, since CFTC always reports these contracts
-    // in terms of the foreign currency, not the USD-base trading pair.
+    // FIX-in-advance: without this, USDJPY/USDCHF/USDCAD would silently get the exact opposite COT bias, since CFTC always reports these contracts in terms of the foreign currency, not the USD-base trading...
     return ordered.map(row => ({
       ...row,
       noncomm_positions_long_all: row.noncomm_positions_short_all,
@@ -106,8 +69,6 @@ class CFTCCotFeed {
     try {
       rows = await this._get(url);
     } catch (err) {
-      // Don't cache failures — retry on next call rather than going dark
-      // for the full cache window on a transient network error.
       return cached ? cached.rows : null;
     }
     if (!Array.isArray(rows)) return cached ? cached.rows : null;

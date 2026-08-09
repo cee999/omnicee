@@ -1,8 +1,4 @@
 'use strict';
-/**
- * backtest/stats.js
- * Computes standard trading performance statistics from a closed-trade list.
- */
 
 function computeStats(trades, equityCurve, startBalance) {
   if (!trades.length) {
@@ -21,7 +17,6 @@ function computeStats(trades, equityCurve, startBalance) {
   const avgLossR = losses.length ? grossLossR / losses.length : 0;
   const expectancyR = trades.reduce((s, t) => s + t.pnlR, 0) / trades.length;
 
-  // Max drawdown from the equity curve (peak-to-trough, in %).
   let peak = startBalance, maxDD = 0;
   for (const point of equityCurve) {
     if (point.balance > peak) peak = point.balance;
@@ -29,9 +24,6 @@ function computeStats(trades, equityCurve, startBalance) {
     if (dd > maxDD) maxDD = dd;
   }
 
-  // Simple Sharpe-like ratio on the per-trade pnlPct series (not annualized —
-  // meaningful only as a relative comparison between backtest runs, not as
-  // a formal annualized Sharpe ratio).
   const pnlPcts = trades.map(t => t.pnlPct);
   const meanPct = pnlPcts.reduce((s, v) => s + v, 0) / pnlPcts.length;
   const variance = pnlPcts.reduce((s, v) => s + (v - meanPct) ** 2, 0) / pnlPcts.length;
@@ -41,13 +33,8 @@ function computeStats(trades, equityCurve, startBalance) {
   const bySymbol = groupStats(trades, t => t.symbol);
   const byGrade = groupStats(trades, t => t.grade || 'UNGRADED');
   const byDirection = groupStats(trades, t => t.direction);
-  // Doc item 47 (Scenario Simulator): "trending, ranging, volatile,
-  // low-volatility" — bucketing this single run's trades by the regime
-  // active at each trade's entry answers the same question a suite of
-  // separate curated-window backtests would, without needing to hunt down
-  // and hand-pick historical date ranges for each scenario.
-  const byMarketStructure  = groupStats(trades, t => t.structure  || 'UNKNOWN'); // DIRECTIONAL / RANGE / CHOP
-  const byVolatilityRegime = groupStats(trades, t => t.volatility || 'UNKNOWN'); // EXPANSION / NORMAL / COMPRESSION
+  const byMarketStructure  = groupStats(trades, t => t.structure  || 'UNKNOWN');
+  const byVolatilityRegime = groupStats(trades, t => t.volatility || 'UNKNOWN');
 
   const finalBalance = equityCurve.length ? equityCurve[equityCurve.length - 1].balance : startBalance;
   const totalReturnPct = ((finalBalance - startBalance) / startBalance) * 100;

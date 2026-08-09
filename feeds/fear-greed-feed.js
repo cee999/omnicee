@@ -1,7 +1,3 @@
-/**
- * Crypto Fear & Greed Index — Alternative.me, free, no key
- * https://api.alternative.me/fng/
- */
 'use strict';
 
 const https = require('https');
@@ -28,7 +24,7 @@ class FearGreedFeed {
   constructor() {
     this._cache = null;
     this._cacheTs = 0;
-    this.cacheMs = 30 * 60 * 1000; // 30 min
+    this.cacheMs = 30 * 60 * 1000;
   }
 
   enabled() { return true; }

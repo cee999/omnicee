@@ -1,7 +1,3 @@
-/**
- * DERIV — primary free live ticks + OHLC when MT5 is offline.
- * Server-side only (Render). Laptop can be OFF.
- */
 'use strict';
 
 const EventEmitter = require('events');
@@ -59,7 +55,6 @@ class DerivFeed extends EventEmitter {
   start() {
     this._stopped = false;
     this._connect();
-    // If no tick for 25s while "connected", force reconnect
     this._watchTimer = setInterval(() => {
       if (this._stopped) return;
       if (!this._connected) return;
@@ -120,7 +115,6 @@ class DerivFeed extends EventEmitter {
       this._connected = true;
       this.emit('connected', { url, appId: this.appId });
       this._subscribeTicks();
-      // Ticks first; history after 2s so subscriptions are not starved
       setTimeout(() => {
         if (this._stopped || !this._connected) return;
         this._queueAllHistory();
@@ -202,7 +196,6 @@ class DerivFeed extends EventEmitter {
 
   _handle(msg) {
     if (msg.error) {
-      // Don't die on one bad symbol
       this.emit('error', new Error(msg.error.message || JSON.stringify(msg.error)));
       return;
     }

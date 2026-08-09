@@ -1,32 +1,6 @@
 'use strict';
 
-/**
- * ============================================================
- *  FRACTAL ANALYSIS AGENT — Multi-Scale Market Memory Detection
- *  Institutional-Grade Non-Linear Market Analysis
- * ============================================================
- *
- *  Analyzes markets through the lens of fractal geometry and
- *  chaos theory to detect:
- *
- *  1. Hurst Exponent (R/S Analysis) — persistence vs anti-persistence
- *  2. Fractal Dimension — market complexity/roughness
- *  3. Detrended Fluctuation Analysis (DFA) — long-range dependence
- *  4. Fractal Adaptive Moving Average (FRAMA) — auto-adapting MA
- *  5. Multi-Fractal Spectrum — varying market memory at different scales
- *  6. Elliott Wave Approximation — fractal wave patterns
- *  7. Price Self-Similarity — repeating patterns across timeframes
- *  8. Chaos Theory Indicators — Lyapunov exponent estimate
- *
- *  These metrics reveal whether the market is trending, mean-
- *  reverting, or random at the current moment — critical for
- *  strategy selection.
- *
- *  H > 0.5: persistent/trending → use trend-following
- *  H = 0.5: random walk → no edge
- *  H < 0.5: anti-persistent → use mean-reversion
- * ============================================================
- */
+// Chaos Theory Indicators — Lyapunov exponent estimate These metrics reveal whether the market is trending, mean- reverting, or random at the current moment — critical for strategy selection.
 
 const EventEmitter = require('events');
 
@@ -48,9 +22,6 @@ function clamp(v, lo, hi) {
   return Math.min(Math.max(v, lo), hi);
 }
 
-/**
- * Rescaled Range Analysis — computes Hurst exponent
- */
 class RSAnalysis {
   static hurst(values, minBlock = 8, maxBlock = null) {
     const n = values.length;
@@ -101,7 +72,6 @@ class RSAnalysis {
 
     if (logN.length < 3) return { H: 0.5, confidence: 0, note: 'R/S regression failed' };
 
-    // Linear regression: log(R/S) = H * log(n) + c
     const xMean = avg(logN);
     const yMean = avg(logRS);
     let num = 0, den = 0;
@@ -111,7 +81,6 @@ class RSAnalysis {
     }
     const H = den !== 0 ? num / den : 0.5;
 
-    // R-squared for confidence
     const fitted = logN.map(x => yMean + H * (x - xMean));
     const ssTot = logRS.reduce((s, y) => s + (y - yMean) ** 2, 0);
     const ssRes = logRS.reduce((s, y, i) => s + (y - fitted[i]) ** 2, 0);
@@ -127,15 +96,11 @@ class RSAnalysis {
   }
 }
 
-/**
- * Detrended Fluctuation Analysis (DFA)
- */
 class DFAnalysis {
   static analyze(values) {
     const n = values.length;
     if (n < 50) return { alpha: 0.5, confidence: 0, note: 'Insufficient data' };
 
-    // Integrate the series
     const mean = avg(values);
     const integrated = [];
     let sum = 0;
@@ -144,7 +109,6 @@ class DFAnalysis {
       integrated.push(sum);
     }
 
-    // Compute fluctuation at different scales
     const scales = [8, 12, 16, 20, 30, 40, 50].filter(s => s <= Math.floor(n / 4));
     if (scales.length < 3) return { alpha: 0.5, confidence: 0, note: 'Insufficient scales' };
 
@@ -158,7 +122,6 @@ class DFAnalysis {
       for (let seg = 0; seg < nSegments; seg++) {
         const segment = integrated.slice(seg * s, (seg + 1) * s);
 
-        // Local linear trend
         const xM = (s - 1) / 2;
         const yM = avg(segment);
         let num = 0, den = 0;
@@ -169,7 +132,6 @@ class DFAnalysis {
         const slope = den ? num / den : 0;
         const intercept = yM - slope * xM;
 
-        // Detrended variance
         let detrendedVar = 0;
         for (let i = 0; i < s; i++) {
           const trend = intercept + slope * i;
@@ -185,7 +147,6 @@ class DFAnalysis {
       }
     }
 
-    // Scaling exponent α (same as Hurst but more robust)
     const xMean = avg(logScales);
     const yMean = avg(logF);
     let num = 0, den = 0;
@@ -204,9 +165,6 @@ class DFAnalysis {
   }
 }
 
-/**
- * Fractal Adaptive Moving Average (FRAMA)
- */
 class FRAMA {
   static compute(closes, period = 16) {
     if (closes.length < period * 2) return { frama: null, speed: 0 };
@@ -216,7 +174,6 @@ class FRAMA {
     const firstHalf = recent.slice(0, half);
     const secondHalf = recent.slice(half);
 
-    // Fractal dimensions of each half
     const n1 = (Math.max(...firstHalf) - Math.min(...firstHalf)) / half;
     const n2 = (Math.max(...secondHalf) - Math.min(...secondHalf)) / half;
     const n3 = (Math.max(...recent) - Math.min(...recent)) / period;
@@ -226,11 +183,9 @@ class FRAMA {
       D = (Math.log(n1 + n2) - Math.log(n3)) / Math.log(2);
     }
 
-    // FRAMA alpha
-    const alpha = Math.exp(-4.6 * (D - 1)); // Johnson's formula
+    const alpha = Math.exp(-4.6 * (D - 1));
     const clampedAlpha = clamp(alpha, 0.01, 1);
 
-    // Compute FRAMA as EMA with dynamic alpha
     let frama = closes[0];
     for (let i = 1; i < closes.length; i++) {
       frama = clampedAlpha * closes[i] + (1 - clampedAlpha) * frama;
@@ -246,15 +201,11 @@ class FRAMA {
   }
 }
 
-/**
- * Lyapunov Exponent Estimation (sensitivity to initial conditions)
- */
 class LyapunovEstimator {
   static estimate(values, embeddingDim = 3, delay = 1) {
     const n = values.length;
     if (n < 50) return { exponent: 0, chaotic: false, note: 'Insufficient data' };
 
-    // Phase space reconstruction
     const vectors = [];
     for (let i = 0; i < n - (embeddingDim - 1) * delay; i++) {
       const vec = [];
@@ -266,7 +217,6 @@ class LyapunovEstimator {
 
     if (vectors.length < 20) return { exponent: 0, chaotic: false, note: 'Insufficient vectors' };
 
-    // Find nearest neighbors and track divergence
     let totalDivergence = 0;
     let validPairs = 0;
 
@@ -310,9 +260,6 @@ class LyapunovEstimator {
   }
 }
 
-/**
- * Main Fractal Agent
- */
 class FractalAgent extends EventEmitter {
   constructor(config = {}) {
     super();
@@ -338,11 +285,9 @@ class FractalAgent extends EventEmitter {
     let shortScore = 45;
     let edgeMultiplier = 1.0;
 
-    // R/S Hurst Exponent
     const hurst = RSAnalysis.hurst(returns);
     if (hurst.confidence > 50) {
       if (hurst.regime === 'PERSISTENT') {
-        // Trending market — follow the current trend
         const recentTrend = closes[closes.length - 1] > closes[closes.length - 20]
           ? 'LONG' : 'SHORT';
         if (recentTrend === 'LONG') longScore += 12;
@@ -350,9 +295,8 @@ class FractalAgent extends EventEmitter {
         edgeMultiplier *= 1.15;
         reasons.push(`Hurst H=${hurst.H} — persistent/trending, follow ${recentTrend} trend`);
       } else if (hurst.regime === 'ANTI_PERSISTENT') {
-        // Mean-reverting — fade the recent move
         const recentMove = closes[closes.length - 1] > closes[closes.length - 5]
-          ? 'SHORT' : 'LONG'; // fade it
+          ? 'SHORT' : 'LONG';
         if (recentMove === 'LONG') longScore += 10;
         else shortScore += 10;
         reasons.push(`Hurst H=${hurst.H} — anti-persistent/mean-reverting, fade the move`);
@@ -362,7 +306,6 @@ class FractalAgent extends EventEmitter {
       }
     }
 
-    // DFA Analysis
     const dfa = DFAnalysis.analyze(returns);
     if (dfa.confidence > 30) {
       if (dfa.regime === 'LONG_RANGE_CORRELATED') {
@@ -373,12 +316,10 @@ class FractalAgent extends EventEmitter {
       }
     }
 
-    // FRAMA
     const frama = FRAMA.compute(closes);
     if (frama.frama !== null) {
       const price = closes[closes.length - 1];
       if (frama.speed === 'FAST') {
-        // FRAMA is fast = trending, direction = price vs FRAMA
         if (price > frama.frama) {
           longScore += 8;
           reasons.push(`FRAMA fast mode (D=${frama.fractalDimension}), price above FRAMA — bullish trend`);
@@ -392,18 +333,15 @@ class FractalAgent extends EventEmitter {
       }
     }
 
-    // Lyapunov Exponent
     const lyap = LyapunovEstimator.estimate(returns);
     if (lyap.chaotic) {
       edgeMultiplier *= 0.85;
       reasons.push(`Lyapunov λ=${lyap.exponent} — chaotic dynamics, reduce exposure`);
     }
 
-    // Apply edge multiplier
     longScore = clamp(longScore * edgeMultiplier, 0, 100);
     shortScore = clamp(shortScore * edgeMultiplier, 0, 100);
 
-    // Final direction
     const edge = Math.abs(longScore - shortScore);
     const direction = edge < 6 ? 'WAIT' : longScore > shortScore ? 'LONG' : 'SHORT';
     const score = direction === 'LONG' ? longScore : direction === 'SHORT' ? shortScore : Math.max(longScore, shortScore);

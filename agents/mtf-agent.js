@@ -1,36 +1,5 @@
-/**
- * ============================================================
- *  MTF AGENT — Multi-Timeframe Alignment & Confluence Engine
- *  AI Trading Assistant · Layer 4 · Specialized Agent #2
- * ============================================================
- *
- *  What this agent does:
- *    - Reads candle data across ALL timeframes simultaneously
- *      (M1, M5, M15, M30, H1, H2, H4, H6, H8, H12, D1, W1)
- *    - Determines the Higher Timeframe (HTF) directional bias
- *      and LOCKS it — no trade against the HTF trend ever
- *    - Scores trend alignment: how many TFs agree on direction
- *    - Detects pullback entries on LTF within HTF trend
- *    - Identifies key HTF Points of Interest (POIs)
- *    - Flags when price is AT a HTF POI (highest probability entries)
- *    - Detects session-based killzone alignment
- *    - Produces a 0–100 score for the signal-scorer.js vote
- *    - Tracks momentum divergence across timeframes
- *    - Identifies range vs trending market structure per TF
- *    - Computes ADX trend strength per timeframe
- *    - Tracks EMA alignment across timeframes
- *    - Higher timeframe confluence: when D1+H4+H1 all agree = A+ setup
- *
- *  Outputs to signal-scorer.js:
- *    { direction, score, grade, reasons, analysis, htfBias }
- * ============================================================
- */
 
 'use strict';
-
-// ─────────────────────────────────────────────
-//  CONSTANTS
-// ─────────────────────────────────────────────
 
 const DIRECTION = {
   LONG:    'LONG',
@@ -53,10 +22,8 @@ const MARKET_STATE = {
   REVERSAL:  'REVERSAL',
 };
 
-// Timeframe hierarchy — higher index = higher timeframe
 const TF_HIERARCHY = ['M1','M5','M15','M30','H1','H2','H4','H6','H8','H12','D1','W1'];
 
-// Timeframe weights for confluence scoring — higher TF = more weight
 const TF_WEIGHTS = {
   M1:  0.03,
   M5:  0.05,
@@ -72,20 +39,14 @@ const TF_WEIGHTS = {
   W1:  0.06,
 };
 
-// Minimum candles needed per TF for reliable analysis
 const MIN_CANDLES_PER_TF = {
   M1:  100, M5: 80, M15: 60, M30: 50,
   H1:  50,  H2: 40, H4:  40, H6:  30,
   H8:  30,  H12: 25, D1: 20, W1:  15,
 };
 
-// ADX threshold for trending market
 const ADX_TREND_THRESHOLD     = 25;
 const ADX_STRONG_THRESHOLD    = 35;
-
-// ─────────────────────────────────────────────
-//  MATHEMATICAL UTILITIES
-// ─────────────────────────────────────────────
 
 function round(n, d = 5) {
   return parseFloat(n.toFixed(d));
@@ -106,25 +67,14 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-// ─────────────────────────────────────────────
-//  INDICATOR LIBRARY
-// ─────────────────────────────────────────────
-
 class Indicators {
 
-  /**
-   * Simple Moving Average
-   */
   static sma(closes, period) {
     if (closes.length < period) return null;
     const slice = closes.slice(-period);
     return round(average(slice));
   }
 
-  /**
-   * Exponential Moving Average
-   * Uses standard multiplier: 2 / (period + 1)
-   */
   static ema(closes, period) {
     if (closes.length < period) return null;
     const k   = 2 / (period + 1);
@@ -135,9 +85,6 @@ class Indicators {
     return round(ema);
   }
 
-  /**
-   * Full EMA history array — needed for MACD and signal lines
-   */
   static emaArray(closes, period) {
     if (closes.length < period) return [];
     const k    = 2 / (period + 1);
@@ -151,10 +98,6 @@ class Indicators {
     return result.map(v => round(v));
   }
 
-  /**
-   * RSI — Relative Strength Index
-   * Standard Wilder smoothing (RMA)
-   */
   static rsi(closes, period = 14) {
     if (closes.length < period + 1) return null;
 
@@ -183,17 +126,12 @@ class Indicators {
     return round(100 - 100 / (1 + rs), 2);
   }
 
-  /**
-   * MACD — Moving Average Convergence Divergence
-   * Returns { macd, signal, histogram }
-   */
   static macd(closes, fast = 12, slow = 26, signal = 9) {
     if (closes.length < slow + signal) return null;
 
     const fastEMA   = this.emaArray(closes, fast);
     const slowEMA   = this.emaArray(closes, slow);
 
-    // Align arrays — fast has more values
     const offset    = fastEMA.length - slowEMA.length;
     const macdLine  = slowEMA.map((v, i) => round(fastEMA[i + offset] - v));
 
@@ -208,20 +146,12 @@ class Indicators {
       histogram: histogram.slice(-1)[0],
       prevHistogram: histogram.slice(-2)[0] || 0,
       increasing: histogram.slice(-1)[0] > (histogram.slice(-2)[0] || 0),
-      // FIX: was `signalLine.slice(-2)[0] < macdLine.slice(-(signalLine.length))[macdLine.length - signalLine.length - 1]`
-      // — a confused index into the wrong array that didn't compute a real
-      // crossover. Since macdLine and signalLine both end at the same latest
-      // candle (just different lengths due to lookback), comparing
-      // .slice(-2)[0] and .slice(-1)[0] directly on each already gives
-      // time-aligned prior/current values — no manual offset needed.
+      // FIX: was `signalLine.slice(-2)[0] < macdLine.slice(-(signalLine.length))[macdLine.length - signalLine.length - 1]` — a confused index into the wrong array that didn't compute a real crossover.
       crossedUp:  macdLine.slice(-2)[0] <= signalLine.slice(-2)[0]
         && macdLine.slice(-1)[0] > signalLine.slice(-1)[0],
     };
   }
 
-  /**
-   * Average True Range
-   */
   static atr(candles, period = 14) {
     if (candles.length < period + 1) return null;
 
@@ -233,7 +163,6 @@ class Indicators {
       trs.push(Math.max(high - low, Math.abs(high - prev), Math.abs(low - prev)));
     }
 
-    // Wilder smoothing
     let atr = average(trs.slice(0, period));
     for (let i = period; i < trs.length; i++) {
       atr = (atr * (period - 1) + trs[i]) / period;
@@ -242,10 +171,6 @@ class Indicators {
     return round(atr);
   }
 
-  /**
-   * ADX — Average Directional Index
-   * Returns { adx, plusDI, minusDI, trend: 'UP'|'DOWN'|'NONE' }
-   */
   static adx(candles, period = 14) {
     if (candles.length < period * 2) return null;
 
@@ -269,7 +194,6 @@ class Indicators {
       minusDMs.push(minusDM);
     }
 
-    // Wilder smooth
     const smooth = (arr, p) => {
       let s = arr.slice(0, p).reduce((a, b) => a + b, 0);
       const result = [s];
@@ -313,10 +237,6 @@ class Indicators {
     };
   }
 
-  /**
-   * Bollinger Bands
-   * Returns { upper, middle, lower, width, percentB, isSqueeze }
-   */
   static bollingerBands(closes, period = 20, multiplier = 2) {
     if (closes.length < period) return null;
 
@@ -329,7 +249,6 @@ class Indicators {
     const current = closes[closes.length - 1];
     const percentB = (current - lower) / (upper - lower);
 
-    // Squeeze = bands very tight (width below 4% for forex, 6% for crypto)
     const isSqueeze = width < 5;
 
     return {
@@ -343,10 +262,6 @@ class Indicators {
     };
   }
 
-  /**
-   * Stochastic Oscillator
-   * Returns { k, d, zone: 'OVERBOUGHT'|'OVERSOLD'|'NEUTRAL', crossUp, crossDown }
-   */
   static stochastic(candles, kPeriod = 14, dPeriod = 3, smooth = 3) {
     if (candles.length < kPeriod + dPeriod) return null;
 
@@ -359,13 +274,11 @@ class Indicators {
       rawK.push(range === 0 ? 50 : ((candles[i].close - lowest) / range) * 100);
     }
 
-    // Smooth K
     const smoothK = [];
     for (let i = smooth - 1; i < rawK.length; i++) {
       smoothK.push(average(rawK.slice(i - smooth + 1, i + 1)));
     }
 
-    // D line = SMA of smooth K
     const dLine = [];
     for (let i = dPeriod - 1; i < smoothK.length; i++) {
       dLine.push(average(smoothK.slice(i - dPeriod + 1, i + 1)));
@@ -387,10 +300,6 @@ class Indicators {
     };
   }
 
-  /**
-   * Ichimoku Cloud
-   * Returns full Ichimoku object including cloud color and signals
-   */
   static ichimoku(candles, conversion = 9, base = 26, lagging = 52, displacement = 26) {
     if (candles.length < lagging + displacement) return null;
 
@@ -400,28 +309,23 @@ class Indicators {
 
     const n = candles.length;
 
-    // Tenkan-sen (Conversion Line) = (9H + 9L) / 2
     const tenkan = midpoint(
       highest(candles.slice(n - conversion)),
       lowest(candles.slice(n - conversion))
     );
 
-    // Kijun-sen (Base Line) = (26H + 26L) / 2
     const kijun = midpoint(
       highest(candles.slice(n - base)),
       lowest(candles.slice(n - base))
     );
 
-    // Senkou Span A = (Tenkan + Kijun) / 2, displaced +26
     const senkouA = (tenkan + kijun) / 2;
 
-    // Senkou Span B = (52H + 52L) / 2, displaced +26
     const senkouB = midpoint(
       highest(candles.slice(n - lagging)),
       lowest(candles.slice(n - lagging))
     );
 
-    // Chikou Span = current close, displaced -26
     const chikou = candles[n - 1].close;
     const chikouRefClose = candles[n - 1 - displacement]?.close ?? null;
 
@@ -449,7 +353,6 @@ class Indicators {
       priceVsCloud,
       tkCross,
       chikouAbovePrice: chikouRefClose !== null ? chikou > chikouRefClose : null,
-      // Full bullish setup = price above cloud + TK golden cross + Chikou above price 26 bars ago
       isBullishSetup: priceVsCloud === 'ABOVE_CLOUD'
         && tkCross === 'GOLDEN'
         && (chikouRefClose === null || chikou > chikouRefClose),
@@ -459,11 +362,6 @@ class Indicators {
     };
   }
 
-  /**
-   * VWAP — Volume Weighted Average Price
-   * Calculated from session open (or first candle if no session boundary)
-   * Returns { vwap, upperBand1, lowerBand1, upperBand2, lowerBand2, pricePosition }
-   */
   static vwap(candles) {
     if (!candles || candles.length === 0) return null;
 
@@ -480,7 +378,6 @@ class Indicators {
 
     const vwap = cumPV / cumVol;
 
-    // Standard deviation for bands
     const variance = typicalPrices.reduce((s, tp) => s + Math.pow(tp - vwap, 2), 0)
       / typicalPrices.length;
     const std = Math.sqrt(variance);
@@ -503,11 +400,6 @@ class Indicators {
     };
   }
 
-  /**
-   * EMA Stack Analysis
-   * Checks alignment of EMA 20, 50, 200
-   * Returns { aligned, direction, ema20, ema50, ema200, priceVsAll }
-   */
   static emaStack(closes) {
     const ema20  = this.ema(closes, 20);
     const ema50  = this.ema(closes, 50);
@@ -539,26 +431,13 @@ class Indicators {
       priceVsAll: priceAbove20 && priceAbove50 && priceAbove200 ? 'FULLY_ABOVE'
         : !priceAbove20 && !priceAbove50 && !priceAbove200 ? 'FULLY_BELOW'
         : 'MIXED',
-      // Golden cross / death cross recent
       goldenCross: ema20 > ema50 && ema20 - ema50 < ema50 * 0.001,
       deathCross:  ema20 < ema50 && ema50 - ema20 < ema50 * 0.001,
     };
   }
 }
 
-// ─────────────────────────────────────────────
-//  SINGLE TIMEFRAME ANALYZER
-// ─────────────────────────────────────────────
-
 class TimeframeAnalyzer {
-  /**
-   * Performs complete technical analysis on a single timeframe's candles.
-   * Returns a structured analysis object used by the MTF agent.
-   *
-   * @param {string} tf       - timeframe label e.g. 'H1'
-   * @param {Array}  candles  - OHLCV array
-   * @returns {Object} tfAnalysis
-   */
   static analyze(tf, candles) {
     if (!candles || candles.length < (MIN_CANDLES_PER_TF[tf] || 20)) {
       return {
@@ -573,7 +452,6 @@ class TimeframeAnalyzer {
     const closes  = candles.map(c => c.close);
     const current = candles[candles.length - 1];
 
-    // ── Compute all indicators ──
     const emaStackResult = Indicators.emaStack(closes);
     const rsi            = Indicators.rsi(closes, 14);
     const macd           = Indicators.macd(closes, 12, 26, 9);
@@ -581,15 +459,13 @@ class TimeframeAnalyzer {
     const bb             = Indicators.bollingerBands(closes, 20, 2);
     const stoch          = Indicators.stochastic(candles, 14, 3, 3);
     const ichimoku       = Indicators.ichimoku(candles);
-    const vwap           = Indicators.vwap(candles.slice(-50)); // last 50 candles as session approx
+    const vwap           = Indicators.vwap(candles.slice(-50));
     const atr            = Indicators.atr(candles, 14);
 
-    // ── Determine trend direction ──
     let bullPoints = 0;
     let bearPoints = 0;
     const reasons  = [];
 
-    // EMA stack (weight: 3)
     if (emaStackResult.bullishStack) {
       bullPoints += 3;
       reasons.push(`${tf} EMA stack bullish (20>50>200)`);
@@ -598,7 +474,6 @@ class TimeframeAnalyzer {
       reasons.push(`${tf} EMA stack bearish (20<50<200)`);
     }
 
-    // Price vs EMA200 (weight: 2)
     if (emaStackResult.priceAbove200) {
       bullPoints += 2;
       reasons.push(`${tf} Price above EMA200 — bull territory`);
@@ -607,7 +482,6 @@ class TimeframeAnalyzer {
       reasons.push(`${tf} Price below EMA200 — bear territory`);
     }
 
-    // RSI (weight: 2)
     if (rsi !== null) {
       if (rsi > 55 && rsi < 75) {
         bullPoints += 2;
@@ -616,15 +490,14 @@ class TimeframeAnalyzer {
         bearPoints += 2;
         reasons.push(`${tf} RSI ${rsi} — bearish momentum`);
       } else if (rsi >= 75) {
-        bearPoints += 1; // overbought = caution
+        bearPoints += 1;
         reasons.push(`${tf} RSI ${rsi} — overbought, caution`);
       } else if (rsi <= 25) {
-        bullPoints += 1; // oversold = caution
+        bullPoints += 1;
         reasons.push(`${tf} RSI ${rsi} — oversold, possible bounce`);
       }
     }
 
-    // MACD (weight: 2)
     if (macd) {
       if (macd.histogram > 0 && macd.increasing) {
         bullPoints += 2;
@@ -635,7 +508,6 @@ class TimeframeAnalyzer {
       }
     }
 
-    // ADX trend (weight: 2)
     if (adxResult && adxResult.isTrending) {
       if (adxResult.trend === 'UP') {
         bullPoints += 2;
@@ -646,7 +518,6 @@ class TimeframeAnalyzer {
       }
     }
 
-    // Ichimoku (weight: 3)
     if (ichimoku) {
       if (ichimoku.isBullishSetup) {
         bullPoints += 3;
@@ -663,7 +534,6 @@ class TimeframeAnalyzer {
       }
     }
 
-    // VWAP (weight: 1)
     if (vwap) {
       if (vwap.reclaimBias === 'BULLISH') {
         bullPoints += 1;
@@ -674,7 +544,6 @@ class TimeframeAnalyzer {
       }
     }
 
-    // Stochastic (weight: 1)
     if (stoch) {
       if (stoch.crossUp && stoch.zone !== 'OVERBOUGHT') {
         bullPoints += 1;
@@ -685,7 +554,6 @@ class TimeframeAnalyzer {
       }
     }
 
-    // ── Determine direction ──
     const totalPoints = bullPoints + bearPoints;
     const bullPct     = totalPoints > 0 ? bullPoints / totalPoints : 0;
     const bearPct     = totalPoints > 0 ? bearPoints / totalPoints : 0;
@@ -706,7 +574,6 @@ class TimeframeAnalyzer {
       score     = 40;
     }
 
-    // Market state
     const marketState = adxResult && adxResult.isTrending
       ? MARKET_STATE.TRENDING
       : bb && bb.isSqueeze
@@ -745,26 +612,7 @@ class TimeframeAnalyzer {
   }
 }
 
-// ─────────────────────────────────────────────
-//  HTF POI (POINT OF INTEREST) DETECTOR
-// ─────────────────────────────────────────────
-
 class HTFPoiDetector {
-  /**
-   * Identifies key Points of Interest on higher timeframes.
-   * These are the zones where institutional money is most likely to react.
-   *
-   * POI types:
-   *   - HTF Order Block
-   *   - HTF FVG (imbalance)
-   *   - Previous Day/Week High/Low
-   *   - Round number (psychological level)
-   *   - HTF 50% retracement
-   *
-   * @param {Object} tfData - map of { tf → candles }
-   * @param {number} currentPrice
-   * @returns {Array} sortedPOIs
-   */
   static detect(tfData, currentPrice) {
     const pois = [];
     const highTFs = ['D1', 'W1', 'H4', 'H12'];
@@ -775,7 +623,6 @@ class HTFPoiDetector {
 
       const recent = candles.slice(-20);
 
-      // Previous TF highs and lows
       const prevHigh = Math.max(...recent.slice(-5, -1).map(c => c.high));
       const prevLow  = Math.min(...recent.slice(-5, -1).map(c => c.low));
 
@@ -797,7 +644,6 @@ class HTFPoiDetector {
         note:       `${tf} previous low — potential support`,
       });
 
-      // 50% retracement of recent swing
       const swingHigh = Math.max(...recent.map(c => c.high));
       const swingLow  = Math.min(...recent.map(c => c.low));
       const midpoint  = (swingHigh + swingLow) / 2;
@@ -812,7 +658,6 @@ class HTFPoiDetector {
       });
     }
 
-    // Round number levels (psychological)
     const magnitude  = Math.pow(10, Math.floor(Math.log10(currentPrice)));
     const roundLevels = [];
     for (let i = -3; i <= 3; i++) {
@@ -831,15 +676,11 @@ class HTFPoiDetector {
       }
     }
 
-    // Sort by distance from current price — nearest first
     return pois
-      .filter(p => p.price > 0 && p.distance < 5) // within 5%
+      .filter(p => p.price > 0 && p.distance < 5)
       .sort((a, b) => a.distance - b.distance);
   }
 
-  /**
-   * Check if current price is AT a POI (within 0.1% — highest probability entry)
-   */
   static isAtPOI(pois, currentPrice) {
     const atPOI = pois.filter(p => p.distance < 0.15);
     return {
@@ -852,26 +693,7 @@ class HTFPoiDetector {
   }
 }
 
-// ─────────────────────────────────────────────
-//  PULLBACK QUALITY ASSESSOR
-// ─────────────────────────────────────────────
-
 class PullbackQualityAssessor {
-  /**
-   * Assesses the quality of a pullback within the HTF trend.
-   * Best setups = shallow pullback to key level + low RSI in HTF bull trend
-   *
-   * Pullback quality scale:
-   *   A = shallow (38-50% retrace) + at OB/FVG + RSI not oversold
-   *   B = moderate (50-61.8% retrace) + near structure
-   *   C = deep (61.8-78.6%) — higher risk
-   *   D = overextended — invalid pullback
-   *
-   * @param {Array} htfCandles  - higher TF candles
-   * @param {number} currentPrice
-   * @param {string} htfTrend   - 'LONG' or 'SHORT'
-   * @returns {Object} pullbackAssessment
-   */
   static assess(htfCandles, currentPrice, htfTrend) {
     if (!htfCandles || htfCandles.length < 20) {
       return { grade: 'UNKNOWN', score: 0, note: 'Insufficient data' };
@@ -884,19 +706,15 @@ class PullbackQualityAssessor {
 
     if (swingRange === 0) return { grade: 'UNKNOWN', score: 0 };
 
-    // Calculate retracement percentage
     let retracePct;
     if (htfTrend === DIRECTION.LONG) {
-      // In uptrend: retrace from high
       retracePct = (lastSwingHigh - currentPrice) / swingRange * 100;
     } else {
-      // In downtrend: retrace from low
       retracePct = (currentPrice - lastSwingLow) / swingRange * 100;
     }
 
     retracePct = Math.max(0, retracePct);
 
-    // RSI of HTF
     const closes = htfCandles.map(c => c.close);
     const rsi    = Indicators.rsi(closes, 14);
 
@@ -924,7 +742,6 @@ class PullbackQualityAssessor {
       note  = `Pullback ${retracePct.toFixed(1)}% — standard setup`;
     }
 
-    // Bonus: RSI not in dangerous zone for direction
     if (rsi) {
       if (htfTrend === DIRECTION.LONG && rsi < 40) {
         score = Math.min(score + 10, 100);
@@ -947,25 +764,11 @@ class PullbackQualityAssessor {
   }
 }
 
-// ─────────────────────────────────────────────
-//  DIVERGENCE DETECTOR (cross-timeframe)
-// ─────────────────────────────────────────────
-
 class CrossTFDivergenceDetector {
-  /**
-   * Detects when HTF and LTF momentum diverge.
-   * Momentum divergence = HTF trending but LTF RSI/MACD fading
-   *
-   * Warning signal: fade may be imminent
-   * Opportunity signal: LTF correction in HTF trend = entry
-   *
-   * @param {Object} tfAnalyses - map of tf → analysis result
-   * @returns {Array} divergences
-   */
+  // Warning signal: fade may be imminent Opportunity signal: LTF correction in HTF trend = entry @param {Object} tfAnalyses - map of tf → analysis result @returns {Array} divergences
   static detect(tfAnalyses) {
     const divergences = [];
 
-    // Compare adjacent TF pairs
     const pairs = [
       ['D1', 'H4'],
       ['H4', 'H1'],
@@ -983,7 +786,6 @@ class CrossTFDivergenceDetector {
       const htfRSI = htfA.indicators.rsi;
       const ltfRSI = ltfA.indicators.rsi;
 
-      // HTF bullish but LTF RSI fading — possible correction then continue
       if (htfA.direction === DIRECTION.LONG && ltfRSI < 45) {
         divergences.push({
           type:   'BULLISH_PULLBACK',
@@ -996,7 +798,6 @@ class CrossTFDivergenceDetector {
         });
       }
 
-      // HTF bearish but LTF RSI climbing — possible bounce then continue
       if (htfA.direction === DIRECTION.SHORT && ltfRSI > 55) {
         divergences.push({
           type:   'BEARISH_PULLBACK',
@@ -1009,7 +810,6 @@ class CrossTFDivergenceDetector {
         });
       }
 
-      // Dangerous: HTF and LTF both pointing same direction strongly — momentum exhaustion risk
       if (htfA.direction === ltfA.direction &&
           htfRSI > 75 && ltfRSI > 75 &&
           htfA.direction === DIRECTION.LONG) {
@@ -1024,12 +824,7 @@ class CrossTFDivergenceDetector {
         });
       }
 
-      // FIX: was missing the mirrored bearish/oversold case entirely. Since
-      // this 'CAUTION' signal applies a real -10 score penalty downstream
-      // (see _computeConfluence), LONG signals were being penalized for
-      // overbought exhaustion while SHORT signals never received the
-      // equivalent penalty for oversold exhaustion — a systematic long/short
-      // scoring bias rather than a genuine risk difference.
+      // FIX: was missing the mirrored bearish/oversold case entirely.
       if (htfA.direction === ltfA.direction &&
           htfRSI < 25 && ltfRSI < 25 &&
           htfA.direction === DIRECTION.SHORT) {
@@ -1049,19 +844,7 @@ class CrossTFDivergenceDetector {
   }
 }
 
-// ─────────────────────────────────────────────
-//  MAIN MTF AGENT CLASS
-// ─────────────────────────────────────────────
-
 class MTFAgent {
-  /**
-   * @param {Object} config
-   * @param {string} config.symbol           - trading symbol
-   * @param {string[]} config.timeframes     - list of TFs to analyze (default all)
-   * @param {string} config.htfBias          - override HTF bias ('LONG'|'SHORT'|null)
-   * @param {boolean} config.requireHTFAlign - refuse signal if LTF opposes HTF (default true)
-   * @param {number} config.minScore         - minimum score to return (default 60)
-   */
   constructor(config = {}) {
     this.symbol          = config.symbol          || 'UNKNOWN';
     this.timeframes      = config.timeframes      || TF_HIERARCHY;
@@ -1069,18 +852,10 @@ class MTFAgent {
     this.minScore        = config.minScore        || 60;
     this._htfOverride    = config.htfBias         || null;
 
-    // Cache last analysis
     this._lastAnalysis   = null;
     this._lastVote       = null;
   }
 
-  /**
-   * Master analyze function.
-   * Receives a map of { tf → candleArray } and returns the MTF vote.
-   *
-   * @param {Object} tfData - { 'M15': [...candles], 'H1': [...candles], 'H4': [...candles], ... }
-   * @returns {Object} mtfVote — compatible with signal-scorer.js input format
-   */
   async analyze(tfData) {
     const availableTFs = Object.keys(tfData).filter(tf =>
       TF_HIERARCHY.includes(tf) && tfData[tf]?.length > 0
@@ -1090,13 +865,11 @@ class MTFAgent {
       return this._buildWaitVote('Need at least 2 timeframes of data');
     }
 
-    // ── Step 1: Analyze each timeframe independently ──
     const tfAnalyses = {};
     for (const tf of availableTFs) {
       tfAnalyses[tf] = TimeframeAnalyzer.analyze(tf, tfData[tf]);
     }
 
-    // ── Step 2: Determine HTF bias ──
     const htfBias = this._resolveHTFBias(tfAnalyses);
 
     // ── Step 3: HTF lock — if HTF is clear, LTF must not oppose ──
@@ -1116,7 +889,6 @@ class MTFAgent {
         );
 
         if (opposes && TF_HIERARCHY.indexOf(tf) >= TF_HIERARCHY.indexOf('H1')) {
-          // H1 opposing D1 = strong conflict — abort
           return this._buildWaitVote(
             `HTF ${htfBias.anchorTF} is ${htfBias.direction} but ${tf} opposes — waiting for alignment`
           );
@@ -1124,22 +896,18 @@ class MTFAgent {
       }
     }
 
-    // ── Step 4: Weighted confluence score ──
     const confluence = this._computeConfluence(tfAnalyses, htfBias.direction);
 
-    // ── Step 5: Detect HTF POIs ──
     const currentCandles = tfData[availableTFs[0]];
     const currentPrice   = currentCandles[currentCandles.length - 1]?.close ?? 0;
     const pois           = HTFPoiDetector.detect(tfData, currentPrice);
     const poiCheck       = HTFPoiDetector.isAtPOI(pois, currentPrice);
 
-    // POI bonus: +10 score if price is at a HTF POI
     if (poiCheck.isAtPOI) {
       confluence.score = Math.min(confluence.score + 10, 100);
       confluence.reasons.push(poiCheck.note);
     }
 
-    // ── Step 6: Pullback quality on primary entry TF ──
     const entryTF    = this._selectEntryTF(availableTFs, htfBias.anchorTF);
     const htfCandles = tfData[htfBias.anchorTF];
     const pullback   = htfCandles
@@ -1154,7 +922,6 @@ class MTFAgent {
       confluence.reasons.push(`⚠️ ${pullback.note}`);
     }
 
-    // ── Step 7: Cross-TF divergence check ──
     const divergences = CrossTFDivergenceDetector.detect(tfAnalyses);
     const entryDiv    = divergences.filter(d =>
       d.signal === `${htfBias.direction}_ENTRY`
@@ -1171,12 +938,10 @@ class MTFAgent {
       confluence.reasons.push(`⚠️ ${cautionDiv[0].note}`);
     }
 
-    // ── Step 8: Final grade ──
     const grade = confluence.score >= 85 ? 'A'
       : confluence.score >= 70 ? 'B'
       : confluence.score >= 55 ? 'C' : 'D';
 
-    // ── Step 9: Build the complete analysis ──
     const analysis = {
       symbol:       this.symbol,
       timestamp:    Date.now(),
@@ -1189,7 +954,6 @@ class MTFAgent {
       poiCheck,
       pullback,
       divergences,
-      // Summary per TF
       tfSummary:    availableTFs.map(tf => ({
         tf,
         direction: tfAnalyses[tf]?.direction ?? 'UNKNOWN',
@@ -1202,7 +966,6 @@ class MTFAgent {
 
     this._lastAnalysis = analysis;
 
-    // ── Step 10: Build vote for signal-scorer.js ──
     const vote = {
       direction:  confluence.direction,
       score:      confluence.score,
@@ -1226,15 +989,6 @@ class MTFAgent {
     return vote;
   }
 
-  // ─────────────────────────────────────────────
-  //  HTF BIAS RESOLUTION
-  // ─────────────────────────────────────────────
-
-  /**
-   * Determines the authoritative Higher Timeframe bias.
-   * Priority: W1 > D1 > H12 > H8 > H4
-   * The highest TF with a clear direction becomes the anchor.
-   */
   _resolveHTFBias(tfAnalyses) {
     if (this._htfOverride) {
       return {
@@ -1263,7 +1017,6 @@ class MTFAgent {
       };
     }
 
-    // No clear HTF — use H1 as fallback
     const h1 = tfAnalyses['H1'];
     if (h1?.valid && h1.direction !== DIRECTION.RANGING) {
       return {
@@ -1281,10 +1034,6 @@ class MTFAgent {
       note:      'No clear HTF bias — standing by',
     };
   }
-
-  // ─────────────────────────────────────────────
-  //  WEIGHTED CONFLUENCE COMPUTATION
-  // ─────────────────────────────────────────────
 
   _computeConfluence(tfAnalyses, htfDirection) {
     let weightedScore = 0;
@@ -1310,10 +1059,9 @@ class MTFAgent {
         alignedTFs.push(tf);
         reasons.push(`${tf}: ${analysis.direction} (${analysis.score}/100) ✓`);
       } else if (neutral) {
-        weightedScore += 40 * weight; // neutral = partial credit
+        weightedScore += 40 * weight;
         reasons.push(`${tf}: ranging — neutral`);
       } else {
-        // Opposing TF — reduces score
         weightedScore += 10 * weight;
         opposingTFs.push(tf);
         reasons.push(`${tf}: ${analysis.direction} — OPPOSES HTF bias`);
@@ -1324,7 +1072,6 @@ class MTFAgent {
       ? Math.round(weightedScore / totalWeight)
       : 0;
 
-    // Alignment bonus: if 5+ TFs agree
     const alignmentBonus = alignedTFs.length >= 6 ? 10
       : alignedTFs.length >= 4 ? 5 : 0;
 
@@ -1351,19 +1098,10 @@ class MTFAgent {
     };
   }
 
-  // ─────────────────────────────────────────────
-  //  ENTRY TIMEFRAME SELECTOR
-  // ─────────────────────────────────────────────
-
-  /**
-   * Selects the optimal LTF for precise entry timing.
-   * Rule: 2-3 TFs below the HTF anchor for precision.
-   */
   _selectEntryTF(availableTFs, htfAnchor) {
     const htfIndex = TF_HIERARCHY.indexOf(htfAnchor);
     if (htfIndex < 0) return 'H1';
 
-    // Entry TF = 2-3 levels below HTF
     const targetIndex = Math.max(htfIndex - 2, 0);
     const entryTF     = TF_HIERARCHY[targetIndex];
 
@@ -1382,33 +1120,20 @@ class MTFAgent {
     };
   }
 
-  /**
-   * Returns the last computed vote (for signal-scorer polling)
-   */
   getLastVote() {
     return this._lastVote;
   }
 
-  /**
-   * Returns full last analysis
-   */
   getLastAnalysis() {
     return this._lastAnalysis;
   }
 
-  /**
-   * Quick summary string for logging
-   */
   getSummary() {
     if (!this._lastVote) return 'No analysis run yet';
     const v = this._lastVote;
     return `MTF [${this.symbol}] ${v.direction} | Score: ${v.score} | HTF: ${v.htfBias} | Grade: ${v.grade}`;
   }
 }
-
-// ─────────────────────────────────────────────
-//  EXPORTS
-// ─────────────────────────────────────────────
 
 module.exports = {
   MTFAgent,
@@ -1424,36 +1149,3 @@ module.exports = {
   TF_WEIGHTS,
 };
 
-/**
- * ─────────────────────────────────────────────
- *  USAGE EXAMPLE
- * ─────────────────────────────────────────────
- *
- *  const { MTFAgent } = require('./mtf-agent');
- *
- *  const agent = new MTFAgent({
- *    symbol:          'XAUUSD',
- *    timeframes:      ['M15','H1','H4','D1'],
- *    requireHTFAlign: true,
- *  });
- *
- *  // tfData comes from binance-ws.js CandleStore
- *  const vote = await agent.analyze({
- *    M15: feed.getCandles('XAUUSD', 'M15'),
- *    H1:  feed.getCandles('XAUUSD', 'H1'),
- *    H4:  feed.getCandles('XAUUSD', 'H4'),
- *    D1:  feed.getCandles('XAUUSD', 'D1'),
- *  });
- *
- *  console.log(agent.getSummary());
- *  // → MTF [XAUUSD] LONG | Score: 82 | HTF: LONG | Grade: A
- *
- *  // Feed vote to signal-scorer.js
- *  const signal = await scorer.score({
- *    smc:      smcAgent.getLastVote(),
- *    mtf:      vote,          // ← this file's output
- *    momentum: momentumAgent.getLastVote(),
- *    ...
- *  }, context);
- * ─────────────────────────────────────────────
- */

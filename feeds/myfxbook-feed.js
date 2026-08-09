@@ -1,53 +1,20 @@
-/**
- * ============================================================
- *  MYFXBOOK FEED — Economic Calendar, Social Signals, Community Data
- *  AI Trading Assistant · Layer 10 · External数据 Feed Module
- *  File: feeds/myfxbook-feed.js
- * ============================================================
- *
- *  Integrates Myfxbook.com data sources:
- *  1. Economic Calendar - High-impact events with forecasts vs actuals
- *  2. Community Sentiment - Retail positioning data
- *  3. Top Traders - Track successful trader positions
- *  4. Economic Indicators - Interest rates, inflation, employment
- *
- *  This feed provides institutional-grade macro intelligence
- *  and contrarian signals from retail positioning extremes.
- * ============================================================
- */
 
 'use strict';
 
 const https = require('https');
 const EventEmitter = require('events');
 
-// ─────────────────────────────────────────────
-//  CONSTANTS
-// ─────────────────────────────────────────────
-
 const BASE_URL = 'https://www.myfxbook.com';
 const API_BASE = `${BASE_URL}/api`;
-const POLL_INTERVAL_MS = 5 * 60000; // 5 minutes
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const POLL_INTERVAL_MS = 5 * 60000;
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 function round(n, d = 2) { return parseFloat((n ?? 0).toFixed(d)); }
 function clamp(v, lo, hi) { return Math.min(Math.max(v, lo), hi); }
 
-// ─────────────────────────────────────────────
-//  HTTP CLIENT
-// ─────────────────────────────────────────────
-
 function httpGetJSON(url, headers = {}) {
   return new Promise((resolve, reject) => {
-    // FIX: no headers were sent at all — Node's https module sets no
-    // default User-Agent, and sites with Cloudflare-style bot protection
-    // commonly respond to such requests with an HTML challenge/block page
-    // instead of their real API response, which is exactly what production
-    // logs showed ("Failed to parse: <!DOCTYPE html>..."). A normal,
-    // honestly-identified User-Agent is standard HTTP client practice, not
-    // evasion — if this specific site has deeper bot-detection (a JS
-    // challenge, TLS fingerprinting) beyond a missing header, that's a
-    // genuine external limitation this can't code around.
+    // FIX: no headers were sent at all — Node's https module sets no default User-Agent, and sites with Cloudflare-style bot protection commonly respond to such requests with an HTML challenge/block page...
     const finalHeaders = {
       'User-Agent': 'Mozilla/5.0 (compatible; OmniceeBot/1.0; +https://github.com/cee999/omnicee)',
       'Accept': 'application/json',
@@ -63,10 +30,6 @@ function httpGetJSON(url, headers = {}) {
     }).on('error', reject);
   });
 }
-
-// ─────────────────────────────────────────────
-//  SESSION MANAGER
-// ─────────────────────────────────────────────
 
 class SessionManager {
   constructor(email, password) {
@@ -112,19 +75,9 @@ class SessionManager {
   getSession() { return this.session; }
 }
 
-// ─────────────────────────────────────────────
-//  ECONOMIC CALENDAR PARSER
-// ─────────────────────────────────────────────
-
 class EconomicCalendarParser {
-  /**
-   * Parses economic calendar events and identifies:
-   * - High-impact events
-   * - Forecast vs actual deviations (surprises)
-   * - Currency-affected events
-   */
   static parse(events) {
-    const highImpact = events.filter(e => 
+    const highImpact = events.filter(e =>
       e.impact === 'high' || e.impact === 'High' || e.importance === '3'
     );
 
@@ -134,7 +87,7 @@ class EconomicCalendarParser {
         const actual = parseFloat(e.actual);
         const forecast = parseFloat(e.forecast);
         const deviation = forecast !== 0 ? ((actual - forecast) / Math.abs(forecast)) * 100 : 0;
-        
+
         return {
           ...e,
           deviation: round(deviation, 2),
@@ -142,7 +95,7 @@ class EconomicCalendarParser {
           direction: actual > forecast ? 'BETTER_THAN_EXPECTED' : actual < forecast ? 'WORSE_THAN_EXPECTED' : 'IN_LINE',
         };
       })
-      .filter(e => Math.abs(e.deviation) > 2); // Only meaningful deviations
+      .filter(e => Math.abs(e.deviation) > 2);
 
     return {
       totalEvents: events.length,
@@ -155,7 +108,7 @@ class EconomicCalendarParser {
   static getAffectedCurrencies(event) {
     const text = `${event.currency} ${event.name} ${event.country}`.toLowerCase();
     const currencies = [];
-    
+
     const map = {
       USD: ['usd', 'dollar', 'united states', 'fomc', 'federal reserve', 'nfp', 'non-farm'],
       EUR: ['eur', 'euro', 'eurozone', 'ecb', 'european union'],
@@ -175,15 +128,7 @@ class EconomicCalendarParser {
   }
 }
 
-// ─────────────────────────────────────────────
-//  COMMUNITY SENTIMENT ANALYZER
-// ─────────────────────────────────────────────
-
 class CommunitySentimentAnalyzer {
-  /**
-   * Analyzes retail positioning for contrarian signals.
-   * Extreme retail positioning often precedes reversals.
-   */
   static analyze(sentimentData) {
     if (!sentimentData || !sentimentData.longPercentage) {
       return null;
@@ -191,8 +136,7 @@ class CommunitySentimentAnalyzer {
 
     const longPct = parseFloat(sentimentData.longPercentage);
     const shortPct = 100 - longPct;
-    
-    // Contrarian logic: extreme retail long = bearish signal, extreme retail short = bullish signal
+
     let signal = 'NEUTRAL';
     let contrarianReason = null;
 
@@ -221,13 +165,9 @@ class CommunitySentimentAnalyzer {
   }
 }
 
-// ─────────────────────────────────────────────
-//  TOP TRADERS TRACKER
-// ─────────────────────────────────────────────
-
 class TopTradersTracker {
   constructor() {
-    this.traders = new Map(); // traderId → { positions, performance, lastUpdate }
+    this.traders = new Map();
   }
 
   updateTrader(traderId, data) {
@@ -253,7 +193,7 @@ class TopTradersTracker {
     if (total === 0) return null;
 
     const longPct = (longCount / total) * 100;
-    
+
     return {
       symbol,
       longCount,
@@ -273,10 +213,6 @@ class TopTradersTracker {
   }
 }
 
-// ─────────────────────────────────────────────
-//  MAIN MYFXBOOK FEED CLASS
-// ─────────────────────────────────────────────
-
 class MyfxbookFeed extends EventEmitter {
   constructor(config = {}) {
     super();
@@ -284,11 +220,11 @@ class MyfxbookFeed extends EventEmitter {
     this.email = config.email;
     this.password = config.password;
     this.sessionManager = new SessionManager(this.email, this.password);
-    
+
     this.topTradersTracker = new TopTradersTracker();
     this.calendarData = [];
-    this.sentimentData = new Map(); // symbol → sentiment
-    
+    this.sentimentData = new Map();
+
     this.pollIntervalMs = config.pollIntervalMs || POLL_INTERVAL_MS;
     this._pollTimer = null;
     this._connected = false;
@@ -313,18 +249,14 @@ class MyfxbookFeed extends EventEmitter {
     try {
       await this.sessionManager.login();
       this._connected = true;
-      
-      // Initial data fetch
+
       await this._fetchEconomicCalendar();
       await this._fetchCommunitySentiment();
-      // FIX: _fetchTopTraders() was fully implemented but never called
-      // anywhere — topTradersTracker stayed permanently empty, so
-      // getTraderConsensus()/getTopPerformers() always returned null.
+      // FIX: _fetchTopTraders() was fully implemented but never called anywhere — topTradersTracker stayed permanently empty, so getTraderConsensus()/getTopPerformers() always returned null.
       await this._fetchTopTraders();
-      
-      // Start polling
+
       this._pollTimer = setInterval(() => this._poll(), this.pollIntervalMs);
-      
+
       this.emit('ready', { sources: ['economic_calendar', 'community_sentiment', 'top_traders'] });
       console.log('[Myfxbook] Connected successfully');
     } catch (err) {
@@ -350,24 +282,7 @@ class MyfxbookFeed extends EventEmitter {
   }
 
   async _fetchEconomicCalendar() {
-    // FIX: get-economic-calendar.json is not a real MyFXBook API endpoint —
-    // confirmed against MyFXBook's own community forum, where multiple
-    // users have asked how to get calendar data via API and been told
-    // "I dont think there is an API available... you can use the XML"
-    // instead, and a 2023 feature-request thread literally asks MyFXBook
-    // to ADD this capability (meaning it still didn't exist as of that
-    // request). Calling this URL always predictably 404s with an HTML
-    // error page, not JSON. That failure used to re-throw out of this
-    // method, which aborted connect()'s whole startup sequence — meaning
-    // _fetchCommunitySentiment() and _fetchTopTraders() below never even
-    // got a chance to run, every single time, even though those are (once
-    // fixed — see _fetchCommunitySentiment) genuinely real, working
-    // endpoints. Economic calendar data for this system already comes
-    // from Finnhub (see index.js's pollEconomicCalendar) — this was
-    // always redundant with a real, working source, on top of hitting a
-    // URL that was never going to work. Now a documented no-op;
-    // getEconomicCalendar()/getUpcomingHighImpactEvents() correctly keep
-    // returning empty rather than claiming stale/fake data.
+    // Economic calendar data for this system already comes from Finnhub (see index.js's pollEconomicCalendar) — this was always redundant with a real, working source, on top of hitting a URL that was never...
     return;
   }
 
@@ -387,7 +302,6 @@ class MyfxbookFeed extends EventEmitter {
       this.calendarData = parsed;
       this._stats.calendarEventsProcessed += parsed.totalEvents;
 
-      // Emit high-impact surprises
       for (const surprise of parsed.surprises) {
         if (surprise.surprise === 'HIGH') {
           const affectedCurrencies = EconomicCalendarParser.getAffectedCurrencies(surprise);
@@ -399,7 +313,6 @@ class MyfxbookFeed extends EventEmitter {
         }
       }
 
-      // Emit upcoming high-impact events
       if (parsed.upcomingHighImpact.length > 0) {
         this.emit('upcoming_events', {
           events: parsed.upcomingHighImpact,
@@ -466,8 +379,6 @@ class MyfxbookFeed extends EventEmitter {
     }
   }
 
-  // ── Public Query API ──
-
   getEconomicCalendar() { return this.calendarData; }
   getCommunitySentiment(symbol) { return this.sentimentData.get(symbol) || null; }
   getTraderConsensus(symbol) { return this.topTradersTracker.getConsensus(symbol); }
@@ -476,7 +387,7 @@ class MyfxbookFeed extends EventEmitter {
   getUpcomingEvents(currency = null, hours = 24) {
     const cutoff = new Date(Date.now() + hours * 60 * 60 * 1000);
     let events = this.calendarData.upcomingHighImpact || [];
-    
+
     if (currency) {
       events = events.filter(e => {
         const affected = EconomicCalendarParser.getAffectedCurrencies(e);
@@ -506,10 +417,6 @@ class MyfxbookFeed extends EventEmitter {
     this.emit('closed');
   }
 }
-
-// ─────────────────────────────────────────────
-//  EXPORTS
-// ─────────────────────────────────────────────
 
 module.exports = {
   MyfxbookFeed,

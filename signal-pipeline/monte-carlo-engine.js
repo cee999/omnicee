@@ -1,33 +1,5 @@
 'use strict';
 
-/**
- * ============================================================
- *  MONTE CARLO SIMULATION ENGINE
- *  Institutional-Grade Pre-Signal Validation
- * ============================================================
- *
- *  Runs thousands of price path simulations before any signal
- *  fires, estimating:
- *    - Probability of hitting TP1/TP2/TP3 before SL
- *    - Expected value distribution
- *    - Worst-case drawdown paths
- *    - Time-to-target distribution
- *    - Risk-of-ruin percentage
- *    - Confidence intervals on P&L
- *
- *  Methods:
- *    - Geometric Brownian Motion (GBM) with calibrated vol
- *    - Bootstrap resampling of recent returns
- *    - Block bootstrap (preserves autocorrelation)
- *    - Regime-aware simulation (different params per regime)
- *
- *  Usage:
- *    const mc = new MonteCarloEngine({ simulations: 5000 });
- *    const result = mc.simulate({ candles, signal, tradePlan });
- *    if (!result.approved) reject the signal;
- * ============================================================
- */
-
 function round(n, d = 4) {
   return Number.isFinite(+n) ? parseFloat((+n).toFixed(d)) : 0;
 }
@@ -55,7 +27,6 @@ function quantile(arr, q) {
   return percentile(sorted, q * 100);
 }
 
-// Seeded PRNG for reproducibility (xoshiro128**)
 class PRNG {
   constructor(seed = Date.now()) {
     this.s = new Uint32Array(4);
@@ -74,7 +45,6 @@ class PRNG {
     return (result >>> 0) / 4294967296;
   }
 
-  // Box-Muller normal distribution
   normal(mu = 0, sigma = 1) {
     const u1 = this.next();
     const u2 = this.next();
@@ -94,10 +64,6 @@ class MonteCarloEngine {
     this.seed = config.seed ?? null;
   }
 
-  /**
-   * Main simulation entry point.
-   * Runs GBM + bootstrap simulations and aggregates results.
-   */
   simulate({ candles, signal, tradePlan, regime }) {
     if (!candles || candles.length < 50 || !signal) {
       return this._insufficient('Not enough data for Monte Carlo simulation');
@@ -123,22 +89,16 @@ class MonteCarloEngine {
 
     const prng = new PRNG(this.seed ?? Date.now());
 
-    // Run GBM simulation
     const gbmResults = this._runGBM(entry, sl, targets, direction, calibration, prng);
 
-    // Run bootstrap simulation
     const bootstrapResults = this._runBootstrap(entry, sl, targets, direction, returns, prng);
 
-    // Run block bootstrap (preserves autocorrelation)
     const blockResults = this._runBlockBootstrap(entry, sl, targets, direction, returns, prng);
 
-    // Aggregate across all methods (weighted: GBM 30%, Bootstrap 40%, Block 30%)
     const combined = this._aggregate(gbmResults, bootstrapResults, blockResults);
 
-    // Risk of ruin calculation
     const riskOfRuin = this._riskOfRuin(combined, calibration);
 
-    // Decision
     const approved = combined.winProb >= this.minWinProb
       && combined.expectedR >= this.minExpectedR
       && riskOfRuin.probability <= this.maxRiskOfRuin;
@@ -157,13 +117,7 @@ class MonteCarloEngine {
       reasons.push(`MC approved: ${round(combined.winProb * 100, 1)}% win prob, ${round(combined.expectedR, 2)}R expected`);
     }
 
-    // FIX: penalty used to be Math.min(20, Math.round((this.minWinProb - combined.winProb) * 40))
-    // even when approved === false. If the signal was actually rejected for a
-    // low expectedR or a high riskOfRuin (not a winProb shortfall), that
-    // expression could go negative — which downstream (ensemble-engine.js,
-    // index.js) gets SUBTRACTED from the signal's score, silently *increasing*
-    // the score of a rejected signal instead of penalizing it. Penalty is now
-    // the max of all three shortfalls, clamped to a sane non-negative range.
+    // FIX: penalty used to be Math.min(20, Math.round((this.minWinProb - combined.winProb) 40)) even when approved false.
     let penalty = 0;
     if (!approved) {
       const winProbGap    = Math.max(0, (this.minWinProb - combined.winProb) * 40);
@@ -205,26 +159,20 @@ class MonteCarloEngine {
     };
   }
 
-  // Calibrate model parameters from historical returns
   _calibrate(returns, candles, regime) {
     const mu = avg(returns);
     const sigma = stddev(returns);
     const n = returns.length;
 
-    // Skewness
     const m3 = returns.reduce((s, r) => s + ((r - mu) / sigma) ** 3, 0) / n;
-    // Excess kurtosis
     const m4 = returns.reduce((s, r) => s + ((r - mu) / sigma) ** 4, 0) / n - 3;
 
-    // Annualized vol estimate (assume H1 candles ~ 24 per day)
     const annualizedVol = sigma * Math.sqrt(252 * 24);
 
-    // Regime-adjusted drift
     let driftAdj = 0;
     if (regime?.trend === 'BULL_TREND') driftAdj = sigma * 0.05;
     else if (regime?.trend === 'BEAR_TREND') driftAdj = -sigma * 0.05;
 
-    // Volatility clustering (simple GARCH-like)
     const recentVol = stddev(returns.slice(-20));
     const historicalVol = sigma;
     const volRatio = historicalVol > 0 ? recentVol / historicalVol : 1;
@@ -242,7 +190,6 @@ class MonteCarloEngine {
     };
   }
 
-  // Geometric Brownian Motion simulation
   _runGBM(entry, sl, targets, direction, calibration, prng) {
     const { drift, adjustedSigma } = calibration;
     const sims = this.simulations;
@@ -259,17 +206,14 @@ class MonteCarloEngine {
       const hitTargets = new Set();
 
       for (let step = 0; step < this.maxSteps; step++) {
-        // GBM step: S(t+1) = S(t) * exp((mu - 0.5*sigma^2)*dt + sigma*sqrt(dt)*Z)
         const z = prng.normal();
         const dt = 1;
         price = price * Math.exp((drift - 0.5 * adjustedSigma ** 2) * dt + adjustedSigma * Math.sqrt(dt) * z);
 
-        // Track drawdown
         if (price > peak) peak = price;
         const dd = (peak - price) / peak;
         if (dd > localDD) localDD = dd;
 
-        // Check SL hit
         if (direction === 'LONG' && price <= sl) {
           outcome = -(entry - sl) / entry;
           break;
@@ -279,7 +223,6 @@ class MonteCarloEngine {
           break;
         }
 
-        // Check target hits
         for (let t = 0; t < targets.length; t++) {
           if (hitTargets.has(t)) continue;
           if (direction === 'LONG' && price >= targets[t]) {
@@ -294,7 +237,6 @@ class MonteCarloEngine {
           }
         }
 
-        // Use first target hit as outcome if SL not hit
         if (hitTargets.size > 0 && outcome === null) {
           const bestTarget = Math.max(...[...hitTargets]);
           if (direction === 'LONG') {
@@ -302,16 +244,11 @@ class MonteCarloEngine {
           } else {
             outcome = (entry - targets[bestTarget]) / entry;
           }
-          // FIX: was missing this break (present in _runBlockBootstrap but not
-          // here or in _runBootstrap). Without it, the path kept simulating
-          // after "winning", and a later SL-hit check could overwrite a
-          // profitable outcome with a full-loss outcome — understating the
-          // true win rate and expected R of every signal evaluated.
+          // FIX: was missing this break (present in _runBlockBootstrap but not here or in _runBootstrap).
           break;
         }
       }
 
-      // If no outcome after all steps, mark at current unrealized P&L
       if (outcome === null) {
         if (direction === 'LONG') outcome = (price - entry) / entry;
         else outcome = (entry - price) / entry;
@@ -324,7 +261,6 @@ class MonteCarloEngine {
     return this._summarize(outcomes, targetHits, targetSteps, targets, sims, maxDD);
   }
 
-  // Bootstrap resampling simulation
   _runBootstrap(entry, sl, targets, direction, returns, prng) {
     const sims = this.simulations;
     const outcomes = [];
@@ -340,7 +276,6 @@ class MonteCarloEngine {
       const hitTargets = new Set();
 
       for (let step = 0; step < this.maxSteps; step++) {
-        // Random sample from historical returns
         const idx = Math.floor(prng.next() * returns.length);
         const ret = returns[idx];
         price = price * Math.exp(ret);
@@ -377,8 +312,7 @@ class MonteCarloEngine {
           outcome = direction === 'LONG'
             ? (targets[bestTarget] - entry) / entry
             : (entry - targets[bestTarget]) / entry;
-          // FIX: same missing break as _runGBM — without it a later SL check
-          // in the same path could silently overwrite a winning outcome.
+          // FIX: same missing break as _runGBM — without it a later SL check in the same path could silently overwrite a winning outcome.
           break;
         }
       }
@@ -393,7 +327,6 @@ class MonteCarloEngine {
     return this._summarize(outcomes, targetHits, targetSteps, targets, sims, maxDD);
   }
 
-  // Block bootstrap (preserves serial correlation)
   _runBlockBootstrap(entry, sl, targets, direction, returns, prng) {
     const sims = this.simulations;
     const bs = this.blockSize;
@@ -411,7 +344,6 @@ class MonteCarloEngine {
       let step = 0;
 
       while (step < this.maxSteps) {
-        // Pick a random block start
         const blockStart = Math.floor(prng.next() * Math.max(1, returns.length - bs));
         const block = returns.slice(blockStart, blockStart + bs);
 
@@ -500,7 +432,6 @@ class MonteCarloEngine {
     const medianR = gbm.medianR * wGBM + bootstrap.medianR * wBoot + block.medianR * wBlock;
     const maxDrawdown = Math.max(gbm.maxDrawdown, bootstrap.maxDrawdown, block.maxDrawdown);
 
-    // Conservative CIs — use widest
     const ci90 = [
       Math.min(gbm.ci90[0], bootstrap.ci90[0], block.ci90[0]),
       Math.max(gbm.ci90[1], bootstrap.ci90[1], block.ci90[1]),
@@ -510,7 +441,6 @@ class MonteCarloEngine {
       Math.max(gbm.ci95[1], bootstrap.ci95[1], block.ci95[1]),
     ];
 
-    // Target probabilities — conservative (minimum across methods)
     const nTargets = gbm.targetProbs.length;
     const targetProbs = [];
     for (let i = 0; i < nTargets; i++) {
@@ -525,8 +455,6 @@ class MonteCarloEngine {
   }
 
   _riskOfRuin(combined, calibration) {
-    // Simplified risk-of-ruin: probability of losing X% before recovering
-    // Based on gambler's ruin with drift
     const winProb = combined.winProb;
     const lossProb = 1 - winProb;
 
@@ -534,12 +462,10 @@ class MonteCarloEngine {
       return { probability: 1.0, note: 'Edge insufficient — ruin certain over time' };
     }
 
-    // Risk of ruin ≈ ((1-p)/p)^N where N = number of units to ruin
     const ratio = lossProb / winProb;
-    const unitsToRuin = 10; // 10R drawdown = ruin
+    const unitsToRuin = 10;
     const ror = Math.pow(ratio, unitsToRuin);
 
-    // Adjust for volatility clustering
     const volAdj = Math.min(2.0, calibration.volRatio);
     const adjRor = Math.min(1.0, ror * volAdj);
 
@@ -566,7 +492,6 @@ class MonteCarloEngine {
     if (tp.tp1?.price) targets.push(tp.tp1.price);
     if (tp.tp2?.price) targets.push(tp.tp2.price);
     if (tp.tp3?.price) targets.push(tp.tp3.price);
-    // Fallback: if no named targets, check array
     if (targets.length === 0 && Array.isArray(tp)) {
       for (const t of tp) {
         if (t?.price) targets.push(t.price);

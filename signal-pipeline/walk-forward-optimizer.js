@@ -1,30 +1,5 @@
 'use strict';
 
-/**
- * ============================================================
- *  WALK-FORWARD OPTIMIZER
- *  Continuous Out-of-Sample Parameter Validation
- * ============================================================
- *
- *  Prevents overfitting by continuously testing signal parameters
- *  on unseen data:
- *
- *  1. Splits historical signals into in-sample (IS) and
- *     out-of-sample (OOS) windows
- *  2. Evaluates whether IS performance persists OOS
- *  3. Adjusts agent weights, score thresholds, and regime
- *     parameters dynamically
- *  4. Tracks walk-forward efficiency (WFE) — the ratio of
- *     OOS performance to IS performance
- *  5. Detects parameter degradation and triggers recalibration
- *
- *  Walk-Forward Efficiency:
- *    WFE = OOS_Sharpe / IS_Sharpe
- *    WFE > 0.5 = robust parameters
- *    WFE < 0.3 = overfitted, needs recalibration
- * ============================================================
- */
-
 function round(n, d = 4) {
   return Number.isFinite(+n) ? parseFloat((+n).toFixed(d)) : 0;
 }
@@ -41,8 +16,8 @@ function stddev(arr) {
 
 class WalkForwardOptimizer {
   constructor(config = {}) {
-    this.isRatio = config.isRatio || 0.7;      // 70% in-sample
-    this.oosRatio = config.oosRatio || 0.3;     // 30% out-of-sample
+    this.isRatio = config.isRatio || 0.7;
+    this.oosRatio = config.oosRatio || 0.3;
     this.minSamples = config.minSamples || 20;
     this.minWFE = config.minWFE || 0.35;
     this.recalibrationThreshold = config.recalibrationThreshold || 0.25;
@@ -57,9 +32,6 @@ class WalkForwardOptimizer {
     this._parameterHistory = [];
   }
 
-  /**
-   * Record a completed signal with its outcome for walk-forward analysis
-   */
   recordOutcome({ signal, outcome }) {
     const record = {
       timestamp: signal?.timestamp || Date.now(),
@@ -82,15 +54,11 @@ class WalkForwardOptimizer {
 
     this._outcomeHistory.push(record);
 
-    // Trim to window
     if (this._outcomeHistory.length > this.windowSize * 3) {
       this._outcomeHistory = this._outcomeHistory.slice(-this.windowSize * 2);
     }
   }
 
-  /**
-   * Run walk-forward analysis to check parameter robustness
-   */
   analyze() {
     const data = this._outcomeHistory;
     if (data.length < this.minSamples) {
@@ -102,7 +70,6 @@ class WalkForwardOptimizer {
       };
     }
 
-    // Split into IS/OOS
     const splitIdx = Math.floor(data.length * this.isRatio);
     const inSample = data.slice(0, splitIdx);
     const outOfSample = data.slice(splitIdx);
@@ -116,32 +83,25 @@ class WalkForwardOptimizer {
       };
     }
 
-    // Compute IS and OOS metrics
     const isMetrics = this._computeMetrics(inSample);
     const oosMetrics = this._computeMetrics(outOfSample);
 
-    // Walk-Forward Efficiency
     const wfe = isMetrics.sharpe !== 0
       ? oosMetrics.sharpe / isMetrics.sharpe
       : 0;
 
     this._currentWFE = round(wfe, 4);
 
-    // Agent-level WFE (which agents are robust OOS?)
     const agentWFE = this._computeAgentWFE(inSample, outOfSample);
 
-    // Weight adjustments based on OOS performance
     const adjustments = this._computeAdjustments(agentWFE, oosMetrics);
 
-    // Regime-level analysis
     const regimePerformance = this._regimePerformance(data);
 
-    // Detect parameter degradation
     const degradation = this._detectDegradation(data);
 
     const needsRecalibration = wfe < this.recalibrationThreshold || degradation.degrading;
 
-    // Store calibration state
     this._lastCalibration = {
       timestamp: Date.now(),
       wfe: round(wfe, 4),
@@ -188,9 +148,6 @@ class WalkForwardOptimizer {
     };
   }
 
-  /**
-   * Get recommended weight adjustments for the signal scorer
-   */
   getWeightAdjustments() {
     return this._weightAdjustments;
   }
@@ -211,7 +168,6 @@ class WalkForwardOptimizer {
     const avgLoss = losses.length > 0 ? Math.abs(avg(losses.map(r => r.pnlR))) : 0;
     const profitFactor = avgLoss > 0 ? avgWin / avgLoss : avgWin > 0 ? Infinity : 0;
 
-    // Max drawdown in R
     let peak = 0, dd = 0, maxDD = 0;
     let cum = 0;
     for (const p of pnls) {
@@ -229,7 +185,6 @@ class WalkForwardOptimizer {
     const wfe = {};
 
     for (const agent of agents) {
-      // Correlation between agent score and outcome in IS vs OOS
       const isCorr = this._correlation(
         inSample.map(r => r.agentScores[agent] || 0),
         inSample.map(r => r.pnlR)
@@ -291,7 +246,6 @@ class WalkForwardOptimizer {
   _detectDegradation(data) {
     if (data.length < 20) return { degrading: false, note: 'Insufficient data' };
 
-    // Compare last 10 trades to previous window
     const recent = data.slice(-10);
     const older = data.slice(-30, -10);
 

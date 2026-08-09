@@ -1,58 +1,10 @@
 'use strict';
 
-/**
- * MarketOutlookBuilder
- * ─────────────────────────────────────────────
- * Aggregates real, already-live data sources into a single daily/weekly/
- * two-week market outlook: no invented numbers, no filler — every field
- * here is either read directly from a real feed/engine or omitted if
- * unavailable.
- *
- *  - Economic calendar: risk-engine/session-filter.js's EconomicCalendarTierSystem,
- *    now fed real events by FinnhubFeed (see index.js). Split into today,
- *    this week (0-7 days out), and next week (7-14 days out).
- *  - Institutional positioning: feeds/cot-report-parser.js's COTReportParser, fed
- *    real weekly CFTC Commitment of Traders data by feeds/cftc-cot-feed.js.
- *    This is the honest, real answer to "what are hedge funds/corporations
- *    actually doing" — CFTC's own regulatory data on commercial (hedgers/
- *    corporates) vs. large speculator (hedge fund) futures positioning. It
- *    is NOT a prediction and updates once a week (Fridays); treat it as
- *    real context on institutional positioning, not a signal to blindly
- *    copy — extreme positioning is informative but can stay extreme for
- *    a long time before it reverses.
- *  - Regime per symbol: signal-pipeline/regime-engine.js, run against each
- *    symbol's live candle cache.
- *  - Session quality per symbol: risk-engine/session-filter.js's full check()
- *    (killzone/liquidity/holiday/rollover/news-blackout).
- *  - Funding/OI extremes: read from the last known Bybit funding/OI snapshot
- *    if the caller supplies one (crypto symbols only).
- */
 class MarketOutlookBuilder {
-  /**
-   * @param {object} opts
-   * @param {string[]} opts.symbols
-   * @param {object} opts.candleStores - candleStores[symbol][timeframe] -> candle[]
-   * @param {object} opts.regimeEngine - has .classify(candles)
-   * @param {object} opts.sessionFilter - has .check(symbol, timestamp) [assetClass is inferred internally] and .calendar
-   * @param {string} opts.timeframe - which timeframe's candles to classify regime on
-   * @param {Map|object} [opts.fundingSnapshots] - symbol -> { fundingRate, oiChangePct } (optional)
-   * @param {object} [opts.cotParser] - feeds/cot-report-parser.js's COTReportParser instance, has .analyze(symbol)
-   */
   static build({ symbols = [], candleStores = {}, regimeEngine, sessionFilter, timeframe = 'H1', fundingSnapshots = null, cotParser = null }) {
     const now = Date.now();
 
-    // Calendar is intentionally NOT part of Market Outlook (user request —
-    // it lives on the Intel tab / GET /api/calendar instead). Previously
-    // this method still called calendar.getUpcoming() twice and ran seven
-    // filter passes over the result on every single build(), then threw
-    // all of it away two lines below (the narrative call passed hardcoded
-    // empty arrays instead of these). That's a real, live-traffic cost —
-    // an unnecessary call into the calendar feed/parser on every outlook
-    // request — for output nobody ever read. Removed rather than kept
-    // "in case it's needed later"; git history has it if it is.
-
     const perSymbol = [];
-    // Prefer requested TF, then fall back so Yahoo-only / sparse FX still get a regime when any TF has bars
     const tfOrder = [timeframe, 'H1', 'H4', 'M15', 'M5', 'D1'].filter((v, i, a) => v && a.indexOf(v) === i);
 
     for (const symbol of symbols) {
@@ -67,7 +19,6 @@ class MarketOutlookBuilder {
           break;
         }
       }
-      // Track how much data we have (helps UI explain empty regime)
       const allCounts = {};
       for (const tf of tfOrder) {
         const n = candleStores?.[symbol]?.[tf]?.length || 0;
@@ -83,7 +34,7 @@ class MarketOutlookBuilder {
           entry.regime = regime.regime || regime.state || 'UNKNOWN';
           entry.tradeability = regime.tradeability ?? regime.score ?? null;
           entry.reasons = regime.reasons?.slice(0, 2) || [];
-        } catch (_) { /* leave regime fields absent if classification fails */ }
+        } catch (_) { }
       } else {
         entry.regime = entry.regime || null;
         entry.dataNote = Object.keys(allCounts).length
@@ -97,7 +48,7 @@ class MarketOutlookBuilder {
           entry.sessionStatus = sq.allowed ? 'CLEAR' : (sq.reason || 'RESTRICTED');
           entry.sessionMultiplier = sq.multiplier ?? null;
           if (sq.reason) entry.sessionReason = sq.reason;
-        } catch (_) { /* leave session fields absent */ }
+        } catch (_) { }
       }
 
       const funding = fundingSnapshots?.get ? fundingSnapshots.get(symbol) : fundingSnapshots?.[symbol];
@@ -121,14 +72,12 @@ class MarketOutlookBuilder {
               note: cot.note,
             };
           }
-        } catch (_) { /* no COT data for this symbol/contract — leave absent */ }
+        } catch (_) { }
       }
 
       perSymbol.push(entry);
     }
 
-    // Calendar is intentionally NOT part of Market Outlook (user request).
-    // Use GET /api/calendar for economic events only.
     return {
       generatedAt: now,
       symbols: perSymbol,
@@ -147,10 +96,6 @@ class MarketOutlookBuilder {
     };
   }
 
-  /**
-   * Build a short, actionable briefing — only facts we actually have.
-   * No filler about "quiet next week" or empty calendar padding.
-   */
   static _narrative({ tier1Today, tier1Week, tier2Week, tier1NextWeek, tier2NextWeek, perSymbol }) {
     const lines = [];
     const utcHour = new Date().getUTCHours();
@@ -161,7 +106,6 @@ class MarketOutlookBuilder {
     else sessionName = 'Late NY / thin liquidity';
     lines.push(`Session context: ${sessionName} (${String(utcHour).padStart(2, '0')}:00 UTC).`);
 
-    // Calendar — only mention if there is something real
     if (tier1Today.length > 0) {
       const names = tier1Today.map(e => `${e.name} (${e.currency}, ${e.hoursAway.toFixed(1)}h)`).join(', ');
       lines.push(`Tier-1 today: ${names}. Expect size cuts or blackouts into those windows.`);
@@ -171,7 +115,6 @@ class MarketOutlookBuilder {
       lines.push(`This week: ${tier1Week.length} Tier-1, ${tier2Week.length} Tier-2 on the calendar.`);
     }
 
-    // Per-symbol stance from real data only
     const withRegime = perSymbol.filter(s => s.regime && s.regime !== 'UNKNOWN');
     const blocked = perSymbol.filter(s => s.sessionStatus && s.sessionStatus !== 'CLEAR');
     const noData = perSymbol.filter(s => !s.regime || s.dataNote);
@@ -204,7 +147,6 @@ class MarketOutlookBuilder {
       }
     }
 
-    // Bottom line for signal mode
     if (blocked.length === perSymbol.length && perSymbol.length > 0) {
       lines.push('Bottom line: all tracked symbols are session-restricted right now — signal pipeline will not fire new FX setups until the gate clears.');
     } else if (withRegime.length > 0) {

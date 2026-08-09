@@ -1,16 +1,4 @@
-/**
- * ============================================================
- *  ALPHA VANTAGE FEED — Macro News Sentiment
- *  File: feeds/alpha-vantage-feed.js
- * ============================================================
- *  Polls Alpha Vantage's NEWS_SENTIMENT endpoint for broad
- *  financial-market and macroeconomic news, and emits an
- *  aggregate sentiment score plus the most relevant headline.
- *  Optional — if ALPHA_VANTAGE_API_KEY is unset, this feed
- *  never starts polling and index.js simply skips it (same
- *  graceful-degradation convention as every other feed here).
- * ============================================================
- */
+// Optional — if ALPHA_VANTAGE_API_KEY is unset, this feed never starts polling and index.js simply skips it (same graceful-degradation convention as every other feed here).
 
 'use strict';
 
@@ -18,13 +6,7 @@ const https = require('https');
 const EventEmitter = require('events');
 
 const BASE_URL = 'https://www.alphavantage.co/query';
-// FIX: was 15 minutes, with a comment claiming this was "conservative" —
-// the math says otherwise: 24h / 15min = 96 requests/day, nearly 4x over
-// the free tier's 25/day cap. 90 minutes gives ~16 scheduled polls/day,
-// leaving real margin for the extra immediate poll fired on every process
-// restart (see constructor below) — which, on a Render free-tier instance
-// cycling through spin-down/wake-up repeatedly, can happen many times a
-// day on top of the scheduled interval alone.
+// FIX: was 15 minutes, with a comment claiming this was "conservative" — the math says otherwise: 24h / 15min = 96 requests/day, nearly 4x over the free tier's 25/day cap.
 const DEFAULT_POLL_MS = 90 * 60000;
 const DEFAULT_TOPICS = 'financial_markets,economy_macro,economy_monetary';
 
@@ -43,7 +25,6 @@ function httpGetJSON(url) {
 
 function round(n, d = 3) { return Math.round((n ?? 0) * 10 ** d) / 10 ** d; }
 
-// Alpha Vantage's own bucket thresholds, from their docs.
 function labelFor(score) {
   if (score <= -0.35) return 'Bearish';
   if (score <= -0.15) return 'Somewhat-Bearish';
@@ -63,8 +44,6 @@ class AlphaVantageFeed extends EventEmitter {
     this._pollTimer = null;
 
     if (this.enabled()) {
-      // Fire once immediately, then on the interval — same convention as
-      // MyfxbookFeed/OpenInsiderFeed (feeds/*.js), not an unbounded loop.
       this._poll();
       this._pollTimer = setInterval(() => this._poll(), this.pollIntervalMs);
     }
@@ -82,11 +61,7 @@ class AlphaVantageFeed extends EventEmitter {
   }
 
   async _poll() {
-    // FIX: once a quota-exceeded response is seen, every poll for the rest
-    // of the same calendar day would just hit the identical wall again —
-    // pointless repeated calls and log spam (confirmed in production: the
-    // same error logged again exactly one interval later). Alpha Vantage's
-    // free-tier quota resets daily; skip polling until the UTC day changes.
+    // FIX: once a quota-exceeded response is seen, every poll for the rest of the same calendar day would just hit the identical wall again — pointless repeated calls and log spam (confirmed in production:...
     const today = new Date().toISOString().slice(0, 10);
     if (this._quotaExceededDate === today) return;
 
@@ -94,9 +69,7 @@ class AlphaVantageFeed extends EventEmitter {
       const url = `${BASE_URL}?function=NEWS_SENTIMENT&topics=${encodeURIComponent(this.topics)}&sort=LATEST&limit=50&apikey=${this.apiKey}`;
       const result = await httpGetJSON(url);
 
-      // Alpha Vantage returns a 200 with a plain-text `Note`/`Information`
-      // field instead of an error status when the daily quota is hit — a
-      // classic silent-failure shape if not checked explicitly.
+      // Alpha Vantage returns a 200 with a plain-text `Note`/`Information` field instead of an error status when the daily quota is hit — a classic silent-failure shape if not checked explicitly.
       if (result?.Note || result?.Information) {
         this._quotaExceededDate = today;
         throw new Error(result.Note || result.Information);
@@ -119,8 +92,6 @@ class AlphaVantageFeed extends EventEmitter {
         topSource: top?.source || null,
       };
 
-      // Only emit when the bucket actually changes, not every single poll —
-      // avoids spamming the intel feed/Telegram with "still Neutral" noise.
       if (label !== this._lastLabel) {
         this._lastLabel = label;
         this.emit('sentiment_shift', payload);

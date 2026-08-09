@@ -1,47 +1,32 @@
 'use strict';
 
-/**
- * MOMENTUM AGENT — RSI, MACD, EMA, VWAP, Ichimoku
- * Output: { direction, score, grade, reasons, analysis }
- * Compatible with signal-scorer.js agentVotes.momentum
- */
-
 const EventEmitter = require('events');
-
-// ── Constants ──────────────────────────────────────────────────────────────
 
 const DIRECTION = { LONG: 'LONG', SHORT: 'SHORT', WAIT: 'WAIT' };
 
 const GRADE = { A: 'A', B: 'B', C: 'C' };
 
-// RSI
 const RSI_OVERSOLD      = 30;
 const RSI_OVERBOUGHT    = 70;
 const RSI_MILD_OS       = 40;
 const RSI_MILD_OB       = 60;
 const RSI_PERIOD        = 14;
 
-// MACD defaults
 const MACD_FAST         = 12;
 const MACD_SLOW         = 26;
 const MACD_SIGNAL       = 9;
 
-// EMA periods
 const EMA_FAST          = 9;
 const EMA_MED           = 21;
 const EMA_SLOW          = 50;
 const EMA_TREND         = 200;
 
-// VWAP
-const VWAP_BAND_MULT    = 1.0;   // ± 1 std dev for bands
+const VWAP_BAND_MULT    = 1.0;
 
-// Ichimoku
 const TENKAN_PERIOD     = 9;
 const KIJUN_PERIOD      = 26;
 const SENKOU_B_PERIOD   = 52;
 const DISPLACEMENT      = 26;
-
-// ── Utility math ───────────────────────────────────────────────────────────
 
 function _round(n, d = 4) { return parseFloat((+n).toFixed(d)); }
 function _avg(arr) { return arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : 0; }
@@ -89,14 +74,11 @@ function _atr(candles, period = 14) {
   return _round(sum / period);
 }
 
-// ── RSI Engine ─────────────────────────────────────────────────────────────
-
 class RSIEngine {
   compute(closes, period = RSI_PERIOD) {
     const rsi = _rsi(closes, period);
     if (rsi === null) return null;
 
-    // Divergence: last 5 candles
     const divergence = this._divergence(closes, period);
 
     let direction = DIRECTION.WAIT;
@@ -169,8 +151,6 @@ class RSIEngine {
   }
 }
 
-// ── MACD Engine ────────────────────────────────────────────────────────────
-
 class MACDEngine {
   compute(closes, fast = MACD_FAST, slow = MACD_SLOW, signal = MACD_SIGNAL) {
     if (closes.length < slow + signal) return null;
@@ -181,7 +161,6 @@ class MACDEngine {
 
     const macdLine  = _round(emaFast - emaSlow);
 
-    // Compute signal line from macd history
     const macdHistory = [];
     for (let i = slow; i <= closes.length; i++) {
       const f = _ema(closes.slice(0, i), fast);
@@ -192,7 +171,6 @@ class MACDEngine {
     const signalLine = macdHistory.length >= signal ? _ema(macdHistory, signal) : null;
     const histogram  = signalLine !== null ? _round(macdLine - signalLine) : null;
 
-    // Histogram trend (last 3 bars)
     const histTrend = macdHistory.length >= signal + 3
       ? macdHistory.slice(-3).map((v, i, arr) => i === 0 ? 0 : v - arr[i - 1])
       : [];
@@ -225,8 +203,6 @@ class MACDEngine {
   }
 }
 
-// ── EMA Stack Engine ───────────────────────────────────────────────────────
-
 class EMAStackEngine {
   compute(closes) {
     const fast   = _ema(closes, EMA_FAST);
@@ -242,7 +218,6 @@ class EMAStackEngine {
     let score     = 50;
     const reasons = [];
 
-    // Perfect bull stack: fast > med > slow > trend, price > all
     const bullStack = fast && med && slow && fast > med && med > slow;
     const bearStack = fast && med && slow && fast < med && med < slow;
 
@@ -267,7 +242,6 @@ class EMAStackEngine {
       else            { direction = DIRECTION.SHORT; score = 54; reasons.push(`EMA fast below med — mild bearish`); }
     }
 
-    // Price relative to EMA200
     if (trend) {
       if (price > trend) reasons.push(`Price above EMA200 — long-term uptrend`);
       else               reasons.push(`Price below EMA200 — long-term downtrend`);
@@ -277,13 +251,10 @@ class EMAStackEngine {
   }
 }
 
-// ── VWAP Engine ────────────────────────────────────────────────────────────
-
 class VWAPEngine {
   compute(candles) {
     if (candles.length < 5) return null;
 
-    // Use today's session candles only (reset at midnight UTC)
     const now  = Date.now();
     const midnight = now - (now % 86400000);
     const session  = candles.filter(c => c.timestamp >= midnight);
@@ -329,8 +300,6 @@ class VWAPEngine {
     return { vwap, upper, lower, price, distPct, direction, score, reasons };
   }
 }
-
-// ── Ichimoku Engine ────────────────────────────────────────────────────────
 
 class IchimokuEngine {
   _midpoint(candles, period) {
@@ -391,8 +360,6 @@ class IchimokuEngine {
   }
 }
 
-// ── Bollinger Bands ────────────────────────────────────────────────────────
-
 class BollingerEngine {
   compute(closes, period = 20, mult = 2) {
     if (closes.length < period) return null;
@@ -402,7 +369,7 @@ class BollingerEngine {
     const upper  = _round(sma + std * mult);
     const lower  = _round(sma - std * mult);
     const price  = closes[closes.length - 1];
-    const bWidth = _round((upper - lower) / sma * 100, 3);  // bandwidth %
+    const bWidth = _round((upper - lower) / sma * 100, 3);
     const pctB   = _round((price - lower) / (upper - lower), 3);
 
     let direction = DIRECTION.WAIT;
@@ -434,15 +401,7 @@ class BollingerEngine {
   }
 }
 
-// ── Main MomentumAgent ─────────────────────────────────────────────────────
-
 class MomentumAgent extends EventEmitter {
-  /**
-   * @param {Object} config
-   * @param {string} config.symbol
-   * @param {string} config.timeframe
-   * @param {number} [config.rsiPeriod=14]
-   */
   constructor(config = {}) {
     super();
     this.symbol    = config.symbol    || 'UNKNOWN';
@@ -459,11 +418,6 @@ class MomentumAgent extends EventEmitter {
     this._lastVote = null;
   }
 
-  /**
-   * Primary analyze method.
-   * @param {Array} candles  - [{open,high,low,close,volume,timestamp}, ...]
-   * @returns {Object}       - { direction, score, grade, reasons, analysis }
-   */
   async analyze(candles) {
     if (!candles || candles.length < 30) {
       return this._waitVote('Insufficient candle data (need ≥30)');
@@ -471,7 +425,6 @@ class MomentumAgent extends EventEmitter {
 
     const closes = candles.map(c => c.close);
 
-    // Run all sub-engines
     const rsi  = this._rsi.compute(closes, this.rsiPeriod);
     const macd = this._macd.compute(closes);
     const ema  = this._ema.compute(closes);
@@ -479,11 +432,9 @@ class MomentumAgent extends EventEmitter {
     const ichi = this._ichi.compute(candles);
     const bb   = this._bb.compute(closes);
 
-    // Collect votes + scores from each sub-engine
     const subVotes = [rsi, macd, ema, vwap, ichi, bb].filter(Boolean);
     if (subVotes.length === 0) return this._waitVote('No indicators computed');
 
-    // Weighted vote aggregation
     const weights = { rsi: 1.5, macd: 1.5, ema: 2.0, vwap: 1.0, ichi: 1.5, bb: 1.0 };
     const labels  = ['rsi', 'macd', 'ema', 'vwap', 'ichi', 'bb'];
     const engines = [rsi, macd, ema, vwap, ichi, bb];
@@ -517,7 +468,6 @@ class MomentumAgent extends EventEmitter {
       direction = DIRECTION.SHORT;
       score = _round(50 + (shortPct - 0.5) * 100);
     } else {
-      // Mixed — use score from highest-weight engine
       const dominant = engines
         .map((e, i) => ({ e, w: weights[labels[i]] || 1 }))
         .filter(x => x.e)
@@ -528,7 +478,6 @@ class MomentumAgent extends EventEmitter {
 
     score = Math.min(100, Math.max(0, score));
 
-    // ATR for volatility context
     const atr = _atr(candles);
 
     const vote = {
@@ -573,8 +522,6 @@ class MomentumAgent extends EventEmitter {
     };
   }
 }
-
-// ── Exports ────────────────────────────────────────────────────────────────
 
 module.exports = {
   MomentumAgent,

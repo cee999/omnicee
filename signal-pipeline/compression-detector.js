@@ -1,32 +1,3 @@
-/**
- * ============================================================
- *  COMPRESSION DETECTOR — Volatility Squeeze / Expansion Engine
- *  AI Trading Assistant · Layer 5 · Signal Pipeline
- * ============================================================
- *
- *  Identifies periods where price range and volatility have
- *  tightened well below their recent norm — conditions that
- *  historically precede an expansion move. Combines:
- *
- *    - Bollinger Band Width percentile (BBW squeeze)
- *    - ATR contraction vs its own moving average
- *    - Range compression (Donchian channel narrowing)
- *    - Consecutive small-range candle count
- *
- *  into a single 0-100 "compression score" plus a directional
- *  bias hint (which side the eventual expansion is more likely
- *  to break toward), based on where price sits inside the
- *  compression range and recent higher-timeframe drift.
- *
- *  Input:  candles (OHLCV), optional higherTFCandles for bias
- *  Output: { compressionScore, isCompressed, biasHint, detail }
- *
- *  Usage:
- *    const { CompressionDetector } = require('./compression-detector');
- *    const detector = new CompressionDetector();
- *    const result = detector.analyze({ candles });
- * ============================================================
- */
 
 'use strict';
 
@@ -67,9 +38,9 @@ class CompressionDetector {
     this.bbStdDev = config.bbStdDev || 2;
     this.atrPeriod = config.atrPeriod || 14;
     this.donchianPeriod = config.donchianPeriod || 20;
-    this.lookback = config.lookback || 100; // history window for percentile ranking
-    this.squeezePercentile = config.squeezePercentile ?? 20; // below this = squeeze
-    this.smallRangeThreshold = config.smallRangeThreshold ?? 0.6; // vs avg range
+    this.lookback = config.lookback || 100;
+    this.squeezePercentile = config.squeezePercentile ?? 20;
+    this.smallRangeThreshold = config.smallRangeThreshold ?? 0.6;
   }
 
   _bollingerWidth(closes) {
@@ -117,8 +88,6 @@ class CompressionDetector {
     const currentATR = atrSeries[atrSeries.length - 1];
     const atrPercentile = percentileRank(currentATR, histATR.length ? histATR : atrSeries);
 
-    // Donchian channel narrowing: compare current N-period high-low range
-    // to the average of the prior several N-period ranges.
     const donchianWindow = candles.slice(-this.donchianPeriod);
     const currentDonchianRange = Math.max(...donchianWindow.map(c => c.high)) - Math.min(...donchianWindow.map(c => c.low));
     const priorRanges = [];
@@ -130,7 +99,6 @@ class CompressionDetector {
     const avgPriorRange = avg(priorRanges) || currentDonchianRange;
     const donchianRatio = avgPriorRange > 0 ? currentDonchianRange / avgPriorRange : 1;
 
-    // Consecutive small-range candles (relative to recent average range)
     const recentRanges = candles.slice(-20).map(c => c.high - c.low);
     const avgRecentRange = avg(recentRanges) || 0.0001;
     let consecutiveSmall = 0;
@@ -140,8 +108,7 @@ class CompressionDetector {
       else break;
     }
 
-    // Composite compression score (0-100, higher = tighter/more compressed)
-    const bbwScore = round(100 - bbwPercentile, 1);       // low BBW percentile => high score
+    const bbwScore = round(100 - bbwPercentile, 1);
     const atrScore = round(100 - atrPercentile, 1);
     const donchianScore = round(Math.max(0, Math.min(100, (1 - donchianRatio) * 150)), 1);
     const streakScore = round(Math.min(100, consecutiveSmall * 12), 1);
@@ -152,8 +119,6 @@ class CompressionDetector {
 
     const isCompressed = compressionScore >= (100 - this.squeezePercentile);
 
-    // Directional bias hint: where does price sit within the compression
-    // range, and (if provided) what's the higher-timeframe drift?
     const rangeHigh = Math.max(...donchianWindow.map(c => c.high));
     const rangeLow = Math.min(...donchianWindow.map(c => c.low));
     const posInRange = rangeHigh !== rangeLow ? (closes[closes.length - 1] - rangeLow) / (rangeHigh - rangeLow) : 0.5;
@@ -165,7 +130,7 @@ class CompressionDetector {
     }
 
     let biasHint = 'NEUTRAL';
-    const leanScore = (posInRange - 0.5) * 2 + htfDrift * 10; // combine positional + drift lean
+    const leanScore = (posInRange - 0.5) * 2 + htfDrift * 10;
     if (leanScore > 0.15) biasHint = 'UPSIDE_LEAN';
     else if (leanScore < -0.15) biasHint = 'DOWNSIDE_LEAN';
 

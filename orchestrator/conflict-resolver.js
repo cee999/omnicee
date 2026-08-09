@@ -1,20 +1,5 @@
 'use strict';
 
-/**
- * ============================================================
- *  CONFLICT RESOLVER — Agent Vote Arbitration
- *  AI Trading Assistant · Layer 2 · Orchestrator
- * ============================================================
- *
- *  Responsibilities:
- *    - Arbitrate conflicts between agent votes
- *    - Weighted majority voting (SMC > MTF > others)
- *    - Handle agent disagreements
- *    - Track conflict patterns
- *    - Return unified direction for scorer
- * ============================================================
- */
-
 // FIX: Add safe rounding with NaN/Infinity checks
 const r     = (n, d = 4) => {
   if (!Number.isFinite(n)) return 0;
@@ -23,21 +8,7 @@ const r     = (n, d = 4) => {
 const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
 
 class ConflictResolver {
-  /**
-   * Resolves conflicts between agent votes before passing to SignalScorer.
-   *
-   * Rules:
-   *   1. If SMC and MTF both say LONG/SHORT → allow (highest weight agents agree)
-   *   2. If SMC says LONG but MTF says SHORT → WAIT (fundamental conflict)
-   *   3. If 3+ agents agree on direction → allow even if 2 oppose
-   *   4. If momentum strongly opposes SMC → reduce SMC score by 20%
-   *   5. If there's a liquidation cascade in progress → override to WAIT
-   *   6. Track conflict patterns over time — repeated conflicts = regime change
-   *
-   * @param {Object} votes - { smc, mtf, momentum, volumeOI, macroSent }
-   * @param {Object} context - { symbol, timeframe, currentPrice, liquidationAlert }
-   * @returns {Object} { resolved: bool, votes, conflicts, direction, note }
-   */
+  // note }
   resolve(votes, context = {}) {
     return ConflictResolver.resolve(votes, context);
   }
@@ -59,7 +30,6 @@ class ConflictResolver {
       const fractalDir = votes.fractal?.direction ? String(votes.fractal.direction).toUpperCase() : null;
       const patternDir = votes.pattern?.direction ? String(votes.pattern.direction).toUpperCase() : null;
 
-      // ── Rule 1: Liquidation cascade override ──
       if (context.liquidationAlert?.isCascade) {
         resolution = 'WAIT';
         const totalUSDT = context.liquidationAlert.totalUSDT || 0;
@@ -67,7 +37,6 @@ class ConflictResolver {
         conflicts.push({ type: 'LIQUIDATION_CASCADE', severity: 'CRITICAL', note });
       }
 
-      // ── Rule 2: SMC vs MTF fundamental conflict ──
       if (smcDir && mtfDir &&
           smcDir !== 'WAIT' && mtfDir !== 'WAIT' &&
           smcDir !== mtfDir) {
@@ -82,8 +51,6 @@ class ConflictResolver {
         note       = `SMC/MTF conflict: ${smcDir} vs ${mtfDir}`;
       }
 
-      // ── Rule 3: Majority vote across full 8-agent book ──
-      // Require 4+ directional agreement (stricter with more agents) for profit mode
       const dirs = [smcDir, mtfDir, momDir, volDir, macroDir, microDir, fractalDir, patternDir].filter(Boolean);
       const longCount  = dirs.filter(d => d === 'LONG').length || 0;
       const shortCount = dirs.filter(d => d === 'SHORT').length || 0;
@@ -96,7 +63,6 @@ class ConflictResolver {
         else if (waitCount >= 5) { resolution = 'WAIT';  note = `${waitCount}/${n} agents say wait`; }
       }
 
-      // ── Rule 4: Momentum penalty if opposing SMC strongly ──
       if (smcDir && momDir && smcDir !== 'WAIT' && momDir !== 'WAIT' && smcDir !== momDir) {
         conflicts.push({
           type:     'MOMENTUM_OPPOSES_SMC',
@@ -117,7 +83,6 @@ class ConflictResolver {
         }
       }
 
-      // ── Rule 4b: Microstructure opposes SMC (adverse selection risk) ──
       if (smcDir && microDir && smcDir !== 'WAIT' && microDir !== 'WAIT' && smcDir !== microDir) {
         conflicts.push({
           type:     'MICROSTRUCTURE_OPPOSES_SMC',
@@ -136,7 +101,6 @@ class ConflictResolver {
         }
       }
 
-      // ── Rule 5: Volume opposes SMC ──
       if (smcDir && volDir && smcDir !== 'WAIT' && volDir !== 'WAIT' && smcDir !== volDir) {
         conflicts.push({
           type:     'VOLUME_OPPOSES_SMC',
@@ -145,7 +109,6 @@ class ConflictResolver {
         });
       }
 
-      // ── Determine consensus direction for scorer ──
       const consensusDir = resolution === 'LONG'  ? 'LONG'
         : resolution === 'SHORT' ? 'SHORT'
         : 'WAIT';

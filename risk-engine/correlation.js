@@ -1,60 +1,19 @@
-/**
- * ============================================================
- *  CORRELATION FILTER — Portfolio Correlation & Exposure Engine
- *  AI Trading Assistant · Layer 6 · Risk Engine Module
- *  File: risk-engine/correlation-filter.js
- * ============================================================
- *
- *  Modules inside this file:
- *
- *  1. CorrelationMatrixBuilder
- *     - Computes Pearson correlation coefficient between price series
- *     - Builds full N×N correlation matrix from candle data
- *     - Rolling correlation windows (e.g. last 50, 100, 200 candles)
- *
- *  2. DynamicCorrelationTracker
- *     - Maintains live, updating correlation matrix as new candles arrive
- *     - Falls back to static correlation groups when no price data available
- *     - Flags correlation regime changes (e.g. EUR/USD vs Gold correlation flip)
- *
- *  3. CurrencyExposureCalculator
- *     - Computes net exposure per currency (USD, EUR, GBP, JPY, etc.)
- *     - Computes net exposure per asset class
- *     - Detects overconcentration in a single currency
- *
- *  4. DiversificationScorer
- *     - Portfolio diversification score (0-100)
- *     - Effective number of independent bets (Herfindahl-based)
- *     - Suggests which new trades would most improve diversification
- *
- *  5. CorrelationFilter (main class)
- *     - check(symbol, direction) → allowed/blocked decision
- *     - Combines static groups + dynamic correlation when available
- *     - Tracks open positions
- *     - Full portfolio risk dashboard
- * ============================================================
- */
 
 'use strict';
-
-// ─────────────────────────────────────────────
-//  CONSTANTS
-// ─────────────────────────────────────────────
 
 const DEFAULTS = {
   MAX_OPEN_POSITIONS:        5,
   MAX_CORRELATED_POSITIONS:  2,
-  HIGH_CORRELATION_THRESHOLD: 0.70,   // |r| > 0.70 = highly correlated
-  REGIME_CHANGE_THRESHOLD:    0.40,   // correlation shift > 0.40 = regime change
+  HIGH_CORRELATION_THRESHOLD: 0.70,
+  REGIME_CHANGE_THRESHOLD:    0.40,
   DEFAULT_RISK_PCT:           1.0,
-  CORRELATION_WINDOW:         50,     // candles to use for dynamic correlation
+  CORRELATION_WINDOW:         50,
 };
 
-// Static correlation groups — used as fallback when no price data available
 const CORRELATION_GROUPS = {
-  USD_MAJORS:    ['EURUSD','GBPUSD','AUDUSD','NZDUSD'],          // inverse-correlated to USD strength
+  USD_MAJORS:    ['EURUSD','GBPUSD','AUDUSD','NZDUSD'],
   USD_JPY_GROUP: ['USDJPY','EURJPY','GBPJPY','AUDJPY','CADJPY','CHFJPY'],
-  USD_SAFE:      ['USDCHF','USDCAD'],                             // positively correlated to USD strength
+  USD_SAFE:      ['USDCHF','USDCAD'],
   GOLD_SILVER:   ['XAUUSD','XAGUSD','GOLD','SILVER'],
   CRYPTO_MAJOR:  ['BTCUSDT','ETHUSDT','BTCUSD','ETHUSD','BTCPERP','ETHPERP'],
   CRYPTO_ALT_L1: ['SOLUSDT','ADAUSDT','AVAXUSDT','DOTUSDT'],
@@ -65,7 +24,6 @@ const CORRELATION_GROUPS = {
   OIL_ENERGY:    ['USOIL','UKOIL','CRUDE','NATGAS'],
 };
 
-// Known static correlation coefficients (approximate historical values)
 const KNOWN_CORRELATIONS = {
   'EURUSD_GBPUSD':  0.85,
   'EURUSD_USDCHF': -0.90,
@@ -77,10 +35,9 @@ const KNOWN_CORRELATIONS = {
   'SPX500_NAS100':  0.95,
   'SPX500_XAUUSD': -0.30,
   'USOIL_USDCAD':  -0.65,
-  'DXY_EURUSD':    -0.97,    // if DXY tracked separately
+  'DXY_EURUSD':    -0.97,
 };
 
-// Asset classes for exposure capping
 const ASSET_CLASSES = {
   FOREX_MAJOR: ['EURUSD','GBPUSD','USDJPY','USDCHF','USDCAD','AUDUSD','NZDUSD'],
   FOREX_CROSS: ['EURJPY','GBPJPY','EURGBP','AUDJPY','EURAUD','GBPAUD'],
@@ -99,26 +56,13 @@ const MAX_CLASS_EXPOSURE_PCT = {
   ENERGY:      2,
 };
 
-// Currency exposure: which currencies are "long" vs "short" in each pair
-// e.g. Long EURUSD = long EUR, short USD
 const CURRENCY_DIRECTION = {
-  // pair → [base currency direction multiplier, quote currency direction multiplier]
-  // LONG the pair = +1 base, -1 quote
 };
-
-// ─────────────────────────────────────────────
-//  UTILITIES
-// ─────────────────────────────────────────────
 
 const r     = (n, d = 4) => parseFloat((n ?? 0).toFixed(d));
 const avg   = arr => arr.length === 0 ? 0 : arr.reduce((s, v) => s + v, 0) / arr.length;
 const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
 
-/**
- * Extract base and quote currency from a forex pair symbol.
- * EURUSD → { base: 'EUR', quote: 'USD' }
- * For non-forex (crypto, metals, indices), returns null quote handling.
- */
 function parseCurrencyPair(symbol) {
   const forexCurrencies = ['EUR','GBP','USD','JPY','CHF','CAD','AUD','NZD'];
 
@@ -133,29 +77,16 @@ function parseCurrencyPair(symbol) {
     }
   }
 
-  // Metals: XAUUSD, XAGUSD → base = XAU/XAG, quote = USD
   if (symbol.startsWith('XAU')) return { base: 'XAU', quote: 'USD', isForex: false, isMetal: true };
   if (symbol.startsWith('XAG')) return { base: 'XAG', quote: 'USD', isForex: false, isMetal: true };
 
-  // Crypto: BTCUSDT → base = BTC, quote = USDT
   if (symbol.endsWith('USDT')) return { base: symbol.slice(0, -4), quote: 'USDT', isForex: false, isCrypto: true };
   if (symbol.endsWith('USD'))  return { base: symbol.slice(0, -3), quote: 'USD',  isForex: false, isCrypto: true };
 
   return { base: symbol, quote: null, isForex: false };
 }
 
-// ─────────────────────────────────────────────
-//  1. CORRELATION MATRIX BUILDER
-// ─────────────────────────────────────────────
-
 class CorrelationMatrixBuilder {
-  /**
-   * Computes Pearson correlation coefficient between two price series.
-   *
-   * @param {number[]} seriesA - returns or prices for asset A
-   * @param {number[]} seriesB - returns or prices for asset B
-   * @returns {number} correlation coefficient (-1 to 1)
-   */
   static pearson(seriesA, seriesB) {
     const n = Math.min(seriesA.length, seriesB.length);
     if (n < 2) return 0;
@@ -181,11 +112,6 @@ class CorrelationMatrixBuilder {
     return r(num / den, 4);
   }
 
-  /**
-   * Convert OHLC candles to a series of percentage returns.
-   * Returns are used instead of raw prices for correlation —
-   * this avoids spurious correlation from trending price levels.
-   */
   static toReturns(candles) {
     if (!candles || candles.length < 2) return [];
 
@@ -198,13 +124,6 @@ class CorrelationMatrixBuilder {
     return returns;
   }
 
-  /**
-   * Build a full correlation matrix from a map of { symbol → candles }.
-   *
-   * @param {Object} candleMap - { 'EURUSD': [...candles], 'XAUUSD': [...candles], ... }
-   * @param {number} window    - lookback window for returns (default 50)
-   * @returns {Object} { matrix: {symbolA: {symbolB: correlation}}, symbols }
-   */
   static buildMatrix(candleMap, window = DEFAULTS.CORRELATION_WINDOW) {
     const symbols = Object.keys(candleMap);
     const returnsMap = {};
@@ -221,7 +140,7 @@ class CorrelationMatrixBuilder {
         if (symA === symB) {
           matrix[symA][symB] = 1.0;
         } else if (matrix[symB]?.[symA] !== undefined) {
-          matrix[symA][symB] = matrix[symB][symA]; // symmetric
+          matrix[symA][symB] = matrix[symB][symA];
         } else {
           matrix[symA][symB] = this.pearson(returnsMap[symA], returnsMap[symB]);
         }
@@ -231,16 +150,10 @@ class CorrelationMatrixBuilder {
     return { matrix, symbols, window, computedAt: Date.now() };
   }
 
-  /**
-   * Get correlation between two specific symbols from a matrix
-   */
   static getCorrelation(matrix, symA, symB) {
     return matrix?.[symA]?.[symB] ?? null;
   }
 
-  /**
-   * Find all pairs with |correlation| above threshold
-   */
   static findHighCorrelations(matrixResult, threshold = DEFAULTS.HIGH_CORRELATION_THRESHOLD) {
     const { matrix, symbols } = matrixResult;
     const pairs = [];
@@ -266,15 +179,7 @@ class CorrelationMatrixBuilder {
   }
 }
 
-// ─────────────────────────────────────────────
-//  2. DYNAMIC CORRELATION TRACKER
-// ─────────────────────────────────────────────
-
 class DynamicCorrelationTracker {
-  /**
-   * Maintains a live correlation matrix that updates as new candle data arrives.
-   * Falls back to KNOWN_CORRELATIONS static values when insufficient data.
-   */
   constructor(config = {}) {
     this.window         = config.window ?? DEFAULTS.CORRELATION_WINDOW;
     this.minCandles     = config.minCandles ?? 20;
@@ -284,13 +189,7 @@ class DynamicCorrelationTracker {
     this._regimeChanges = [];
   }
 
-  /**
-   * Update the correlation matrix with fresh candle data.
-   *
-   * @param {Object} candleMap - { symbol → candles }
-   */
   update(candleMap) {
-    // Filter symbols with enough data
     const validMap = {};
     for (const [sym, candles] of Object.entries(candleMap)) {
       if (candles && candles.length >= this.minCandles) {
@@ -304,7 +203,6 @@ class DynamicCorrelationTracker {
     this._matrix = CorrelationMatrixBuilder.buildMatrix(validMap, this.window);
     this._lastUpdate = Date.now();
 
-    // Detect regime changes
     if (this._previousMatrix) {
       this._detectRegimeChanges();
     }
@@ -342,26 +240,19 @@ class DynamicCorrelationTracker {
     }
   }
 
-  /**
-   * Get correlation between two symbols.
-   * Falls back to static known correlations or group-based estimates if no live data.
-   */
   getCorrelation(symA, symB) {
     if (symA === symB) return 1.0;
 
-    // Try live matrix first
     if (this._matrix) {
       const live = CorrelationMatrixBuilder.getCorrelation(this._matrix, symA, symB);
       if (live !== null) return { value: live, source: 'LIVE' };
     }
 
-    // Try known static correlations
     const key1 = `${symA}_${symB}`;
     const key2 = `${symB}_${symA}`;
     if (KNOWN_CORRELATIONS[key1] !== undefined) return { value: KNOWN_CORRELATIONS[key1], source: 'STATIC' };
     if (KNOWN_CORRELATIONS[key2] !== undefined) return { value: KNOWN_CORRELATIONS[key2], source: 'STATIC' };
 
-    // Fall back to group-based estimate
     const groupA = this._getGroup(symA);
     const groupB = this._getGroup(symB);
 
@@ -393,23 +284,9 @@ class DynamicCorrelationTracker {
   }
 }
 
-// ─────────────────────────────────────────────
-//  3. CURRENCY EXPOSURE CALCULATOR
-// ─────────────────────────────────────────────
-
 class CurrencyExposureCalculator {
-  /**
-   * Computes net exposure per currency across all open positions.
-   *
-   * For forex: LONG EURUSD = +1 EUR exposure, -1 USD exposure
-   * For crypto: LONG BTCUSDT = +1 BTC exposure (USDT treated as cash)
-   * For metals: LONG XAUUSD = +1 XAU exposure, -1 USD exposure
-   *
-   * @param {Array} positions - [{ symbol, direction, riskPct }]
-   * @returns {Object} exposure per currency + overconcentration warnings
-   */
   static compute(positions) {
-    const exposure = {}; // currency → net exposure (sum of riskPct, signed)
+    const exposure = {};
 
     for (const pos of positions) {
       const { base, quote, isForex, isMetal, isCrypto } = parseCurrencyPair(pos.symbol);
@@ -423,17 +300,13 @@ class CurrencyExposureCalculator {
         }
       } else if (isCrypto) {
         exposure[base] = (exposure[base] || 0) + dirMult * risk;
-        // Quote (USDT/USD) treated as neutral cash — not counted
       } else {
-        // Indices, oil, etc — treat symbol itself as the "currency"
         exposure[pos.symbol] = (exposure[pos.symbol] || 0) + dirMult * risk;
       }
     }
 
-    // Round all values
     for (const k of Object.keys(exposure)) exposure[k] = r(exposure[k], 3);
 
-    // Find overconcentration (single currency exposure > 4% net)
     const warnings = [];
     for (const [currency, exp] of Object.entries(exposure)) {
       if (Math.abs(exp) > 4) {
@@ -455,31 +328,13 @@ class CurrencyExposureCalculator {
     };
   }
 
-  /**
-   * Simulate adding a new position — would it create overconcentration?
-   */
   static simulateAdd(positions, newSymbol, newDirection, riskPct = DEFAULTS.DEFAULT_RISK_PCT) {
     const simulated = [...positions, { symbol: newSymbol, direction: newDirection, riskPct }];
     return this.compute(simulated);
   }
 }
 
-// ─────────────────────────────────────────────
-//  4. DIVERSIFICATION SCORER
-// ─────────────────────────────────────────────
-
 class DiversificationScorer {
-  /**
-   * Computes a portfolio diversification score (0-100).
-   * Uses a Herfindahl-Hirschman-style index based on correlation clusters.
-   *
-   * 100 = perfectly diversified (all positions uncorrelated)
-   * 0   = all positions in the same correlated cluster
-   *
-   * @param {Array} positions - [{ symbol, direction, riskPct }]
-   * @param {DynamicCorrelationTracker} corrTracker
-   * @returns {Object} { score, effectiveBets, clusters }
-   */
   static score(positions, corrTracker) {
     if (positions.length === 0) {
       return { score: 100, effectiveBets: 0, clusters: [], note: 'No open positions' };
@@ -488,12 +343,10 @@ class DiversificationScorer {
       return { score: 100, effectiveBets: 1, clusters: [[positions[0].symbol]], note: 'Single position — fully independent' };
     }
 
-    // Build pairwise correlation-adjusted weights
     const n = positions.length;
     const weights = positions.map(p => p.riskPct ?? DEFAULTS.DEFAULT_RISK_PCT);
     const totalWeight = weights.reduce((s, w) => s + w, 0);
 
-    // Effective number of bets (inverse Herfindahl with correlation penalty)
     let sumSqAdjusted = 0;
 
     for (let i = 0; i < n; i++) {
@@ -504,9 +357,8 @@ class DiversificationScorer {
         const corrResult = corrTracker.getCorrelation(positions[i].symbol, positions[j].symbol);
         const corr = Math.abs(corrResult.value);
 
-        // If positions are correlated and same direction, they act as one bet
         const sameDir = positions[i].direction === positions[j].direction;
-        const effectiveCorr = sameDir ? corr : -corr; // opposite direction = hedge
+        const effectiveCorr = sameDir ? corr : -corr;
 
         if (effectiveCorr > 0) {
           correlatedWeight += weights[j] * effectiveCorr * 0.5;
@@ -520,7 +372,6 @@ class DiversificationScorer {
     const effectiveBets = sumSqAdjusted > 0 ? r(1 / sumSqAdjusted, 2) : n;
     const score = clamp(r((effectiveBets / n) * 100, 1), 0, 100);
 
-    // Identify clusters (groups of highly correlated positions)
     const clusters = this._findClusters(positions, corrTracker);
 
     return {
@@ -559,10 +410,6 @@ class DiversificationScorer {
     return clusters.filter(c => c.length > 0);
   }
 
-  /**
-   * Suggest which asset classes/symbols would most improve diversification
-   * if added to the current portfolio.
-   */
   static suggestImprovement(positions, candidateSymbols, corrTracker) {
     const currentScore = this.score(positions, corrTracker).score;
     const suggestions  = [];
@@ -582,33 +429,16 @@ class DiversificationScorer {
   }
 }
 
-// ─────────────────────────────────────────────
-//  5. MAIN CORRELATION FILTER CLASS
-// ─────────────────────────────────────────────
-
 class CorrelationFilter {
-  /**
-   * @param {Object} config
-   * @param {number} config.maxOpenPositions
-   * @param {number} config.maxCorrelatedPositions
-   * @param {number} config.correlationThreshold
-   * @param {number} config.correlationWindow
-   */
   constructor(config = {}) {
     this.maxOpenPositions   = config.maxOpenPositions       ?? DEFAULTS.MAX_OPEN_POSITIONS;
     this.maxCorrelated      = config.maxCorrelatedPositions ?? DEFAULTS.MAX_CORRELATED_POSITIONS;
     this.corrThreshold      = config.correlationThreshold   ?? DEFAULTS.HIGH_CORRELATION_THRESHOLD;
 
-    this._openPositions = new Map(); // signalId → { symbol, direction, riskPct, timestamp }
+    this._openPositions = new Map();
     this.corrTracker    = new DynamicCorrelationTracker({ window: config.correlationWindow });
   }
 
-  /**
-   * Update the dynamic correlation matrix with fresh candle data.
-   * Call this periodically (e.g. every H1 close) from task-planner.js.
-   *
-   * @param {Object} candleMap - { symbol → candles } from BinanceFeed
-   */
   updateCorrelations(candleMap) {
     return this.corrTracker.update(candleMap);
   }
@@ -625,29 +455,18 @@ class CorrelationFilter {
     this._openPositions.delete(signalId);
   }
 
-  /**
-   * Main check — is a new trade on this symbol/direction allowed?
-   *
-   * @param {string} symbol
-   * @param {string} direction - 'LONG' or 'SHORT'
-   * @param {number} riskPct   - intended risk % for this trade
-   * @returns {Object} { allowed, reason, conflicts, ... }
-   */
   check(symbol, direction, riskPct = DEFAULTS.DEFAULT_RISK_PCT) {
     const openArr = [...this._openPositions.values()];
     const conflicts = [];
 
-    // ── 1. Max open positions ──
     if (openArr.length >= this.maxOpenPositions) {
       return { allowed: false, reason: `Max ${this.maxOpenPositions} open positions reached`, conflicts: [] };
     }
 
-    // ── 2. Duplicate symbol ──
     if (openArr.some(p => p.symbol === symbol)) {
       return { allowed: false, reason: `Already have open position on ${symbol}`, conflicts: [] };
     }
 
-    // ── 3. Dynamic correlation check ──
     let highCorrCount = 0;
     for (const pos of openArr) {
       const corrResult = this.corrTracker.getCorrelation(symbol, pos.symbol);
@@ -681,7 +500,6 @@ class CorrelationFilter {
       };
     }
 
-    // ── 4. Asset class exposure ──
     const assetClass = this._getAssetClass(symbol);
     if (assetClass) {
       const classRisk = openArr
@@ -698,13 +516,11 @@ class CorrelationFilter {
       }
     }
 
-    // ── 5. Currency exposure check ──
     const exposureSim = CurrencyExposureCalculator.simulateAdd(openArr, symbol, direction, riskPct);
     const newWarnings = exposureSim.warnings.filter(w =>
       !this._getCurrentWarnings(openArr).some(existing => existing.currency === w.currency)
     );
 
-    // ── 6. Diversification impact ──
     const diversificationBefore = DiversificationScorer.score(openArr, this.corrTracker);
     const diversificationAfter  = DiversificationScorer.score(
       [...openArr, { symbol, direction, riskPct }],
@@ -747,9 +563,6 @@ class CorrelationFilter {
     return r([...this._openPositions.values()].reduce((s, p) => s + p.riskPct, 0), 3);
   }
 
-  /**
-   * Full portfolio risk dashboard
-   */
   getStats() {
     const positions = [...this._openPositions.values()];
     const exposure  = CurrencyExposureCalculator.compute(positions);
@@ -782,18 +595,11 @@ class CorrelationFilter {
     };
   }
 
-  /**
-   * Suggest symbols that would improve portfolio diversification
-   */
   suggestDiversification(candidateSymbols) {
     const positions = [...this._openPositions.values()];
     return DiversificationScorer.suggestImprovement(positions, candidateSymbols, this.corrTracker);
   }
 }
-
-// ─────────────────────────────────────────────
-//  EXPORTS
-// ─────────────────────────────────────────────
 
 module.exports = {
   CorrelationFilter,
@@ -809,41 +615,3 @@ module.exports = {
   parseCurrencyPair,
 };
 
-/**
- * ─────────────────────────────────────────────
- *  USAGE EXAMPLE
- * ─────────────────────────────────────────────
- *
- *  const { CorrelationFilter } = require('./risk-engine/correlation-filter');
- *
- *  const corrFilter = new CorrelationFilter({
- *    maxOpenPositions:       5,
- *    maxCorrelatedPositions: 2,
- *    correlationThreshold:   0.70,
- *    correlationWindow:      50,
- *  });
- *
- *  // Periodically update with live candle data (e.g. every H1 close)
- *  corrFilter.updateCorrelations({
- *    EURUSD: feed.getCandles('EURUSD', 'H1'),
- *    GBPUSD: feed.getCandles('GBPUSD', 'H1'),
- *    XAUUSD: feed.getCandles('XAUUSD', 'H1'),
- *    BTCUSDT: feed.getCandles('BTCUSDT', 'H1'),
- *  });
- *
- *  // Check before opening a trade
- *  const check = corrFilter.check('GBPUSD', 'LONG', 1.0);
- *  if (!check.allowed) {
- *    console.log('Blocked:', check.reason);
- *  } else {
- *    corrFilter.addPosition(signalId, 'GBPUSD', 'LONG', 1.0);
- *    console.log('Diversification impact:', check.diversification);
- *  }
- *
- *  // Full dashboard
- *  console.log(corrFilter.getStats());
- *
- *  // Suggest new symbols to diversify
- *  const suggestions = corrFilter.suggestDiversification(['USDJPY','USOIL','SOLUSDT']);
- * ─────────────────────────────────────────────
- */

@@ -1,34 +1,6 @@
 'use strict';
 
-/**
- * ============================================================
- *  ENSEMBLE VALIDATION ENGINE
- *  Multi-Layer Signal Consensus Before Execution
- * ============================================================
- *
- *  The final gatekeeper: combines ALL validation engines into
- *  a single go/no-go decision. No signal fires without passing
- *  through this ensemble.
- *
- *  Validation layers (all must agree):
- *    1. Monte Carlo Simulation  — win probability + expected R
- *    2. Bayesian Probability    — posterior P(win | evidence)
- *    3. Statistical Validation  — hypothesis tests pass
- *    4. Walk-Forward Check      — parameters not overfitted
- *    5. Adaptive Learning       — historical pattern not blocked
- *    6. Agent Consensus Voting  — weighted multi-agent agreement
- *    7. Regime Compatibility    — signal matches current regime
- *    8. Fractal Alignment       — market memory supports strategy
- *    9. Microstructure Confirm  — order flow confirms direction
- *
- *  Voting: weighted consensus across all 9 layers.
- *  Minimum ensemble confidence to approve: configurable (default 60%)
- *
- *  Penalty system: each layer can add score penalties (0-20 pts)
- *  that reduce the signal's final score. Total penalty is capped
- *  to prevent over-penalization.
- * ============================================================
- */
+// Validation layers (all must agree): 1.
 
 function round(n, d = 4) {
   return Number.isFinite(+n) ? parseFloat((+n).toFixed(d)) : 0;
@@ -46,7 +18,6 @@ class EnsembleEngine {
     this.requireBayesian = config.requireBayesian !== false;
     this.requireStatistical = config.requireStatistical !== false;
 
-    // Layer weights for consensus scoring
     this.weights = config.weights || {
       monteCarlo: 20,
       bayesian: 18,
@@ -60,29 +31,12 @@ class EnsembleEngine {
     };
   }
 
-  /**
-   * Run the full ensemble validation.
-   *
-   * @param {Object} results - results from each validation layer
-   * @param {Object} results.monteCarlo     - from MonteCarloEngine.simulate()
-   * @param {Object} results.bayesian       - from BayesianEngine.evaluate()
-   * @param {Object} results.statistical    - from StatisticalValidator.validate()
-   * @param {Object} results.walkForward    - from WalkForwardOptimizer.analyze()
-   * @param {Object} results.learning       - from AdaptiveLearningEngine.evaluateSetup()
-   * @param {Object} results.agentVotes     - agent direction votes
-   * @param {Object} results.regime         - from RegimeEngine.classify()
-   * @param {Object} results.fractal        - from FractalAgent.analyze()
-   * @param {Object} results.microstructure - from MicrostructureAgent.analyze()
-   * @param {Object} signal                 - the candidate signal
-   * @returns {Object} ensemble decision
-   */
   evaluate(results, signal) {
     const layers = [];
     let totalPenalty = 0;
 
     const direction = (signal?.action || signal?.direction || 'WAIT').toUpperCase();
 
-    // Layer 1: Monte Carlo
     const mc = results.monteCarlo;
     if (mc && mc.simulations > 0) {
       const mcApproved = mc.approved !== false;
@@ -107,7 +61,6 @@ class EnsembleEngine {
       });
     }
 
-    // Layer 2: Bayesian
     const bay = results.bayesian;
     if (bay && bay.posterior != null) {
       const bayApproved = bay.approved !== false;
@@ -123,7 +76,6 @@ class EnsembleEngine {
       });
     }
 
-    // Layer 3: Statistical
     const stat = results.statistical;
     if (stat && stat.total > 0) {
       const statApproved = stat.approved !== false;
@@ -139,7 +91,6 @@ class EnsembleEngine {
       });
     }
 
-    // Layer 4: Walk-Forward
     const wf = results.walkForward;
     if (wf && wf.sufficient) {
       const wfApproved = wf.robust !== false;
@@ -164,7 +115,6 @@ class EnsembleEngine {
       });
     }
 
-    // Layer 5: Adaptive Learning
     const learn = results.learning;
     if (learn) {
       const learnApproved = learn.action !== 'BLOCK';
@@ -180,7 +130,6 @@ class EnsembleEngine {
       });
     }
 
-    // Layer 6: Agent Consensus
     const votes = results.agentVotes || {};
     const voteEntries = Object.values(votes).filter(v => v?.direction);
     const agreeing = voteEntries.filter(v => v.direction?.toUpperCase() === direction).length;
@@ -197,7 +146,6 @@ class EnsembleEngine {
     });
     if (agreement < 0.4) totalPenalty += 8;
 
-    // Layer 7: Regime Compatibility
     const regime = results.regime;
     if (regime) {
       const regimeOk = regime.tradeability >= 50;
@@ -214,7 +162,6 @@ class EnsembleEngine {
       });
     }
 
-    // Layer 8: Fractal Analysis
     const fractal = results.fractal;
     if (fractal && fractal.direction !== 'WAIT') {
       const fractalAligned = fractal.direction === direction;
@@ -230,7 +177,6 @@ class EnsembleEngine {
       if (!fractalAligned) totalPenalty += 3;
     }
 
-    // Layer 9: Microstructure
     const micro = results.microstructure;
     if (micro && micro.direction !== 'WAIT') {
       const microAligned = micro.direction === direction;
@@ -246,20 +192,16 @@ class EnsembleEngine {
       if (!microAligned) totalPenalty += 3;
     }
 
-    // Compute weighted ensemble score
     const totalWeight = layers.reduce((s, l) => s + l.weight, 0);
     const weightedScore = totalWeight > 0
       ? layers.reduce((s, l) => s + l.score * l.weight, 0) / totalWeight
       : 50;
 
-    // Count hard rejections
     const hardRejections = layers.filter(l => !l.approved && l.weight >= 10);
     const softRejections = layers.filter(l => !l.approved && l.weight < 10);
 
-    // Cap total penalty
     totalPenalty = Math.min(totalPenalty, this.maxTotalPenalty);
 
-    // Final decision: weighted score meets threshold AND no hard rejections
     const approved = weightedScore >= this.minConfidence && hardRejections.length === 0;
 
     return {

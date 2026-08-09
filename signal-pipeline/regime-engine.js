@@ -1,20 +1,6 @@
 'use strict';
 
-/**
- * ============================================================
- *  REGIME ENGINE — Enhanced with HMM-Style Transition Model
- *  Institutional-Grade Market Regime Classification
- * ============================================================
- *
- *  Upgrades:
- *    - Hidden Markov Model-inspired regime transition tracking
- *    - Transition probability matrix (what regime comes next?)
- *    - Regime persistence scoring (how long will it last?)
- *    - Multi-scale regime detection (short + medium + long)
- *    - Regime change early warning system
- *    - Historical regime performance tracking
- * ============================================================
- */
+// warning system - Historical regime performance tracking
 
 function round(n, d = 4) {
   return Number.isFinite(+n) ? parseFloat((+n).toFixed(d)) : 0;
@@ -34,36 +20,24 @@ function stddev(arr) {
   return Math.sqrt(arr.reduce((s, v) => s + (v - mean) ** 2, 0) / (arr.length - 1));
 }
 
-/**
- * Tracks regime transitions and builds a transition probability matrix.
- */
 class RegimeTransitionModel {
   constructor() {
-    this._transitions = {}; // from -> { to -> count }
-    this._durations = {};   // regime -> [duration1, duration2, ...]
+    this._transitions = {};
+    this._durations = {};
     this._currentRegime = null;
     this._currentStart = null;
     this._totalTransitions = 0;
-    // FIX: _stayCounts tracks how often a regime persists from one classify()
-    // call to the next. _transitions only ever records a change AWAY from a
-    // regime (record() only touches it when regime !== this._currentRegime),
-    // so probs[regime] in transitionProbabilities() could never be populated —
-    // persistenceProbability() was structurally guaranteed to always return
-    // its 0.5 fallback, silently disabling the "low regime persistence"
-    // tradeability penalty in classify(). Verified: rapid regime flapping that
-    // should show near-zero persistence still returned exactly 0.5.
+    // FIX: _stayCounts tracks how often a regime persists from one classify() call to the next.
     this._stayCounts = {};
   }
 
   record(regime) {
     if (this._currentRegime && regime !== this._currentRegime) {
-      // Transition occurred
       const from = this._currentRegime;
       if (!this._transitions[from]) this._transitions[from] = {};
       this._transitions[from][regime] = (this._transitions[from][regime] || 0) + 1;
       this._totalTransitions++;
 
-      // Record duration
       if (this._currentStart) {
         const duration = Date.now() - this._currentStart;
         if (!this._durations[from]) this._durations[from] = [];
@@ -82,7 +56,6 @@ class RegimeTransitionModel {
     }
   }
 
-  // Get transition probabilities from current regime
   transitionProbabilities(fromRegime) {
     const transitions = this._transitions[fromRegime];
     if (!transitions) return {};
@@ -96,28 +69,23 @@ class RegimeTransitionModel {
     return probs;
   }
 
-  // Expected duration of current regime
   expectedDuration(regime) {
     const durations = this._durations[regime];
     if (!durations || durations.length < 3) return null;
     const sorted = [...durations].sort((a, b) => a - b);
     return {
-      mean: round(avg(durations) / (60 * 60 * 1000), 2),      // hours
+      mean: round(avg(durations) / (60 * 60 * 1000), 2),
       median: round(sorted[Math.floor(sorted.length / 2)] / (60 * 60 * 1000), 2),
       samples: durations.length,
     };
   }
 
-  // How long has the current regime been active?
   currentDuration() {
     if (!this._currentStart) return 0;
     return Date.now() - this._currentStart;
   }
 
-  // Persistence probability (how likely to stay in current regime next period)
-  // FIX: was `transitionProbabilities(regime)[regime] || 0.5`, which could
-  // never be anything but 0.5 (see constructor note). Now computed from
-  // actual stay-vs-leave counts for this regime.
+  // Persistence probability (how likely to stay in current regime next period) FIX: was `transitionProbabilities(regime)[regime] || 0.5`, which could never be anything but 0.5 (see constructor note).
   persistenceProbability(regime) {
     const stays = this._stayCounts[regime] || 0;
     const transitionsAway = Object.values(this._transitions[regime] || {}).reduce((s, v) => s + v, 0);
@@ -210,27 +178,23 @@ class RegimeEngine {
       ? trendBias
       : `${structure}_${volatility}`;
 
-    // Update transition model
     this._transitionModel.record(regime);
     this._regimeHistory.push({ regime, timestamp: Date.now() });
     if (this._regimeHistory.length > this._maxHistory) {
       this._regimeHistory = this._regimeHistory.slice(-this._maxHistory);
     }
 
-    // Multi-scale regime analysis
     const shortTermRegime = this._multiScaleRegime(closes.slice(-15), sample.slice(-15));
     const mediumTermRegime = this._multiScaleRegime(closes.slice(-50), sample.slice(-50));
 
     // Regime change early warning
     const earlyWarning = this._regimeChangeWarning(closes, regime);
 
-    // Transition data
     const transitionProbs = this._transitionModel.transitionProbabilities(regime);
     const persistence = this._transitionModel.persistenceProbability(regime);
     const expectedDuration = this._transitionModel.expectedDuration(regime);
     const currentDurationMs = this._transitionModel.currentDuration();
 
-    // Adjust tradeability based on regime instability
     if (earlyWarning.warning) {
       tradeability -= 8;
       reasons.push(`Regime change warning: ${earlyWarning.note}`);
@@ -257,7 +221,6 @@ class RegimeEngine {
         directionalEfficiency: round(directionalEfficiency, 3),
         liquidityRatio: round(liquidity, 3),
       },
-      // New HMM-style fields
       transition: {
         probabilities: transitionProbs,
         persistence: round(persistence, 4),
@@ -287,12 +250,10 @@ class RegimeEngine {
   _regimeChangeWarning(closes, currentRegime) {
     if (closes.length < 30) return { warning: false, note: 'Insufficient data' };
 
-    // Check if directional efficiency is rapidly changing
     const deRecent = this._directionalEfficiency(closes.slice(-10));
     const dePrev = this._directionalEfficiency(closes.slice(-25, -10));
     const deChange = Math.abs(deRecent - dePrev);
 
-    // Check for volatility shift
     const returns = [];
     for (let i = 1; i < closes.length; i++) {
       if (closes[i] > 0 && closes[i - 1] > 0) {

@@ -1,8 +1,3 @@
-/**
- * Forex Factory weekly economic calendar — NO API KEY
- * Source: https://nfs.faireconomy.media/ff_calendar_thisweek.json
- * (same weekly export Forex Factory publishes publicly)
- */
 'use strict';
 
 const https = require('https');
@@ -55,15 +50,12 @@ class ForexFactoryCalendar {
     this._cache = null;
     this._cacheTs = 0;
     this._backoffUntil = 0;
-    this.cacheMs = 60 * 60 * 1000; // 1 hour — calendar does not change often
+    this.cacheMs = 60 * 60 * 1000;
   }
 
   enabled() { return true; }
   isConnected() { return true; }
 
-  /**
-   * @returns {Promise<Array<{name,currency,time,impact,forecast,previous}>>}
-   */
   async economicCalendar() {
     const now = Date.now();
     if (this._cache && (now - this._cacheTs) < this.cacheMs) return this._cache;
@@ -73,7 +65,6 @@ class ForexFactoryCalendar {
     try {
       rows = await httpGetJSON(FF_URL);
     } catch (err) {
-      // 429 = rate limited — wait 2 hours before trying again
       if (String(err.message).includes('429')) {
         this._backoffUntil = now + 2 * 3600 * 1000;
       }

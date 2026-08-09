@@ -1,43 +1,17 @@
-/**
- * ============================================================
- *  OPENINSIDER FEED — SEC Form 4 Insider Trading Data
- *  AI Trading Assistant · Layer 10 · External数据 Feed Module
- *  File: feeds/openinsider-feed.js
- * ============================================================
- *
- *  Integrates insider trading data from OpenInsider.com via:
- *  1. Parse.bot API - Official API wrapper for OpenInsider data
- *  2. Cluster buy detection - Multiple insiders buying same stock
- *  3. Insider sentiment analysis - Aggregate buy/sell ratios
- *  4. CEO/CFO specific tracking - Key executive moves
- *
- *  Insider trading data provides valuable signals:
- *  - Cluster buys = Strong bullish signal
- *  - CEO/CFO buying = High conviction signal
- *  - Extreme selling = Potential warning sign
- * ============================================================
- */
+// CEO/CFO specific tracking - Key executive moves Insider trading data provides valuable signals: - Cluster buys = Strong bullish signal - CEO/CFO buying = High conviction signal - Extreme selling =...
 
 'use strict';
 
 const https = require('https');
 const EventEmitter = require('events');
 
-// ─────────────────────────────────────────────
-//  CONSTANTS
-// ─────────────────────────────────────────────
-
 const PARSE_API_BASE = 'https://api.parse.bot/v1';
-const POLL_INTERVAL_MS = 10 * 60000; // 10 minutes
-const CLUSTER_WINDOW_DAYS = 5; // Cluster buys within this window
-const MIN_CLUSTER_SIZE = 3; // Minimum insiders for cluster
+const POLL_INTERVAL_MS = 10 * 60000;
+const CLUSTER_WINDOW_DAYS = 5;
+const MIN_CLUSTER_SIZE = 3;
 
 function round(n, d = 2) { return parseFloat((n ?? 0).toFixed(d)); }
 function clamp(v, lo, hi) { return Math.min(Math.max(v, lo), hi); }
-
-// ─────────────────────────────────────────────
-//  HTTP CLIENT
-// ─────────────────────────────────────────────
 
 function httpGetJSON(url, headers = {}) {
   return new Promise((resolve, reject) => {
@@ -52,13 +26,9 @@ function httpGetJSON(url, headers = {}) {
   });
 }
 
-// ─────────────────────────────────────────────
-//  CLUSTER BUY DETECTOR
-// ─────────────────────────────────────────────
-
 class ClusterBuyDetector {
   constructor() {
-    this.insiderActivity = new Map(); // ticker → [{ insider, date, type, value }]
+    this.insiderActivity = new Map();
   }
 
   addTrade(trade) {
@@ -66,7 +36,7 @@ class ClusterBuyDetector {
     if (!this.insiderActivity.has(ticker)) {
       this.insiderActivity.set(ticker, []);
     }
-    
+
     const trades = this.insiderActivity.get(ticker);
     trades.push({
       insider: trade.insiderName,
@@ -77,7 +47,6 @@ class ClusterBuyDetector {
       shares: parseFloat(trade.qty) || 0,
     });
 
-    // Keep only recent trades (last 30 days)
     const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     this.insiderActivity.set(ticker, trades.filter(t => t.date >= cutoff));
   }
@@ -91,9 +60,8 @@ class ClusterBuyDetector {
 
     if (recentTrades.length < MIN_CLUSTER_SIZE) return null;
 
-    // Count unique insiders
     const uniqueInsiders = new Set(recentTrades.map(t => t.insider));
-    
+
     if (uniqueInsiders.size < MIN_CLUSTER_SIZE) return null;
 
     const totalValue = recentTrades.reduce((sum, t) => sum + t.value, 0);
@@ -124,13 +92,9 @@ class ClusterBuyDetector {
   }
 }
 
-// ─────────────────────────────────────────────
-//  INSIDER SENTIMENT ANALYZER
-// ─────────────────────────────────────────────
-
 class InsiderSentimentAnalyzer {
   constructor() {
-    this.dailyData = new Map(); // date (YYYY-MM-DD) → { buyCount, sellCount, buyValue, sellValue }
+    this.dailyData = new Map();
   }
 
   addTrade(trade) {
@@ -143,7 +107,7 @@ class InsiderSentimentAnalyzer {
     }
 
     const dayData = this.dailyData.get(date);
-    
+
     if (type === 'Purchase' || type === 'P - Purchase') {
       dayData.buyCount++;
       dayData.buyValue += value;
@@ -171,11 +135,10 @@ class InsiderSentimentAnalyzer {
 
     const totalTrades = totals.buyCount + totals.sellCount;
     const buyRatio = totalTrades > 0 ? totals.buyCount / totalTrades : 0;
-    const valueRatio = (totals.buyValue + totals.sellValue) > 0 
-      ? totals.buyValue / (totals.buyValue + totals.sellValue) 
+    const valueRatio = (totals.buyValue + totals.sellValue) > 0
+      ? totals.buyValue / (totals.buyValue + totals.sellValue)
       : 0;
 
-    // Weight value ratio more heavily (large trades matter more)
     const weightedBullishness = (buyRatio * 0.3) + (valueRatio * 0.7);
 
     let sentiment = 'NEUTRAL';
@@ -198,29 +161,22 @@ class InsiderSentimentAnalyzer {
   }
 
   getTickerSentiment(ticker, days = 30) {
-    // This would require ticker-specific data storage
-    // For now, return overall sentiment
     return this.getSentiment(days);
   }
 }
 
-// ─────────────────────────────────────────────
-//  KEY EXECUTIVE TRACKER
-// ─────────────────────────────────────────────
-
 class KeyExecutiveTracker {
   constructor() {
-    this.executiveTrades = new Map(); // ticker → [{ insider, title, type, value, date }]
+    this.executiveTrades = new Map();
   }
 
   addTrade(trade) {
     const ticker = trade.ticker.toUpperCase();
     const title = (trade.title || '').toLowerCase();
-    
-    // Track CEO, CFO, and other key executives
-    const isKeyExecutive = title.includes('ceo') || 
+
+    const isKeyExecutive = title.includes('ceo') ||
                           title.includes('chief executive officer') ||
-                          title.includes('cfo') || 
+                          title.includes('cfo') ||
                           title.includes('chief financial officer') ||
                           title.includes('president') ||
                           title.includes('director') ||
@@ -240,9 +196,8 @@ class KeyExecutiveTracker {
       date: new Date(trade.tradeDate),
     });
 
-    // Keep last 90 days
     const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-    this.executiveTrades.set(ticker, 
+    this.executiveTrades.set(ticker,
       this.executiveTrades.get(ticker).filter(t => t.date >= cutoff)
     );
   }
@@ -251,7 +206,7 @@ class KeyExecutiveTracker {
     const trades = this.executiveTrades.get(ticker.toUpperCase());
     if (!trades || trades.length === 0) return null;
 
-    const recentTrades = trades.filter(t => 
+    const recentTrades = trades.filter(t =>
       (Date.now() - t.date.getTime()) < 30 * 24 * 60 * 60 * 1000
     );
 
@@ -268,8 +223,8 @@ class KeyExecutiveTracker {
       totalBuyValue: round(buys.reduce((sum, t) => sum + t.value, 0)),
       totalSellValue: round(sells.reduce((sum, t) => sum + t.value, 0)),
       recentActivity: recentTrades.slice(-10),
-      signal: buys.length > sells.length * 2 ? 'BULLISH' 
-             : sells.length > buys.length * 2 ? 'BEARISH' 
+      signal: buys.length > sells.length * 2 ? 'BULLISH'
+             : sells.length > buys.length * 2 ? 'BEARISH'
              : 'NEUTRAL',
       timestamp: Date.now(),
     };
@@ -285,21 +240,17 @@ class KeyExecutiveTracker {
   }
 }
 
-// ─────────────────────────────────────────────
-//  MAIN OPENINSIDER FEED CLASS
-// ─────────────────────────────────────────────
-
 class OpenInsiderFeed extends EventEmitter {
   constructor(config = {}) {
     super();
 
     this.apiKey = config.apiKey;
-    this.useParseAPI = config.useParseAPI !== false; // Default to Parse API
-    
+    this.useParseAPI = config.useParseAPI !== false;
+
     this.clusterDetector = new ClusterBuyDetector();
     this.sentimentAnalyzer = new InsiderSentimentAnalyzer();
     this.executiveTracker = new KeyExecutiveTracker();
-    
+
     this.pollIntervalMs = config.pollIntervalMs || POLL_INTERVAL_MS;
     this._pollTimer = null;
     this._connected = false;
@@ -311,10 +262,7 @@ class OpenInsiderFeed extends EventEmitter {
       errors: 0,
       startTime: null,
     };
-    // FIX: cluster novelty was tracked by array length/position, but
-    // getAllClusters() re-sorts by confidence every call — so a previously
-    // emitted cluster could shift position and get re-emitted as "new"
-    // while an actually-new cluster could be skipped. Track by ticker instead.
+    // FIX: cluster novelty was tracked by array length/position, but getAllClusters() re-sorts by confidence every call — so a previously emitted cluster could shift position and get re-emitted as "new"...
     this._emittedClusters = new Set();
   }
 
@@ -332,9 +280,9 @@ class OpenInsiderFeed extends EventEmitter {
     try {
       await this._fetchLatestInsiderTrades();
       this._connected = true;
-      
+
       this._pollTimer = setInterval(() => this._poll(), this.pollIntervalMs);
-      
+
       this.emit('ready', { sources: ['insider_trading', 'cluster_buys', 'executive_activity'] });
       console.log('[OpenInsider] Connected successfully');
     } catch (err) {
@@ -357,7 +305,6 @@ class OpenInsiderFeed extends EventEmitter {
 
   async _fetchLatestInsiderTrades() {
     if (!this.useParseAPI || !this.apiKey) {
-      // Mock mode for testing
       return;
     }
 
@@ -370,13 +317,12 @@ class OpenInsiderFeed extends EventEmitter {
       }
 
       const trades = response.data || response.items || [];
-      
+
       for (const trade of trades) {
         this._processTrade(trade);
         this._stats.tradesProcessed++;
       }
 
-      // Check for new clusters
       const clusters = this.clusterDetector.getAllClusters();
       const currentTickers = new Set(clusters.map(c => c.ticker));
       const newClusters = clusters.filter(c => !this._emittedClusters.has(c.ticker));
@@ -386,13 +332,10 @@ class OpenInsiderFeed extends EventEmitter {
         this._emittedClusters.add(cluster.ticker);
         this.emit('cluster_buy', cluster);
       }
-      // Prune tickers whose cluster has dissolved so a future re-formed
-      // cluster on the same ticker is treated as new again.
       for (const ticker of this._emittedClusters) {
         if (!currentTickers.has(ticker)) this._emittedClusters.delete(ticker);
       }
 
-      // Check executive activity
       const execActivity = this.executiveTracker.getAllExecutiveActivity();
       for (const activity of execActivity) {
         if (activity.signal !== 'NEUTRAL') {
@@ -407,17 +350,12 @@ class OpenInsiderFeed extends EventEmitter {
   }
 
   _processTrade(trade) {
-    // Add to cluster detector
     this.clusterDetector.addTrade(trade);
-    
-    // Add to sentiment analyzer
+
     this.sentimentAnalyzer.addTrade(trade);
-    
-    // Add to executive tracker
+
     this.executiveTracker.addTrade(trade);
   }
-
-  // ── Public Query API ──
 
   getClusterBuy(ticker) {
     return this.clusterDetector.detectCluster(ticker);
@@ -461,10 +399,6 @@ class OpenInsiderFeed extends EventEmitter {
     this.emit('closed');
   }
 }
-
-// ─────────────────────────────────────────────
-//  EXPORTS
-// ─────────────────────────────────────────────
 
 module.exports = {
   OpenInsiderFeed,

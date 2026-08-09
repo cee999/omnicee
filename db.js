@@ -5,12 +5,7 @@ require('dotenv').config();
 const { MongoClient } = require('mongodb');
 
 const DB_NAME = process.env.MONGODB_DB || 'omnicee_db';
-// FIX: same bug class already found and fixed for APP_ACCESS_TOKEN — values
-// pasted into a dashboard (Render, etc.) commonly pick up an invisible
-// trailing newline or space. For a Mongo connection string, if that lands
-// right after the password, it corrupts the credential silently and
-// produces exactly "bad auth: authentication failed" with no visible
-// difference in the dashboard field.
+// FIX: same bug class already found and fixed for APP_ACCESS_TOKEN — values pasted into a dashboard (Render, etc.) commonly pick up an invisible trailing newline or space.
 const MONGODB_URI = (process.env.MONGODB_URI || '').trim();
 const ENABLE_DB = Boolean(MONGODB_URI);
 
@@ -59,14 +54,7 @@ function compactSignal(signal = {}) {
       direction: a.direction,
       status: a.status,
     })),
-    // FIX: monteCarlo/bayesian/statistical/walkForward were all computed
-    // live per-signal (see index.js's runAnalysisCycle, which attaches them
-    // under signal.validation before dispatch) but this function — the
-    // only place that builds the document actually saved to Mongo and
-    // later served by GET /api/signals — never read that field. The
-    // validation engines ran on every signal and their results were
-    // thrown away before they ever reached the DB, the API, or the
-    // frontend. Now persisted alongside the rest of the signal.
+    // FIX: monteCarlo/bayesian/statistical/walkForward were all computed live per-signal (see index.js's runAnalysisCycle, which attaches them under signal.validation before dispatch) but this function —...
     validation: signal.validation ? {
       monteCarlo: signal.validation.monteCarlo || null,
       bayesian: signal.validation.bayesian || null,
@@ -106,16 +94,7 @@ async function getDB() {
   if (!ENABLE_DB) return null;
   if (dbConnection) return dbConnection;
 
-  // FIX: previously, every DB-touching call site independently attempted a
-  // fresh client.connect() the instant a prior attempt had failed (since
-  // dbConnection is reset to null in the catch block below) — with zero
-  // backoff. Under a persistent Atlas connectivity issue, this meant EVERY
-  // operation across the whole app (subscriber lookups, signal saves,
-  // telemetry, everything) each independently paid the full
-  // connectTimeoutMS (8s) before failing. This is exactly the pattern seen
-  // in production logs: two full connection failures logged within
-  // milliseconds of each other. Now: skip re-attempting for a short
-  // cooldown after a failure, fail fast instead.
+  // FIX: previously, every DB-touching call site independently attempted a fresh client.connect() the instant a prior attempt had failed (since dbConnection is reset to null in the catch block below) —...
   if (lastConnectAttemptFailedAt && (Date.now() - lastConnectAttemptFailedAt) < CONNECT_RETRY_COOLDOWN_MS) {
     return null;
   }
@@ -130,12 +109,7 @@ async function getDB() {
       socketTimeoutMS: 25000,
       retryWrites: true,
       retryReads: true,
-      // FIX: was ['zstd', 'snappy'] — neither compressor's optional native
-      // package (@mongodb-js/zstd, snappy) is actually installed in
-      // package.json, so the driver was requesting compression it could
-      // never perform. Not the cause of a TLS handshake failure (wire
-      // compression negotiates after the handshake completes), but dead
-      // config regardless. Removed rather than silently no-op.
+      // FIX: was ['zstd', 'snappy'] — neither compressor's optional native package (@mongodb-js/zstd, snappy) is actually installed in package.json, so the driver was requesting compression it could never...
     });
 
     await client.connect();
@@ -182,15 +156,7 @@ async function ensureIndexes(db) {
         { key: { patternKey: 1, closedAt: -1 }, name: 'outcome_pattern_recent' },
         { key: { symbol: 1, timeframe: 1, closedAt: -1 }, name: 'outcome_symbol_recent' },
       ]),
-      // FIX: candle history was 100% in-memory with zero persistence —
-      // every process restart (including Render free-tier spin-down/wake
-      // cycles, not just deliberate redeploys) required a full re-fetch of
-      // every symbol/timeframe from the rate-limited feeds (TwelveData:
-      // 8 credits/min, AlphaVantage: 25 req/day), repeatedly burning
-      // through both quotas throughout the day. One document per
-      // source/symbol/timeframe combo, upserted wholesale on each save —
-      // matches how the in-memory candleStore already keys data, so
-      // loading on boot is a direct drop-in rather than needing translation.
+      // FIX: candle history was 100% in-memory with zero persistence — every process restart (including Render free-tier spin-down/wake cycles, not just deliberate redeploys) required a full re-fetch of...
       db.collection('candle_history').createIndexes([
         { key: { source: 1, symbol: 1, timeframe: 1 }, unique: true, name: 'uniq_candle_series' },
       ]),
@@ -219,7 +185,6 @@ async function saveSignal(signal) {
   }
 }
 
-// Throttle telemetry to save free-tier storage (max 1 regime per symbol per min)
 const _lastTelemetrySave = {};
 async function saveTelemetry(event) {
   try {
@@ -240,7 +205,6 @@ async function saveTelemetry(event) {
   }
 }
 
-// Throttle market snapshots to save free-tier storage (1 per symbol per 5 min)
 const _lastMarketSave = {};
 async function saveMarketSnapshot(snapshot) {
   try {
@@ -268,12 +232,6 @@ async function saveMarketSnapshot(snapshot) {
 
 const MAX_STORED_CANDLES = 500;
 
-// Persist a full candle-history array for one symbol/timeframe on one feed
-// (source distinguishes e.g. 'twelvedata' vs 'binance' vs 'bybit', since
-// the same symbol can exist on more than one feed with different candle
-// semantics). Replaces the whole array on each call — matches how the
-// in-memory candleStore already treats a symbol/timeframe series as one
-// coherent unit, not row-per-candle.
 async function saveCandleHistory(source, symbol, timeframe, candles) {
   try {
     const db = await getDB();
@@ -292,10 +250,6 @@ async function saveCandleHistory(source, symbol, timeframe, candles) {
   }
 }
 
-// Returns { candles, updatedAt } or null if nothing stored / DB unavailable.
-// Callers decide staleness themselves (e.g. "if updatedAt is more than N
-// minutes old, treat this as a starting point and still fetch the most
-// recent few candles to fill the gap" rather than a full re-fetch).
 async function loadCandleHistory(source, symbol, timeframe) {
   try {
     const db = await getDB();
@@ -524,15 +478,7 @@ async function close() {
   }
 }
 
-// FIX: webapp-react/README.md's "Known gaps" section flagged this exact
-// hole — "no dedicated equity-history endpoint in the current API, only
-// point-in-time /api/stats". Built from trade_outcomes (already populated
-// by every recordOutcomeEverywhere() call — see signal-pipeline/outcome-
-// recorder.js), compounding each closed trade's pnlPct onto a starting
-// balance in closedAt order. This is REALIZED equity only (no floating/
-// unrealized P&L between trades) — an honest simplification, not a true
-// tick-by-tick balance feed, and the frontend labels it as such rather
-// than presenting it as more precise than it is.
+// FIX: webapp-react/README.md's "Known gaps" section flagged this exact hole — "no dedicated equity-history endpoint in the current API, only point-in-time /api/stats".
 async function getEquityCurve({ startBalance, limit = 500 } = {}) {
   try {
     const db = await getDB();

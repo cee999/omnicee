@@ -1,14 +1,9 @@
-/**
- * Yahoo Finance news — no API key
- * Uses public search endpoint: /v1/finance/search?q=...&newsCount=N
- */
 'use strict';
 
 const https = require('https');
 
 const UA = 'Mozilla/5.0 (compatible; OMNICEE/1.0; +https://github.com/cee999/omnicee)';
 
-// Topics we pull so News tab always has market-relevant stories
 const TOPICS = [
   'forex EUR USD',
   'dollar index DXY',

@@ -1,46 +1,4 @@
-/**
- * ============================================================
- *  AI ADVISOR — Agentic Reasoning Layer
- *  AI Trading Assistant · Layer 8 · Advisory (non-execution)
- * ============================================================
- *
- *  This is the one genuinely "agentic" piece in the system — everything
- *  else (SMC/MTF/momentum/etc. agents, RegimeEngine, StrategySelector,
- *  TrapDetector, ...) is deterministic math and rule-based logic, however
- *  sophisticated. This module calls an actual LLM (Claude, via the
- *  Anthropic API) to read everything the rest of the pipeline already
- *  computed and render a judgment call in natural language — the way a
- *  human analyst would review a junior trader's setup before it goes out.
- *
- *  SCOPE, DELIBERATELY LIMITED:
- *    - Advisory only. It can recommend TAKE / SKIP / REDUCE_SIZE on a
- *      signal that has ALREADY passed every deterministic filter in the
- *      pipeline (scoring, trap/compression/abnormal-market gates, regime
- *      fit). It cannot create signals, adjust risk parameters, touch
- *      position sizing directly, or reach anywhere near the MT5 execution
- *      bridge. If you ever want to extend its authority, do that
- *      deliberately and separately — this module's contract is "opinion,
- *      not action."
- *    - FAILS OPEN. Any error, timeout, malformed response, or missing API
- *      key means the advisor is simply skipped — the deterministic result
- *      already computed stands unchanged. An LLM outage should never be
- *      able to silently block or corrupt a trading decision.
- *    - Only called for signals that already cleared every earlier gate —
- *      this keeps API spend proportional to actual trade opportunities,
- *      not proportional to every candle close.
- *
- *  HONEST LIMITATION: this does not and cannot make the system's
- *  predictions more accurate in any fundamental sense. It's a second,
- *  differently-shaped opinion (qualitative/contextual vs. the pipeline's
- *  quantitative scoring) layered on top of real math — treat its verdict
- *  as one more input for your own judgment, not a guarantee.
- *
- *  Usage:
- *    const { AIAdvisor } = require('./ai-advisor');
- *    const advisor = new AIAdvisor({ apiKey: process.env.ANTHROPIC_API_KEY });
- *    const verdict = await advisor.evaluate({ signal, regime, strategyContext, ... });
- * ============================================================
- */
+// An LLM outage should never be able to silently block or corrupt a trading decision.
 
 'use strict';
 
@@ -58,13 +16,6 @@ function safeGet(v, fallback = null) {
 }
 
 class AIAdvisor {
-  /**
-   * @param {Object} config
-   * @param {string} [config.apiKey]      - defaults to process.env.ANTHROPIC_API_KEY
-   * @param {string} [config.model]       - defaults to process.env.ANTHROPIC_ADVISOR_MODEL or claude-sonnet-5
-   * @param {number} [config.timeoutMs]   - per-call timeout before failing open
-   * @param {number} [config.maxTokens]
-   */
   constructor(config = {}) {
     this.apiKey = config.apiKey ?? process.env.ANTHROPIC_API_KEY ?? '';
     this.model = config.model ?? process.env.ANTHROPIC_ADVISOR_MODEL ?? DEFAULT_MODEL;
@@ -76,7 +27,6 @@ class AIAdvisor {
     this._lastError = null;
   }
 
-  /** Build a compact, information-dense prompt from everything the pipeline already computed. */
   _buildPrompt({ signal, regime, strategyContext, candleContext, compressionContext, abnormalMarket, timeCycleContext, trapContext }) {
     const lines = [];
     lines.push(`Symbol: ${signal.symbol}  Timeframe: ${signal.timeframe}  Direction: ${signal.action}  Current price: ${signal.currentPrice}`);
@@ -109,9 +59,6 @@ class AIAdvisor {
     return lines.join('\n');
   }
 
-  /**
-   * @returns {{recommendation: 'TAKE'|'SKIP'|'REDUCE_SIZE', confidence: number|null, reasoning: string, source: 'ai'|'fallback', error?: string}}
-   */
   async evaluate(context) {
     const fallback = (reasoning, error) => ({
       recommendation: 'TAKE',

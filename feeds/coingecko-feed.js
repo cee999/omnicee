@@ -1,7 +1,3 @@
-/**
- * CoinGecko simple market snapshot — free, often works without a key
- * https://api.coingecko.com/api/v3/...
- */
 'use strict';
 
 const https = require('https');

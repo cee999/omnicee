@@ -1,14 +1,8 @@
 'use strict';
-/**
- * Simple email OTP auth:
- *  1) POST /api/auth/email/request  { email }  -> 6-digit code emailed
- *  2) POST /api/auth/email/verify   { email, code } -> session token
- * No password to remember. Code expires in 10 minutes.
- */
 const crypto = require('crypto');
 
 const CODE_TTL_MS = 10 * 60 * 1000;
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
 
 function normalizeEmail(email) {
@@ -34,7 +28,6 @@ function randomToken() {
 
 function isValidFromAddress(from) {
   const s = String(from || '').trim();
-  // Accept "email@example.com" or "Name <email@example.com>"
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) || /^[^<>]+<[^\s@]+@[^\s@]+\.[^\s@]+>$/.test(s);
 }
 
@@ -63,7 +56,6 @@ async function sendEmail({ to, subject, text }) {
     return { provider: 'resend' };
   }
 
-  // Optional nodemailer SMTP
   let nodemailer;
   try { nodemailer = require('nodemailer'); } catch (_) { nodemailer = null; }
   const host = process.env.SMTP_HOST;
@@ -96,25 +88,13 @@ async function sendEmail({ to, subject, text }) {
 function createEmailAuthRouter(express, db) {
   const router = express.Router();
 
-  // Per-email request tracking: 30s cooldown between codes (unchanged) PLUS
-  // a rolling-24h cap (new). FIX: the 30s cooldown alone only slows a
-  // single source down to ~2 requests/min — cheap to sidestep by rotating
-  // source IPs to keep mail-bombing ONE target inbox with OTP codes, since
-  // nothing capped total volume per email over time. authLimiter (see
-  // api/server.js) now covers the IP side of this; this covers the
-  // per-victim side, which IP limiting structurally can't.
+  // FIX: the 30s cooldown alone only slows a single source down to ~2 requests/min — cheap to sidestep by rotating source IPs to keep mail-bombing ONE target inbox with OTP codes, since nothing capped...
   const MAX_PER_DAY = Number(process.env.OTP_MAX_PER_EMAIL_PER_DAY || 8);
   const DAY_MS = 24 * 60 * 60 * 1000;
-  const lastRequest = new Map(); // email -> { last: ts, windowStart: ts, count: n }
+  const lastRequest = new Map();
 
-  // In-memory only (matches the rest of this file's existing lastRequest
-  // approach) — resets on a Render free-tier restart/spin-down, which is
-  // an acceptable trade-off for a friends-scale app; a persistent version
-  // would move this into the same `email_otps` Mongo collection instead.
-  // Cleanup runs opportunistically on each request rather than its own
-  // timer, so an idle process doesn't need a background interval at all.
   function cleanupStale(now) {
-    if (lastRequest.size < 500) return; // not worth the sweep yet
+    if (lastRequest.size < 500) return;
     for (const [email, rec] of lastRequest) {
       if (now - rec.windowStart > DAY_MS) lastRequest.delete(email);
     }
@@ -290,7 +270,7 @@ function emailSessionMiddleware(db) {
       if (session && (!session.expiresAt || new Date(session.expiresAt).getTime() > Date.now())) {
         req.emailSession = { email: session.email, token };
       }
-    } catch (_) { /* ignore */ }
+    } catch (_) { }
     next();
   };
 }
@@ -298,11 +278,9 @@ function emailSessionMiddleware(db) {
 function requireEmailAuth(req, res, next) {
   const enabled = process.env.EMAIL_AUTH_REQUIRED !== 'false';
   if (!enabled) return next();
-  // Allow EA routes and health without login
   const p = req.path || '';
   if (p.startsWith('/api/ea') || p === '/health' || p.startsWith('/api/auth/email')) return next();
   if (req.emailSession) return next();
-  // legacy app token still ok for automation
   const appTok = process.env.APP_ACCESS_TOKEN || '';
   if (appTok && (req.headers['x-app-token'] === appTok)) return next();
   return res.status(401).json({ ok: false, error: 'Login required', code: 'AUTH_REQUIRED' });

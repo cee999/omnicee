@@ -1,51 +1,5 @@
-/**
- * ============================================================
- *  SESSION FILTER — Maximum-Depth Time & Liquidity Risk Engine
- *  AI Trading Assistant · Layer 6 · Risk Engine Module
- *  File: risk-engine/session-filter.js
- * ============================================================
- *
- *  Modules inside this file:
- *
- *  1. LiquidityCurveEngine
- *     - Hour-by-hour (UTC) relative liquidity curves PER ASSET CLASS
- *     - Liquidity-weighted spread estimator
- *     - Volume-weighted session quality
- *
- *  2. DynamicKillzoneScorer
- *     - Rolling realized-volatility feed per symbol
- *     - Recomputes "today's" killzone quality using live ATR data
- *     - Detects abnormal quiet/loud sessions vs historical baseline
- *
- *  3. EconomicCalendarTierSystem
- *     - Tiered impact matrix TIER_1 to TIER_4
- *     - Per-currency AND per-asset-class blackout windows
- *     - Pre-event positioning window vs post-event full blackout
- *     - Speech/testimony calendar support
- *
- *  4. RolloverAvoidanceEngine
- *     - Forex broker swap/rollover spread-widening avoidance
- *     - Triple-swap Wednesday detection
- *     - Crypto funding settlement windows
- *
- *  5. InstitutionalRebalancingCalendar
- *     - Month-end / quarter-end rebalancing flow windows
- *     - Quad witching days
- *
- *  6. SessionBacktester
- *     - Empirical hourly performance from live trade outcomes
- *     - Compares model liquidity curve against actual results
- *
- *  7. SessionFilter (main class)
- *     - .check(symbol, timestamp) → allowed/blocked + full breakdown
- * ============================================================
- */
 
 'use strict';
-
-// ─────────────────────────────────────────────
-//  CONSTANTS
-// ─────────────────────────────────────────────
 
 const DEFAULTS = {
   BLOCK_DEAD_ZONE:          true,
@@ -63,10 +17,6 @@ const DEFAULTS = {
 };
 
 const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-
-// ─────────────────────────────────────────────
-//  1. LIQUIDITY CURVE ENGINE
-// ─────────────────────────────────────────────
 
 const LIQUIDITY_CURVES = {
   FOREX_MAJOR: [
@@ -149,10 +99,6 @@ class LiquidityCurveEngine {
   }
 }
 
-// ─────────────────────────────────────────────
-//  2. DYNAMIC KILLZONE SCORER
-// ─────────────────────────────────────────────
-
 class DynamicKillzoneScorer {
   constructor(config = {}) {
     this.baselineWindow   = config.baselineWindow   ?? DEFAULTS.VOL_BASELINE_WINDOW;
@@ -227,10 +173,6 @@ class DynamicKillzoneScorer {
     };
   }
 }
-
-// ─────────────────────────────────────────────
-//  3. ECONOMIC CALENDAR TIER SYSTEM
-// ─────────────────────────────────────────────
 
 const EVENT_TIERS = {
   TIER_1: { blackoutPre: 60, blackoutPost: 30, label: 'Tier 1 — Market Moving',     examples: ['NFP','FOMC Rate Decision','CPI','ECB Rate Decision'] },
@@ -364,10 +306,6 @@ class EconomicCalendarTierSystem {
   }
 }
 
-// ─────────────────────────────────────────────
-//  4. ROLLOVER AVOIDANCE ENGINE
-// ─────────────────────────────────────────────
-
 class RolloverAvoidanceEngine {
   static checkForex(timestamp) {
     const utcHour = getUTCHour(timestamp);
@@ -413,10 +351,6 @@ class RolloverAvoidanceEngine {
     };
   }
 }
-
-// ─────────────────────────────────────────────
-//  5. INSTITUTIONAL REBALANCING CALENDAR
-// ─────────────────────────────────────────────
 
 class InstitutionalRebalancingCalendar {
   static isMonthEnd(timestamp, lookbackDays = 2) {
@@ -492,10 +426,6 @@ class InstitutionalRebalancingCalendar {
     };
   }
 }
-
-// ─────────────────────────────────────────────
-//  6. SESSION BACKTESTER
-// ─────────────────────────────────────────────
 
 class SessionBacktester {
   constructor() {
@@ -590,10 +520,6 @@ class SessionBacktester {
   }
 }
 
-// ─────────────────────────────────────────────
-//  ASSET CLASS / INSTRUMENT MAPPING
-// ─────────────────────────────────────────────
-
 const SYMBOL_TO_ASSET_CLASS = (symbol) => {
   if (symbol.includes('XAU') || symbol.includes('XAG')) return 'METALS';
   if (['BTC','ETH'].some(t => symbol.includes(t))) return 'CRYPTO_MAJOR';
@@ -607,10 +533,6 @@ const SYMBOL_TO_ASSET_CLASS = (symbol) => {
 
   return 'FOREX_EXOTIC';
 };
-
-// ─────────────────────────────────────────────
-//  UTILITIES
-// ─────────────────────────────────────────────
 
 function r(n, d = 2) { return parseFloat((n ?? 0).toFixed(d)); }
 function avg(arr) { return arr.length === 0 ? 0 : arr.reduce((s, v) => s + v, 0) / arr.length; }
@@ -626,10 +548,6 @@ function getMonthDay(timestamp) {
   const d = new Date(timestamp || Date.now());
   return `${String(d.getUTCMonth() + 1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
 }
-
-// ─────────────────────────────────────────────
-//  HOLIDAY CALENDAR
-// ─────────────────────────────────────────────
 
 const FIXED_HOLIDAYS = [
   { date: '01-01', name: "New Year's Day",      affects: ['ALL'] },
@@ -706,10 +624,6 @@ class HolidayCalendar {
   }
 }
 
-// ─────────────────────────────────────────────
-//  7. MAIN SESSION FILTER CLASS
-// ─────────────────────────────────────────────
-
 class SessionFilter {
   constructor(config = {}) {
     this.requireKillzone = config.requireKillzone ?? DEFAULTS.REQUIRE_KILLZONE;
@@ -733,7 +647,6 @@ class SessionFilter {
 
     const breakdown = { assetClass, utcHour: r(utcHour, 2) };
 
-    // ── 1. Weekend gate ──
     if (this.blockWeekend && !isCrypto) {
       const isFridayClose = utcDay === 5 && utcHour >= 21;
       const isSaturdayAll = utcDay === 6;
@@ -747,7 +660,6 @@ class SessionFilter {
       }
     }
 
-    // ── 2. Holiday gate ──
     if (this.blockHolidays && !isCrypto) {
       const holiday = this.holidays.isHoliday(symbol, now);
       if (holiday.isHoliday) {
@@ -759,7 +671,6 @@ class SessionFilter {
       }
     }
 
-    // ── 3. Liquidity profile ──
     const liquidityProfile = LiquidityCurveEngine.getProfile(assetClass, utcHour);
     breakdown.liquidity = liquidityProfile;
 
@@ -779,11 +690,9 @@ class SessionFilter {
       };
     }
 
-    // ── 4. Dynamic killzone adjustment ──
     const dynamicAdj = this.dynamicScorer.getDynamicAdjustment(symbol, utcHour);
     breakdown.dynamicVolatility = dynamicAdj;
 
-    // ── 5. Killzone requirement ──
     if (this.requireKillzone && liquidityProfile.tier !== 'PRIME' && !isCrypto) {
       return {
         allowed: false,
@@ -792,7 +701,6 @@ class SessionFilter {
       };
     }
 
-    // ── 6. Rollover avoidance ──
     if (this.blockRollover) {
       const rollover = RolloverAvoidanceEngine.check(symbol, now);
       breakdown.rollover = rollover;
@@ -805,11 +713,9 @@ class SessionFilter {
       }
     }
 
-    // ── 7. Half-day check ──
     const halfDay = this.holidays.isHalfDay(symbol, now);
     breakdown.halfDay = halfDay;
 
-    // ── 8. Economic calendar tier check ──
     const calendarCheck = this.calendar.check(symbol, assetClass, now);
     breakdown.calendar = calendarCheck;
 
@@ -822,11 +728,9 @@ class SessionFilter {
       };
     }
 
-    // ── 9. Institutional rebalancing windows ──
     const rebalancing = InstitutionalRebalancingCalendar.assess(now, assetClass);
     breakdown.rebalancing = rebalancing;
 
-    // ── Combine all multipliers ──
     let multiplier = liquidityProfile.liquidity / 100;
     multiplier *= dynamicAdj.multiplier;
     multiplier *= calendarCheck.sizeMultiplier;
@@ -854,8 +758,6 @@ class SessionFilter {
       upcomingHighImpact: this.calendar.getUpcoming(4, 'TIER_1').slice(0, 3),
     };
   }
-
-  // ── Pass-through / data feed methods ──
 
   addNewsEvent(event)  { this.calendar.addEvent(event); }
   addNewsEvents(events) { this.calendar.addEvents(events); }
@@ -913,10 +815,6 @@ class SessionFilter {
   }
 }
 
-// ─────────────────────────────────────────────
-//  EXPORTS
-// ─────────────────────────────────────────────
-
 module.exports = {
   SessionFilter,
   LiquidityCurveEngine,
@@ -935,41 +833,3 @@ module.exports = {
   DEFAULTS,
 };
 
-/**
- * ─────────────────────────────────────────────
- *  USAGE EXAMPLE
- * ─────────────────────────────────────────────
- *
- *  const { SessionFilter } = require('./risk-engine/session-filter');
- *
- *  const sessionFilter = new SessionFilter({
- *    requireKillzone: false,
- *    blockDeadZone:   true,
- *    blockWeekend:    true,
- *    blockHolidays:   true,
- *    blockRollover:   true,
- *  });
- *
- *  sessionFilter.addNewsEvent({
- *    time: new Date('2026-06-20T12:30:00Z').getTime(),
- *    name: 'US NFP', currency: 'USD', tier: 'TIER_1',
- *  });
- *  sessionFilter.addSpeechEvent('Fed Chair Press Conference', 'USD',
- *    new Date('2026-06-20T18:00:00Z').getTime());
- *
- *  sessionFilter.recordVolatility('XAUUSD', candle, atrPct);
- *
- *  const check = sessionFilter.check('XAUUSD');
- *  if (!check.allowed) {
- *    console.log('Blocked:', check.reason);
- *  } else {
- *    console.log('Size multiplier:', check.multiplier);
- *    console.log('Liquidity tier:', check.liquidityTier);
- *  }
- *
- *  sessionFilter.recordOutcome({ symbol: 'XAUUSD', result: 'WIN', pnlPct: 1.5, timestamp: Date.now() });
- *
- *  console.log(sessionFilter.getBacktestComparison('METALS'));
- *  console.log(sessionFilter.getStats());
- * ─────────────────────────────────────────────
- */

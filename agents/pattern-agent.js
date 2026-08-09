@@ -1,45 +1,3 @@
-/**
- * ============================================================
- *  PATTERN AGENT — Wyckoff + Harmonics + Chart Patterns
- *  AI Trading Assistant · Layer 4 · Agents
- * ============================================================
- *
- *  Pattern categories:
- *
- *  WYCKOFF ANALYSIS:
- *    - Accumulation (PS, SC, AR, ST, Spring, LPS, SOS)
- *    - Distribution (PSY, BC, AR, ST, UTAD, LPSY, SOW)
- *    - Wyckoff phase detection (A through E)
- *    - Effort vs Result analysis
- *    - Cause & Effect projection
- *
- *  CLASSIC CHART PATTERNS:
- *    - Head & Shoulders (regular + inverse)
- *    - Double Top / Double Bottom
- *    - Triple Top / Triple Bottom
- *    - Cup & Handle
- *    - Ascending / Descending / Symmetrical Triangle
- *    - Bull / Bear Flag
- *    - Wedge (rising/falling)
- *    - Rectangle / Channel
- *
- *  HARMONIC PATTERNS:
- *    - Gartley (0.618 / 0.786)
- *    - Bat (0.382 / 0.886)
- *    - Butterfly (0.786 / 1.618)
- *    - Crab (0.382 / 3.14)
- *    - Cypher (0.382 / 0.786)
- *    - ABCD pattern
- *
- *  DIVERGENCE PATTERNS:
- *    - Price/Volume divergence
- *    - OBV divergence
- *    - CMF divergence
- *
- *  Output: { direction, score, reasons, analysis }
- *  Compatible with: signal-scorer.js agentVotes (supplementary)
- * ============================================================
- */
 
 'use strict';
 
@@ -50,7 +8,6 @@ function _pct(a, b)        { return b !== 0 ? _round(Math.abs(a - b) / b * 100, 
 function _within(a, b, tol){ return Math.abs(a - b) / b <= tol; }
 function _avg(arr)         { return arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : 0; }
 
-// Fibonacci ratios used in harmonics
 const FIBO = {
   '0.236': 0.236, '0.382': 0.382, '0.500': 0.500,
   '0.618': 0.618, '0.786': 0.786, '0.886': 0.886,
@@ -59,21 +16,9 @@ const FIBO = {
   '2.618': 2.618, '3.14':  3.14,
 };
 
-// Tolerance for harmonic ratio matching
-const HARMONIC_TOL = 0.05; // 5%
-
-// ─────────────────────────────────────────────
-//  PIVOT DETECTOR
-// ─────────────────────────────────────────────
+const HARMONIC_TOL = 0.05;
 
 class PivotDetector {
-  /**
-   * Finds swing highs and lows with configurable strength.
-   *
-   * @param {Array}  candles - OHLCV
-   * @param {number} strength - lookback on each side (default 3)
-   * @returns {{ highs: Array, lows: Array }}
-   */
   static detect(candles, strength = 3) {
     const highs = [];
     const lows  = [];
@@ -110,7 +55,6 @@ class PivotDetector {
   static _pivotStrength(candles, idx, type) {
     let strength = 1;
     const c = candles[idx];
-    // More candles confirming = stronger pivot
     let left = idx - 1, right = idx + 1;
     while (left >= 0 && right < candles.length) {
       if (type === 'HIGH') {
@@ -125,21 +69,12 @@ class PivotDetector {
     return Math.min(strength, 5);
   }
 
-  // Get last N pivots sorted by recency
   static getRecent(pivots, n) {
     return [...pivots].sort((a, b) => b.index - a.index).slice(0, n);
   }
 }
 
-// ─────────────────────────────────────────────
-//  WYCKOFF ANALYZER
-// ─────────────────────────────────────────────
-
 class WyckoffAnalyzer {
-  /**
-   * Full Wyckoff methodology implementation.
-   * Detects accumulation/distribution phases and key events.
-   */
   static analyze(candles) {
     if (!candles || candles.length < 60) return null;
 
@@ -148,24 +83,18 @@ class WyckoffAnalyzer {
     const volumes         = candles.map(c => c.volume || 1);
     const recent          = candles.slice(-60);
 
-    // ── Volume analysis ──
     const avgVol = _avg(volumes.slice(-30));
     const highVolCandles = recent.filter(c => (c.volume || 1) > avgVol * 1.5);
     const lowVolCandles  = recent.filter(c => (c.volume || 1) < avgVol * 0.7);
 
-    // ── Phase detection ──
     const phase = WyckoffAnalyzer._detectPhase(candles, highs, lows, avgVol);
 
-    // ── Event detection ──
     const events = WyckoffAnalyzer._detectEvents(candles, highs, lows, avgVol);
 
-    // ── Effort vs Result ──
     const effortResult = WyckoffAnalyzer._effortVsResult(candles);
 
-    // ── Cause & Effect (Point & Figure count simplified) ──
     const causeEffect = WyckoffAnalyzer._causeEffect(candles, phase);
 
-    // ── Trading bias ──
     let direction = 'NEUTRAL';
     let score     = 0;
     const reasons = [];
@@ -188,7 +117,6 @@ class WyckoffAnalyzer {
       reasons.push(`Wyckoff Phase C — UTAD/Test detected, sell the rally`);
     }
 
-    // Event bonuses
     for (const evt of events) {
       if (evt.type === 'SPRING' || evt.type === 'SHAKEOUT') {
         if (direction !== 'LONG') { direction = 'LONG'; score = 70; }
@@ -204,7 +132,6 @@ class WyckoffAnalyzer {
       if (evt.type === 'SOW') { score += 8; reasons.push(`Sign of Weakness — supply overwhelming demand`); }
     }
 
-    // Effort vs Result confirmation
     if (effortResult.bullish && direction === 'LONG') {
       score += 8;
       reasons.push(`Effort vs Result: ${effortResult.note}`);
@@ -213,7 +140,6 @@ class WyckoffAnalyzer {
       reasons.push(`Effort vs Result: ${effortResult.note}`);
     }
 
-    // Cause & Effect projection
     if (causeEffect.projection && direction !== 'NEUTRAL') {
       reasons.push(`C&E projection: ${causeEffect.direction === direction ? 'target ' + causeEffect.target : 'caution — projection mismatch'}`);
     }
@@ -252,7 +178,6 @@ class WyckoffAnalyzer {
     const trending    = Math.abs(highSlope) > avgVol * 0.001;
     const isRange     = contracting || (Math.abs(highSlope) < 0.5 && Math.abs(lowSlope) < 0.5);
 
-    // Volume trend
     const vol60 = _avg(candles.slice(-60).map(c => c.volume || 1));
     const vol20 = _avg(candles.slice(-20).map(c => c.volume || 1));
     const volDecreasing = vol20 < vol60 * 0.8;
@@ -264,13 +189,11 @@ class WyckoffAnalyzer {
     const pricePos     = (currentPrice - rangeBottom) / Math.max(rangeTop - rangeBottom, 1);
 
     if (isRange && pricePos < 0.4 && (volDecreasing || contracting)) {
-      // In range, price at bottom, volume contracting = accumulation
       const phase = volDecreasing && contracting ? 'C' : volIncreasing ? 'D' : 'B';
       return { type: 'ACCUMULATION', phase, pricePos: _round(pricePos, 3), contracting, volTrend: volDecreasing ? 'DEC' : 'INC' };
     }
 
     if (isRange && pricePos > 0.6 && (volDecreasing || contracting)) {
-      // In range, price at top, volume declining = distribution
       const phase = volDecreasing && contracting ? 'C' : volIncreasing ? 'D' : 'B';
       return { type: 'DISTRIBUTION', phase, pricePos: _round(pricePos, 3), contracting, volTrend: volDecreasing ? 'DEC' : 'INC' };
     }
@@ -290,7 +213,6 @@ class WyckoffAnalyzer {
     const recent  = candles.slice(-40);
     const avgVol30 = _avg(candles.slice(-30).map(c => c.volume || 1));
 
-    // Selling Climax (SC): High volume, large bearish candle making new low
     for (let i = 5; i < recent.length; i++) {
       const c   = recent[i];
       const vol = c.volume || 1;
@@ -300,7 +222,6 @@ class WyckoffAnalyzer {
       }
     }
 
-    // Buying Climax (BC): High volume, large bullish candle making new high
     for (let i = 5; i < recent.length; i++) {
       const c   = recent[i];
       const vol = c.volume || 1;
@@ -310,19 +231,16 @@ class WyckoffAnalyzer {
       }
     }
 
-    // Spring: Price dips below support on low volume, quickly recovers
     if (lows.length >= 2) {
       const lastTwo = lows.slice(-2);
       const l1 = lastTwo[0], l2 = lastTwo[1];
       const c2 = candles[l2.index];
       const vol2 = c2?.volume || 1;
       if (l2.price < l1.price && vol2 < avgVol30 * 0.8) {
-        // Low volume dip below support = Spring
         events.push({ type: 'SPRING', index: l2.index, price: l2.price, note: `Spring below ${_round(l1.price)} on low vol — bull reversal signal` });
       }
     }
 
-    // UTAD: Price spikes above resistance on low volume, fails
     if (highs.length >= 2) {
       const lastTwo = highs.slice(-2);
       const h1 = lastTwo[0], h2 = lastTwo[1];
@@ -333,7 +251,6 @@ class WyckoffAnalyzer {
       }
     }
 
-    // Sign of Strength (SOS): Wide spread up bar on high volume
     for (let i = 2; i < recent.length; i++) {
       const c   = recent[i];
       const vol = c.volume || 1;
@@ -343,7 +260,6 @@ class WyckoffAnalyzer {
       }
     }
 
-    // Sign of Weakness (SOW): Wide spread down bar on high volume
     for (let i = 2; i < recent.length; i++) {
       const c   = recent[i];
       const vol = c.volume || 1;
@@ -369,13 +285,11 @@ class WyckoffAnalyzer {
       const spread = c.high - c.low;
       const prevSpread = prev.high - prev.low;
 
-      // High effort (volume), low result (spread) = absorption
       if (vol > prevVol * 1.5 && spread < prevSpread * 0.7) {
         if (c.close > c.open) { bearish = true; notes.push('Bull absorption — effort without result upward'); }
         else { bullish = true; notes.push('Bear absorption — effort without result downward'); }
       }
 
-      // Low effort, high result = ease of movement
       if (vol < prevVol * 0.7 && spread > prevSpread * 1.3) {
         if (c.close > c.open) { bullish = true; notes.push('Easy upward movement — low effort, high result'); }
         else { bearish = true; notes.push('Easy downward movement — low effort, high result'); }
@@ -396,7 +310,6 @@ class WyckoffAnalyzer {
     const range  = high - low;
     const current = closes[closes.length - 1];
 
-    // Simplified P&F count: range width = cause, project same distance
     const direction = phase.type === 'ACCUMULATION' ? 'LONG' : 'SHORT';
     const target    = phase.type === 'ACCUMULATION'
       ? _round(high + range * 1.5)
@@ -406,10 +319,6 @@ class WyckoffAnalyzer {
   }
 }
 
-// ─────────────────────────────────────────────
-//  CHART PATTERN DETECTOR
-// ─────────────────────────────────────────────
-
 class ChartPatternDetector {
   static detect(candles) {
     if (!candles || candles.length < 30) return [];
@@ -417,7 +326,6 @@ class ChartPatternDetector {
     const { highs, lows } = PivotDetector.detect(candles, 3);
     const patterns        = [];
 
-    // Run all pattern detectors
     const hs   = ChartPatternDetector._headAndShoulders(highs, lows, candles);
     const ihs  = ChartPatternDetector._inverseHeadAndShoulders(highs, lows, candles);
     const dt   = ChartPatternDetector._doubleTop(highs, candles);
@@ -436,16 +344,13 @@ class ChartPatternDetector {
     const recentHighs = PivotDetector.getRecent(highs, 10).reverse();
     if (recentHighs.length < 3) return null;
 
-    // Find 3 peaks where middle is highest (head)
     for (let i = 0; i < recentHighs.length - 2; i++) {
-      const ls = recentHighs[i];     // left shoulder
-      const h  = recentHighs[i + 1]; // head
-      const rs = recentHighs[i + 2]; // right shoulder
+      const ls = recentHighs[i];
+      const h  = recentHighs[i + 1];
+      const rs = recentHighs[i + 2];
 
       if (h.price > ls.price && h.price > rs.price) {
-        // Shoulders roughly equal height (within 3%)
         if (_within(ls.price, rs.price, 0.03)) {
-          // Find neckline (connecting the two troughs between shoulders)
           const troughs = lows.filter(l => l.index > ls.index && l.index < rs.index);
           if (troughs.length < 2) continue;
 
@@ -588,7 +493,6 @@ class ChartPatternDetector {
     const lowSlope  = (recL[recL.length-1].price - recL[0].price) / (recL.length - 1);
     const current   = candles[candles.length - 1].close;
 
-    // Ascending triangle: flat top, rising lows
     if (Math.abs(highSlope) < recH[0].price * 0.001 && lowSlope > 0) {
       const resistance = _avg(recH.map(h => h.price));
       const target     = resistance + (resistance - recL[0].price);
@@ -599,7 +503,6 @@ class ChartPatternDetector {
       });
     }
 
-    // Descending triangle: flat bottom, falling highs
     if (highSlope < 0 && Math.abs(lowSlope) < recL[0].price * 0.001) {
       const support = _avg(recL.map(l => l.price));
       const target  = support - (recH[0].price - support);
@@ -610,7 +513,6 @@ class ChartPatternDetector {
       });
     }
 
-    // Symmetrical triangle: converging
     if (highSlope < 0 && lowSlope > 0) {
       const apex   = recH[0].price + (recH[recH.length-1].price - recH[0].price) / 2;
       const bias   = current > apex ? 'LONG' : 'SHORT';
@@ -633,7 +535,6 @@ class ChartPatternDetector {
 
     if (!pre.length || !flag.length) return patterns;
 
-    // Check for strong pole move
     const poleHigh = Math.max(...pre.map(c => c.high));
     const poleLow  = Math.min(...pre.map(c => c.low));
     const poleSize = Math.abs(poleHigh - poleLow) / poleLow;
@@ -645,7 +546,6 @@ class ChartPatternDetector {
     const flagLow  = Math.min(...flag.map(c => c.low));
     const flagSize = Math.abs(flagHigh - flagLow) / flagLow;
 
-    // Flag should be consolidation (smaller than pole)
     if (flagSize > poleSize * 0.5) return patterns;
 
     if (poleUp) {
@@ -679,7 +579,6 @@ class ChartPatternDetector {
     const highSlope = (recH[recH.length-1].price - recH[0].price) / recH[0].price;
     const lowSlope  = (recL[recL.length-1].price - recL[0].price) / recL[0].price;
 
-    // Rising wedge: both slopes up but converging → bearish
     if (highSlope > 0 && lowSlope > 0 && lowSlope > highSlope) {
       const current = candles[candles.length-1].close;
       patterns.push({
@@ -689,7 +588,6 @@ class ChartPatternDetector {
       });
     }
 
-    // Falling wedge: both slopes down but converging → bullish
     if (highSlope < 0 && lowSlope < 0 && highSlope < lowSlope) {
       const current = candles[candles.length-1].close;
       patterns.push({
@@ -713,13 +611,11 @@ class ChartPatternDetector {
     const handleH  = Math.max(...handle.map(c => c.high));
     const handleL  = Math.min(...handle.map(c => c.low));
 
-    // Cup should be U-shaped: high → low → high
     const leftHigh  = Math.max(...cup.slice(0, Math.floor(cup.length/3)).map(c => c.high));
     const rightHigh = Math.max(...cup.slice(Math.floor(cup.length*2/3)).map(c => c.high));
     const midLow    = Math.min(...cup.slice(Math.floor(cup.length/3), Math.floor(cup.length*2/3)).map(c => c.low));
 
     const isCupShaped = _within(leftHigh, rightHigh, 0.03) && midLow < leftHigh * 0.95;
-    // Handle: small pullback after right side of cup
     const isHandle    = handleL > midLow && (handleH - handleL) < (cupHigh - cupLow) * 0.5;
 
     if (isCupShaped && isHandle) {
@@ -736,15 +632,7 @@ class ChartPatternDetector {
   }
 }
 
-// ─────────────────────────────────────────────
-//  HARMONIC PATTERN DETECTOR
-// ─────────────────────────────────────────────
-
 class HarmonicDetector {
-  /**
-   * Detects XABCD harmonic patterns.
-   * All patterns defined by Fibonacci ratios between swing points.
-   */
   static detect(candles) {
     const { highs, lows } = PivotDetector.detect(candles, 3);
     const pivots = [...highs.map(p => ({ ...p, type: 'HIGH' })),
@@ -754,10 +642,8 @@ class HarmonicDetector {
 
     const patterns = [];
 
-    // Need at least 5 pivots for XABCD
     if (pivots.length < 5) return patterns;
 
-    // Try all combinations of 5 pivots
     for (let i = 0; i <= pivots.length - 5; i++) {
       const [X, A, B, C, D] = pivots.slice(i, i + 5);
 
@@ -775,7 +661,6 @@ class HarmonicDetector {
       const ratioCD = CD / BC;
       const ratioXD = Math.abs(D.price - X.price) / XA;
 
-      // Check each harmonic pattern
       const detected = [
         HarmonicDetector._checkGartley(X, A, B, C, D, ratioAB, ratioBC, ratioCD, ratioXD),
         HarmonicDetector._checkBat(X, A, B, C, D, ratioAB, ratioBC, ratioCD, ratioXD),
@@ -791,12 +676,11 @@ class HarmonicDetector {
   }
 
   static _checkGartley(X, A, B, C, D, rAB, rBC, rCD, rXD) {
-    // AB = 0.618 of XA, BC = 0.382-0.886, CD = 1.272-1.618, XD = 0.786
     if (!(_within(rAB, FIBO['0.618'], HARMONIC_TOL))) return null;
     if (rBC < 0.382 - HARMONIC_TOL || rBC > 0.886 + HARMONIC_TOL) return null;
     if (!(_within(rXD, FIBO['0.786'], HARMONIC_TOL))) return null;
 
-    const isLong = A.price < X.price; // Bullish if A below X
+    const isLong = A.price < X.price;
     return {
       type: 'GARTLEY', direction: isLong ? 'LONG' : 'SHORT',
       confidence: 78,
@@ -808,7 +692,6 @@ class HarmonicDetector {
   }
 
   static _checkBat(X, A, B, C, D, rAB, rBC, rCD, rXD) {
-    // AB = 0.382-0.500, BC = 0.382-0.886, CD = 1.618-2.618, XD = 0.886
     if (rAB < 0.382 - HARMONIC_TOL || rAB > 0.500 + HARMONIC_TOL) return null;
     if (rBC < 0.382 - HARMONIC_TOL || rBC > 0.886 + HARMONIC_TOL) return null;
     if (!(_within(rXD, FIBO['0.886'], HARMONIC_TOL))) return null;
@@ -825,7 +708,6 @@ class HarmonicDetector {
   }
 
   static _checkButterfly(X, A, B, C, D, rAB, rBC, rCD, rXD) {
-    // AB = 0.786, BC = 0.382-0.886, XD = 1.27-1.618
     if (!(_within(rAB, FIBO['0.786'], HARMONIC_TOL))) return null;
     if (rBC < 0.382 - HARMONIC_TOL || rBC > 0.886 + HARMONIC_TOL) return null;
     if (rXD < 1.27 - HARMONIC_TOL || rXD > 1.618 + HARMONIC_TOL) return null;
@@ -842,7 +724,6 @@ class HarmonicDetector {
   }
 
   static _checkCrab(X, A, B, C, D, rAB, rBC, rCD, rXD) {
-    // AB = 0.382-0.618, BC = 0.382-0.886, XD = 1.618
     if (rAB < 0.382 - HARMONIC_TOL || rAB > 0.618 + HARMONIC_TOL) return null;
     if (rBC < 0.382 - HARMONIC_TOL || rBC > 0.886 + HARMONIC_TOL) return null;
     if (!(_within(rXD, FIBO['1.618'], HARMONIC_TOL * 2))) return null;
@@ -859,14 +740,13 @@ class HarmonicDetector {
   }
 
   static _checkABCD(A, B, C, D, rBC, rCD) {
-    // BC = CD (equal legs) OR specific Fibonacci
     const equal = _within(rBC, 1.0, 0.10) && _within(rCD, 1.0, 0.10);
     const fib   = (_within(rBC, FIBO['0.618'], HARMONIC_TOL) && _within(rCD, FIBO['1.618'], HARMONIC_TOL)) ||
                   (_within(rBC, FIBO['0.786'], HARMONIC_TOL) && _within(rCD, FIBO['1.272'], HARMONIC_TOL));
 
     if (!equal && !fib) return null;
 
-    const isLong = B.price < A.price; // AB is bearish → CD is bullish
+    const isLong = B.price < A.price;
     return {
       type: 'ABCD', direction: isLong ? 'LONG' : 'SHORT',
       confidence: 70,
@@ -879,10 +759,6 @@ class HarmonicDetector {
   }
 }
 
-// ─────────────────────────────────────────────
-//  VOLUME DIVERGENCE DETECTOR
-// ─────────────────────────────────────────────
-
 class VolumeDivergenceDetector {
   static detect(candles) {
     if (!candles || candles.length < 20) return null;
@@ -891,7 +767,6 @@ class VolumeDivergenceDetector {
     const closes   = recent.map(c => c.close);
     const volumes  = recent.map(c => c.volume || 1);
 
-    // OBV calculation
     const obv = [0];
     for (let i = 1; i < recent.length; i++) {
       const prev    = obv[obv.length - 1];
@@ -904,12 +779,9 @@ class VolumeDivergenceDetector {
     const priceUp  = closes[closes.length-1] > closes[0];
     const obvUp    = obv[obv.length-1] > obv[0];
 
-    // Bullish divergence: price down, OBV up
     const bullDiv  = !priceUp && obvUp;
-    // Bearish divergence: price up, OBV down
     const bearDiv  = priceUp && !obvUp;
 
-    // CMF (Chaikin Money Flow) simplified
     let cmfSum = 0, volSum = 0;
     for (const c of recent) {
       const hl    = c.high - c.low;
@@ -934,18 +806,7 @@ class VolumeDivergenceDetector {
   }
 }
 
-// ─────────────────────────────────────────────
-//  MAIN PATTERN AGENT
-// ─────────────────────────────────────────────
-
 class PatternAgent extends EventEmitter {
-  /**
-   * @param {Object} config
-   * @param {string} config.symbol
-   * @param {string} config.timeframe
-   * @param {number} config.minScore
-   * @param {number} config.pivotStrength
-   */
   constructor(config = {}) {
     super();
     this.symbol        = config.symbol        || 'UNKNOWN';
@@ -957,17 +818,11 @@ class PatternAgent extends EventEmitter {
     this._stats    = { analyzed: 0, patternsFound: 0, longVotes: 0, shortVotes: 0 };
   }
 
-  /**
-   * Analyze candles for all pattern types.
-   * @param {Array} candles - OHLCV, oldest first
-   * @returns {Object} vote - { direction, score, reasons, analysis }
-   */
   async analyze(candles) {
     if (!Array.isArray(candles) || candles.length < 50) {
       return this._buildVote('WAIT', 0, ['Insufficient candles for pattern analysis'], {});
     }
 
-    // ── Run all detectors ──
     const wyckoff   = WyckoffAnalyzer.analyze(candles);
     const patterns  = ChartPatternDetector.detect(candles);
     const harmonics = HarmonicDetector.detect(candles);
@@ -975,18 +830,15 @@ class PatternAgent extends EventEmitter {
 
     const analysis = { wyckoff, chartPatterns: patterns, harmonics, volumeDivergence: volDiv };
 
-    // ── Aggregate signals ──
     let bullPts = 0, bearPts = 0;
     const reasons = [];
 
-    // Wyckoff
     if (wyckoff && wyckoff.direction !== 'NEUTRAL') {
       const wScore = wyckoff.score / 100 * 3;
       if (wyckoff.direction === 'LONG')  { bullPts += wScore; reasons.push(...wyckoff.reasons.slice(0, 2)); }
       if (wyckoff.direction === 'SHORT') { bearPts += wScore; reasons.push(...wyckoff.reasons.slice(0, 2)); }
     }
 
-    // Chart patterns
     const currentPrice = candles[candles.length - 1].close;
     for (const p of patterns) {
       const near = p.PRZ ? Math.abs(currentPrice - p.PRZ) / currentPrice < 0.02 : true;
@@ -995,7 +847,6 @@ class PatternAgent extends EventEmitter {
       if (p.direction === 'SHORT') { bearPts += pts; reasons.push(p.note); }
     }
 
-    // Harmonics (high priority — very specific PRZ targets)
     for (const h of harmonics) {
       const nearPRZ  = h.PRZ && Math.abs(currentPrice - h.PRZ) / currentPrice < 0.015;
       const pts      = nearPRZ ? 3 : 1;
@@ -1003,13 +854,11 @@ class PatternAgent extends EventEmitter {
       if (h.direction === 'SHORT') { bearPts += pts; reasons.push(h.note); }
     }
 
-    // Volume divergence
     if (volDiv?.bullishOBV) { bullPts += 1.5; reasons.push(volDiv.note); }
     if (volDiv?.bearishOBV) { bearPts += 1.5; reasons.push(volDiv.note); }
     if (volDiv?.cmfBullish) { bullPts += 1; reasons.push(`CMF positive (${volDiv.cmf}) — money flowing in`); }
     if (volDiv?.cmfBearish) { bearPts += 1; reasons.push(`CMF negative (${volDiv.cmf}) — money flowing out`); }
 
-    // ── Direction + Score ──
     const direction = bullPts > bearPts + 0.5 ? 'LONG'
                     : bearPts > bullPts + 0.5 ? 'SHORT'
                     : 'WAIT';

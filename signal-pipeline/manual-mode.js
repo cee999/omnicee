@@ -1,81 +1,7 @@
-/**
- * ============================================================
- *  MANUAL MODE + SEMI-AUTO EXECUTION ENGINE
- *  AI Trading Assistant · Layer 6 · Execution
- * ============================================================
- *
- *  EXECUTION MODES (both handled in this file):
- *
- *  MANUAL MODE:
- *    - Receives signals from task-planner
- *    - Formats and dispatches to Telegram via alert-dispatcher
- *    - No automatic execution whatsoever
- *    - User executes trades manually on their exchange
- *    - Bot tracks what user says they entered
- *    - Sends follow-up alerts for TP/SL/BE/Trail
- *    - Maintains position state based on user confirmations
- *    - Generates daily/weekly performance reports
- *
- *  SEMI-AUTO MODE:
- *    - Same signal delivery as manual
- *    - Presents inline Telegram buttons (Take / Skip / Modify)
- *    - On "Take" → places the order on the exchange via API
- *    - On "Skip" → marks signal as skipped, moves on
- *    - On "Modify" → lets user adjust entry/SL/TP before executing
- *    - Monitors open positions (price feed → TP/SL tracking)
- *    - Auto-alerts when TP/SL hit (user still decides partial closes)
- *    - Auto-moves SL to breakeven after TP1
- *    - Does NOT auto-close — user confirms each action
- *
- *  POSITION TRACKER:
- *    - Full lifecycle: PENDING → WATCHING → ENTERED → TP1_HIT → TP2_HIT → CLOSED
- *    - Tracks: entry price, size, current SL, TP levels, PnL
- *    - Price feed integration for live PnL calculation
- *    - Partial close tracking (50%, 30%, 20%)
- *    - Breakeven detection and alert
- *    - Trailing stop management
- *    - Max adverse excursion (MAE) and MFE tracking
- *
- *  SIGNAL JOURNAL:
- *    - Every signal logged with full context
- *    - Outcome recorded (win/loss/breakeven, R multiple)
- *    - Performance analytics (win rate, avg R, profit factor)
- *    - Grade performance breakdown
- *    - Symbol performance breakdown
- *    - Session performance breakdown
- *    - Exportable to CSV/JSON
- *
- *  RISK ENFORCER:
- *    - Validates every user entry against risk rules
- *    - Warns if position size exceeds max risk
- *    - Blocks entry if circuit breaker is open
- *    - Checks correlation with existing positions
- *    - Session quality gate (warn in dead zone)
- *    - Spread check (warn if entry spread is wide)
- *
- *  EVENTS:
- *    'signal_received'    → new signal from task-planner
- *    'signal_dispatched'  → sent to Telegram
- *    'trade_taken'        → user confirmed entry (manual/semi)
- *    'trade_skipped'      → user passed on signal
- *    'trade_modified'     → user adjusted parameters
- *    'position_opened'    → position registered and tracked
- *    'tp_alert'           → TP level reached, alert sent
- *    'sl_alert'           → SL hit, alert sent
- *    'breakeven_set'      → SL moved to entry
- *    'trail_updated'      → trailing stop moved
- *    'position_closed'    → trade completed
- *    'daily_summary'      → end of day report
- * ============================================================
- */
 
 'use strict';
 
 const EventEmitter = require('events');
-
-// ─────────────────────────────────────────────
-//  CONSTANTS
-// ─────────────────────────────────────────────
 
 const EXECUTION_MODE = {
   MANUAL:    'MANUAL',
@@ -83,17 +9,17 @@ const EXECUTION_MODE = {
 };
 
 const POSITION_STATE = {
-  PENDING:    'PENDING',    // Signal dispatched, waiting for user entry confirmation
-  WATCHING:   'WATCHING',   // User said "watching" — monitoring but not in yet
-  ENTERED:    'ENTERED',    // User confirmed entry
-  TP1_HIT:    'TP1_HIT',   // TP1 reached
-  TP2_HIT:    'TP2_HIT',   // TP2 reached
-  TP3_HIT:    'TP3_HIT',   // TP3 reached (closed)
-  SL_HIT:     'SL_HIT',    // SL triggered (closed)
-  BREAKEVEN:  'BREAKEVEN',  // SL moved to breakeven
-  MANUAL_CLOSE: 'MANUAL_CLOSE', // User closed manually
-  EXPIRED:    'EXPIRED',    // Signal expired without entry
-  SKIPPED:    'SKIPPED',    // User explicitly skipped
+  PENDING:    'PENDING',
+  WATCHING:   'WATCHING',
+  ENTERED:    'ENTERED',
+  TP1_HIT:    'TP1_HIT',
+  TP2_HIT:    'TP2_HIT',
+  TP3_HIT:    'TP3_HIT',
+  SL_HIT:     'SL_HIT',
+  BREAKEVEN:  'BREAKEVEN',
+  MANUAL_CLOSE: 'MANUAL_CLOSE',
+  EXPIRED:    'EXPIRED',
+  SKIPPED:    'SKIPPED',
 };
 
 const SIGNAL_STATE = {
@@ -104,23 +30,15 @@ const SIGNAL_STATE = {
   WATCHING: 'WATCHING',
 };
 
-// Default position tracking config
 const TRAIL_ATR_MULT     = 2.0;
-const MAX_SIGNAL_AGE_MS  = 4 * 60 * 60 * 1000; // 4 hours
-const PRICE_CHECK_INTERVAL = 10 * 1000;          // 10 seconds
+const MAX_SIGNAL_AGE_MS  = 4 * 60 * 60 * 1000;
+const PRICE_CHECK_INTERVAL = 10 * 1000;
 const MAX_OPEN_POSITIONS = 5;
 
 function _round(n, d = 5)  { return parseFloat((+n).toFixed(d)); }
 function _now()            { return Date.now(); }
 
-// FIX: getStats() broke performance down by symbol/session/grade but never
-// by *what kind of setup* fired — in a multi-agent system, "setup type" is
-// naturally "which agent's read was the dominant driver of this signal"
-// (SMC order-block-led vs MTF-confluence-led vs momentum-led, etc). That
-// question — "which of my six strategies is actually making money?" — had
-// no way to be answered before now. Derived once at signal-log time from
-// the same agentBreakdown the scorer already produces, so no new data
-// source or agent change is required.
+// FIX: getStats() broke performance down by symbol/session/grade but never by what kind of setupfired — in a multi-agent system, "setup type" is naturally "which agent's read was the dominant driver of...
 function _dominantSetup(signal) {
   const breakdown = signal?.agentBreakdown;
   if (!Array.isArray(breakdown) || !breakdown.length) return 'UNKNOWN';
@@ -135,15 +53,7 @@ function _uuid()           {
 }
 function _pct(a, b)        { return b !== 0 ? Math.abs(a - b) / b * 100 : 0; }
 
-// ─────────────────────────────────────────────
-//  POSITION TRACKER
-// ─────────────────────────────────────────────
-
 class Position {
-  /**
-   * Represents a single tracked trade position.
-   * Works for both manual-reported and semi-auto executed positions.
-   */
   constructor(signal, entryData, mode) {
     this.id            = `POS-${_uuid()}`;
     this.signalId      = signal.id;
@@ -155,13 +65,11 @@ class Position {
     this.signalScore   = signal.score?.final;
     this.session       = signal.session?.current || signal.session;
 
-    // Entry details (set when user confirms or order fills)
     this.entryPrice    = entryData.entryPrice   || signal.entry?.midPoint   || signal.currentPrice;
     this.size          = entryData.size         || signal.positionSize      || 1;
     this.dollarRisk    = entryData.dollarRisk   || signal.risk?.dollarRisk  || null;
     this.riskPct       = entryData.riskPct      || signal.stopLoss?.riskPct || 1;
 
-    // SL/TP levels (start from signal, user can modify)
     this.initialSL     = signal.stopLoss?.price || entryData.sl;
     this.currentSL     = this.initialSL;
     this.tp1           = signal.targets?.tp1?.price || entryData.tp1;
@@ -171,30 +79,26 @@ class Position {
     this.tp2RR         = signal.targets?.tp2?.rr || null;
     this.tp3RR         = signal.targets?.tp3?.rr || null;
 
-    // State
     this.state         = POSITION_STATE.ENTERED;
     this.openedAt      = _now();
     this.closedAt      = null;
 
-    // Tracking
-    this.sizeRemaining = 1.0;         // fraction of original size still open
-    this.beSet         = false;       // SL moved to breakeven?
+    this.sizeRemaining = 1.0;
+    this.beSet         = false;
     this.tp1Closed     = false;
     this.tp2Closed     = false;
     this.manualSLMoves = 0;
     this.trailActive   = false;
 
-    // PnL tracking
     this.currentPrice  = this.entryPrice;
     this.unrealizedPnlR = 0;
     this.realizedPnlR  = 0;
     this.totalPnlR     = 0;
-    this.mae           = 0;           // Max Adverse Excursion
-    this.mfe           = 0;           // Max Favorable Excursion
+    this.mae           = 0;
+    this.mfe           = 0;
     this.highestPrice  = this.entryPrice;
     this.lowestPrice   = this.entryPrice;
 
-    // Event log
     this.log           = [{
       event: 'OPENED',
       price: this.entryPrice,
@@ -202,23 +106,11 @@ class Position {
       timestamp: _now(),
     }];
 
-    // Semi-auto specific
     this.exchangeOrderId  = entryData.orderId   || null;
     this.slOrderId        = entryData.slOrderId || null;
     this.partialCloses    = [];
   }
 
-  // ─────────────────────────────────────────────
-  //  PRICE UPDATE
-  // ─────────────────────────────────────────────
-
-  /**
-   * Update position with latest price. Returns any triggered actions.
-   *
-   * @param {number} price  - current market price
-   * @param {number} [atr]  - current ATR (for trailing)
-   * @returns {Array} actions - list of triggered events
-   */
   onPrice(price, atr) {
     if (this.state === POSITION_STATE.SL_HIT ||
         this.state === POSITION_STATE.TP3_HIT ||
@@ -226,17 +118,11 @@ class Position {
 
     const actions  = [];
     const isLong   = this.direction === 'LONG';
-    // FIX: was computed from this.currentSL, which moves to breakeven/TP1 as
-    // the trade progresses. That collapsed the R-multiple denominator toward
-    // 0 (masked by `|| 1`, which then silently divided by 1 raw price unit
-    // instead of the real risk, producing wildly wrong mfe/mae/pnlR). Use the
-    // fixed initial risk distance instead, matching the pattern already used
-    // elsewhere in this file (see initialSL usage below).
+    // FIX: was computed from this.currentSL, which moves to breakeven/TP1 as the trade progresses.
     const riskPts  = Math.abs(this.entryPrice - this.initialSL);
 
     this.currentPrice = price;
 
-    // Track MAE/MFE
     if (isLong) {
       if (price > this.highestPrice) {
         this.highestPrice = price;
@@ -257,7 +143,6 @@ class Position {
       }
     }
 
-    // Unrealized PnL in R
     this.unrealizedPnlR = _round(
       isLong
         ? (price - this.entryPrice) / (riskPts || 1)
@@ -266,7 +151,6 @@ class Position {
     );
     this.totalPnlR = _round(this.realizedPnlR + this.unrealizedPnlR * this.sizeRemaining, 3);
 
-    // ── SL Hit ──
     const slHit = isLong ? price <= this.currentSL : price >= this.currentSL;
     if (slHit) {
       const finalPnl = _round(
@@ -294,16 +178,7 @@ class Position {
       return actions;
     }
 
-    // ── TP3 Hit ──
-    // FIX: was `if (!this.tp2Closed && this.tp3)` — the outer guard required
-    // tp2Closed to be FALSE to even enter this block, but the inner
-    // condition immediately below required tp1Closed && tp2Closed to be
-    // TRUE. These can never both hold, so TP3_HIT could structurally never
-    // fire, no matter what price did — a position could never close via its
-    // final target. Confirmed by a full onSignal->onTrade->onPrice test:
-    // price hit tp3 exactly and no TP3_HIT action was ever generated.
-    // Matches the pattern from the (correctly written) TP2 guard just below:
-    // require the PRIOR tier closed, not require it NOT closed.
+    // ── TP3 Hit ── FIX: was `if (!this.tp2Closed && this.tp3)` — the outer guard required tp2Closed to be FALSE to even enter this block, but the inner condition immediately below required tp1Closed &&...
     if (this.tp2Closed && this.tp3) {
       const tp3Hit = isLong ? price >= this.tp3 : price <= this.tp3;
       if (tp3Hit && this.tp1Closed && this.tp2Closed) {
@@ -322,7 +197,6 @@ class Position {
       }
     }
 
-    // ── TP2 Hit ──
     if (this.tp1Closed && !this.tp2Closed && this.tp2) {
       const tp2Hit = isLong ? price >= this.tp2 : price <= this.tp2;
       if (tp2Hit) {
@@ -333,7 +207,6 @@ class Position {
         this.realizedPnlR  += pnlR * closePct;
         this.sizeRemaining -= closePct;
 
-        // Move SL to TP1
         const newSL = isLong ? this.tp1 : this.tp1;
         const prevSL = this.currentSL;
         this.currentSL  = newSL;
@@ -353,7 +226,6 @@ class Position {
       }
     }
 
-    // ── TP1 Hit ──
     if (!this.tp1Closed && this.tp1) {
       const tp1Hit = isLong ? price >= this.tp1 : price <= this.tp1;
       if (tp1Hit) {
@@ -364,7 +236,6 @@ class Position {
         this.realizedPnlR  += pnlR * closePct;
         this.sizeRemaining -= closePct;
 
-        // Move SL to breakeven
         const bePrice   = this.entryPrice;
         this.currentSL  = bePrice;
         this.beSet      = true;
@@ -382,7 +253,6 @@ class Position {
       }
     }
 
-    // ── Breakeven Check (before TP1) ──
     if (!this.beSet && !this.tp1Closed && riskPts > 0) {
       const toTP1 = Math.abs(this.tp1 - this.entryPrice);
       const moved = isLong ? price - this.entryPrice : this.entryPrice - price;
@@ -402,7 +272,6 @@ class Position {
       }
     }
 
-    // ── Trailing Stop (after TP2) ──
     if (this.trailActive && atr && this.sizeRemaining > 0) {
       const trailLevel = isLong
         ? _round(price - atr * TRAIL_ATR_MULT)
@@ -428,14 +297,6 @@ class Position {
     return actions;
   }
 
-  // ─────────────────────────────────────────────
-  //  MANUAL OPERATIONS
-  // ─────────────────────────────────────────────
-
-  /**
-   * User manually moves SL.
-   * Only allows moves in the direction of profit (tighter).
-   */
   moveSL(newSL, allowLoosen = false) {
     const isLong   = this.direction === 'LONG';
     const tighter  = isLong ? newSL > this.currentSL : newSL < this.currentSL;
@@ -452,11 +313,6 @@ class Position {
     return { success: true, prevSL, newSL: this.currentSL };
   }
 
-  /**
-   * User manually closes position (full or partial).
-   * @param {number} price   - close price
-   * @param {number} [pct]   - fraction to close (default 1.0 = all)
-   */
   closeManual(price, pct = 1.0) {
     const isLong   = this.direction === 'LONG';
     const riskPts  = Math.abs(this.entryPrice - this.initialSL);
@@ -491,10 +347,6 @@ class Position {
       remaining: this.sizeRemaining,
     };
   }
-
-  // ─────────────────────────────────────────────
-  //  STATUS
-  // ─────────────────────────────────────────────
 
   isClosed() {
     return [
@@ -566,19 +418,12 @@ class Position {
   }
 }
 
-// ─────────────────────────────────────────────
-//  SIGNAL JOURNAL
-// ─────────────────────────────────────────────
-
 class SignalJournal {
   constructor() {
-    this._signals  = [];  // full signal records
-    this._outcomes = [];  // completed trade outcomes
+    this._signals  = [];
+    this._outcomes = [];
   }
 
-  /**
-   * Log a new signal dispatch.
-   */
   logSignal(signal, dispatchResult) {
     const entry = {
       id:          signal.id,
@@ -610,9 +455,6 @@ class SignalJournal {
     return entry;
   }
 
-  /**
-   * Mark signal as taken/skipped/expired.
-   */
   updateSignalState(signalId, state, data = {}) {
     const entry = this._signals.find(s => s.id === signalId);
     if (entry) {
@@ -622,9 +464,6 @@ class SignalJournal {
     }
   }
 
-  /**
-   * Record the outcome of a completed trade.
-   */
   recordOutcome(positionId, signalId, outcome) {
     const signal = this._signals.find(s => s.id === signalId);
 
@@ -656,9 +495,6 @@ class SignalJournal {
     return record;
   }
 
-  /**
-   * Compute full performance statistics.
-   */
   getStats(filter = {}) {
     let outcomes = [...this._outcomes];
 
@@ -688,7 +524,6 @@ class SignalJournal {
 
     const expectancy = _round((winRate / 100 * avgWin) - ((1 - winRate / 100) * avgLoss), 4);
 
-    // By grade
     const byGrade = {};
     for (const grade of ['A', 'B', 'C', 'D']) {
       const g = outcomes.filter(o => o.grade === grade);
@@ -701,7 +536,6 @@ class SignalJournal {
       };
     }
 
-    // By symbol
     const bySymbol = {};
     const symbols  = [...new Set(outcomes.map(o => o.symbol))];
     for (const sym of symbols) {
@@ -714,7 +548,6 @@ class SignalJournal {
       };
     }
 
-    // By session
     const bySession = {};
     for (const sess of ['LONDON', 'NEW_YORK', 'OVERLAP', 'ASIA', 'DEAD']) {
       const s  = outcomes.filter(o => o.session === sess);
@@ -727,7 +560,6 @@ class SignalJournal {
       };
     }
 
-    // By setup type (dominant contributing agent — SMC/MTF/momentum/etc)
     const bySetup = {};
     const setupTypes = [...new Set(outcomes.map(o => o.setupType || 'UNKNOWN'))];
     for (const setup of setupTypes) {
@@ -741,14 +573,12 @@ class SignalJournal {
       };
     }
 
-    // Consecutive stats
     let maxConsecW = 0, maxConsecL = 0, curW = 0, curL = 0;
     for (const o of outcomes) {
       if (o.won) { curW++; curL = 0; maxConsecW = Math.max(maxConsecW, curW); }
       else       { curL++; curW = 0; maxConsecL = Math.max(maxConsecL, curL); }
     }
 
-    // Signal dispatch stats
     const dispatched = this._signals.length;
     const taken      = this._signals.filter(s => s.state === SIGNAL_STATE.TAKEN).length;
     const skipped    = this._signals.filter(s => s.state === SIGNAL_STATE.SKIPPED).length;
@@ -767,9 +597,6 @@ class SignalJournal {
     };
   }
 
-  /**
-   * Export to JSON for external analysis.
-   */
   export(format = 'json') {
     if (format === 'json') {
       return JSON.stringify({ signals: this._signals, outcomes: this._outcomes }, null, 2);
@@ -788,15 +615,7 @@ class SignalJournal {
   get totalOutcomes()  { return this._outcomes.length; }
 }
 
-// ─────────────────────────────────────────────
-//  RISK ENFORCER
-// ─────────────────────────────────────────────
-
 class RiskEnforcer {
-  /**
-   * Pre-trade risk validation.
-   * Runs before any position is opened.
-   */
   constructor(config = {}) {
     this._maxOpenPositions = config.maxOpenPositions || MAX_OPEN_POSITIONS;
     this._maxRiskPct       = config.maxRiskPct       || 2.0;
@@ -811,20 +630,10 @@ class RiskEnforcer {
     ];
   }
 
-  /**
-   * Full pre-trade validation.
-   *
-   * @param {Object} signal
-   * @param {Object} entryData        - { entryPrice, size, sl, riskPct }
-   * @param {Array}  openPositions    - existing Position objects
-   * @param {Object} drawdownGuard    - DrawdownGuard instance
-   * @returns {{ approved, warnings, blockers }}
-   */
   validate(signal, entryData, openPositions, drawdownGuard) {
     const warnings = [];
     const blockers = [];
 
-    // ── 1. Circuit breaker check ──
     if (drawdownGuard) {
       const ddEval = drawdownGuard.evaluate();
       if (!ddEval.allowed) {
@@ -835,13 +644,11 @@ class RiskEnforcer {
       for (const w of ddEval.warnings) warnings.push(w);
     }
 
-    // ── 2. Max open positions ──
     const openCount = openPositions.filter(p => !p.isClosed()).length;
     if (openCount >= this._maxOpenPositions) {
       blockers.push(`Max open positions reached (${openCount}/${this._maxOpenPositions})`);
     }
 
-    // ── 3. Risk per trade ──
     const riskPct = entryData.riskPct || signal.stopLoss?.riskPct || 0;
     if (riskPct > this._maxRiskPct) {
       blockers.push(`Risk ${_round(riskPct, 2)}% exceeds maximum ${this._maxRiskPct}% per trade`);
@@ -849,7 +656,6 @@ class RiskEnforcer {
       warnings.push(`Risk ${_round(riskPct, 2)}% approaching maximum ${this._maxRiskPct}%`);
     }
 
-    // ── 4. Correlation check ──
     const activeSymbols = openPositions.filter(p => !p.isClosed()).map(p => ({ symbol: p.symbol, direction: p.direction }));
     const corrGroup = this._CORRELATED_GROUPS.find(g => g.includes(signal.symbol));
     if (corrGroup) {
@@ -861,13 +667,11 @@ class RiskEnforcer {
       }
     }
 
-    // ── 5. Same symbol ──
     const sameSymbol = activeSymbols.filter(a => a.symbol === signal.symbol);
     if (sameSymbol.length > 0) {
       warnings.push(`Already have ${sameSymbol.length} open position(s) on ${signal.symbol}`);
     }
 
-    // ── 6. Session quality ──
     if (this._requireSession) {
       const h = new Date().getUTCHours();
       if (h >= 21) {
@@ -879,12 +683,11 @@ class RiskEnforcer {
       }
     }
 
-    // ── 7. Signal grade warning ──
+    // Signal grade warning ──
     if (signal.score?.grade === 'C' || signal.score?.grade === 'D') {
       warnings.push(`Low grade signal (${signal.score?.grade}) — higher risk setup`);
     }
 
-    // ── 8. R/R sanity check ──
     const slDist = Math.abs((entryData.entryPrice || signal.currentPrice) - signal.stopLoss?.price);
     const tp1Dist = Math.abs(signal.targets?.tp1?.price - (entryData.entryPrice || signal.currentPrice));
     if (slDist > 0 && tp1Dist > 0) {
@@ -908,32 +711,18 @@ class RiskEnforcer {
   }
 }
 
-// ─────────────────────────────────────────────
-//  PRICE MONITOR
-// ─────────────────────────────────────────────
-
 class PriceMonitor {
-  /**
-   * Monitors live prices and triggers position updates.
-   * In manual mode: uses price feed from binance-ws / bybit-ws.
-   * In semi-auto: also used to detect TP/SL for alerts.
-   */
   constructor() {
-    this._prices    = new Map();  // symbol → { price, timestamp }
-    this._listeners = new Map();  // symbol → Set<callback>
+    this._prices    = new Map();
+    this._listeners = new Map();
   }
 
-  /**
-   * Update price for a symbol. Called by feed listeners.
-   * @param {string} symbol
-   * @param {number} price
-   */
   update(symbol, price) {
     this._prices.set(symbol, { price: _round(price), timestamp: _now() });
     const listeners = this._listeners.get(symbol);
     if (listeners) {
       for (const cb of listeners) {
-        try { cb(price, symbol); } catch { /* ignore listener errors */ }
+        try { cb(price, symbol); } catch { }
       }
     }
   }
@@ -955,41 +744,17 @@ class PriceMonitor {
   }
 }
 
-// ─────────────────────────────────────────────
-//  SEMI-AUTO ORDER EXECUTOR
-// ─────────────────────────────────────────────
-
 class SemiAutoExecutor {
-  /**
-   * Handles exchange order placement for semi-auto mode.
-   * Requires a Binance/Bybit API client.
-   *
-   * In SEMI_AUTO mode: places orders when user clicks "Take" in Telegram.
-   * Never auto-closes — always requires user confirmation for each action.
-   *
-   * @param {Object} config
-   * @param {Object} config.exchangeClient - Binance/Bybit REST client
-   * @param {string} config.exchange       - 'BINANCE' | 'BYBIT'
-   * @param {boolean} config.testnet       - use testnet (default false)
-   * @param {number}  config.leverage      - default leverage
-   */
+  // Never auto-closes — always requires user confirmation for each action.
   constructor(config = {}) {
     this._client   = config.exchangeClient || null;
     this._exchange = config.exchange       || 'BINANCE';
     this._testnet  = config.testnet        || false;
     this._leverage = config.leverage       || 1;
     this._enabled  = !!this._client;
-    this._orders   = new Map(); // orderId → order details
+    this._orders   = new Map();
   }
 
-  /**
-   * Place a limit order for a signal.
-   * Called when user clicks "Take" in Telegram.
-   *
-   * @param {Object} signal
-   * @param {Object} params - { entryPrice, size, sl, tp1, tp2, tp3 }
-   * @returns {Object} order result
-   */
   async placeEntry(signal, params) {
     if (!this._enabled) {
       return { success: false, reason: 'No exchange client configured — manual mode only', simulated: true, orderId: `SIM-${_uuid()}` };
@@ -1008,7 +773,6 @@ class SemiAutoExecutor {
         timeInForce: 'GTC',
       };
 
-      // Place on exchange
       const result = await this._client.newOrder(orderParams);
       const orderId = result.orderId || result.order_id || `ORDER-${_uuid()}`;
 
@@ -1016,18 +780,7 @@ class SemiAutoExecutor {
         orderId, signal, params, status: 'OPEN', placedAt: _now(),
       });
 
-      // Place SL order (stop-loss)
-      // FIX: this result was previously discarded entirely (fire-and-forget,
-      // .catch() only) — meaning the SL order's exchange-assigned ID was
-      // never captured anywhere. setBreakeven() below takes a
-      // currentSLOrderId param specifically to cancel this exact order
-      // before placing a new breakeven stop, but with no ID ever threaded
-      // through Position, that param has always been undefined in every
-      // real call — its `if (currentSLOrderId)` guard was always false, so
-      // the ORIGINAL SL order was NEVER cancelled on breakeven. Net effect:
-      // every position that reached breakeven ended up with two live stop
-      // orders on the exchange simultaneously, permanently, by design —
-      // not as a failure-path edge case. Now captured and returned.
+      // Place SL order (stop-loss) FIX: this result was previously discarded entirely (fire-and-forget, .catch() only) — meaning the SL order's exchange-assigned ID was never captured anywhere.
       let slOrderId = null;
       if (sl) {
         const slResult = await this._client.newOrder({
@@ -1042,7 +795,6 @@ class SemiAutoExecutor {
         slOrderId = slResult?.orderId || slResult?.order_id || null;
       }
 
-      // Place TP1 order
       if (tp1) {
         await this._client.newOrder({
           symbol:      signal.symbol,
@@ -1062,9 +814,6 @@ class SemiAutoExecutor {
     }
   }
 
-  /**
-   * Cancel a pending entry order.
-   */
   async cancelOrder(symbol, orderId) {
     if (!this._enabled) return { success: true, simulated: true };
     try {
@@ -1076,27 +825,15 @@ class SemiAutoExecutor {
     }
   }
 
-  /**
-   * Move SL to breakeven on exchange.
-   */
   async setBreakeven(symbol, direction, size, entryPrice, currentSLOrderId) {
     if (!this._enabled) return { success: true, simulated: true, newSL: entryPrice };
     try {
-      // Cancel existing SL
-      // FIX: this previously swallowed any cancel failure with .catch(() =>
-      // {}) and proceeded to place a NEW breakeven SL order regardless. If
-      // the exchange cancel fails (network blip, order already filled,
-      // rate limit), the position can end up with TWO live stop orders
-      // simultaneously — whichever the exchange fills first executes,
-      // silently defeating the point of moving to breakeven. Now logged so
-      // this is visible instead of only discoverable by finding a stray
-      // order on the exchange account later.
+      // Cancel existing SL FIX: this previously swallowed any cancel failure with .catch(() => {}) and proceeded to place a NEW breakeven SL order regardless.
       if (currentSLOrderId) {
         await this._client.cancelOrder({ symbol, orderId: currentSLOrderId })
           .catch(e => console.warn(`[ExecutionEngine] setBreakeven: failed to cancel old SL ${currentSLOrderId} for ${symbol} — a duplicate stop order may now be live: ${e.message}`));
       }
 
-      // Place new SL at breakeven
       const newSLResult = await this._client.newOrder({
         symbol,
         side:       direction === 'LONG' ? 'SELL' : 'BUY',
@@ -1116,29 +853,7 @@ class SemiAutoExecutor {
   getOrders() { return Object.fromEntries(this._orders); }
 }
 
-// ─────────────────────────────────────────────
-//  MAIN EXECUTION ENGINE
-// ─────────────────────────────────────────────
-
 class ExecutionEngine extends EventEmitter {
-  /**
-   * Unified Manual + Semi-Auto execution engine.
-   * Handles the full lifecycle from signal receipt to trade closure.
-   *
-   * @param {Object} config
-   * @param {string}  config.mode              - 'MANUAL' | 'SEMI_AUTO'
-   * @param {Object}  config.dispatcher        - AlertDispatcher instance
-   * @param {Object}  config.drawdownGuard     - DrawdownGuard instance
-   * @param {Object}  [config.priceMonitor]    - PriceMonitor instance
-   * @param {Object}  [config.exchangeClient]  - Exchange REST client (semi-auto only)
-   * @param {string}  [config.exchange]        - 'BINANCE' | 'BYBIT'
-   * @param {boolean} [config.testnet]         - use testnet
-   * @param {number}  [config.leverage]        - leverage for semi-auto
-   * @param {number}  [config.maxOpenPositions]
-   * @param {number}  [config.maxRiskPct]
-   * @param {boolean} [config.autoBreakeven]   - auto-set BE in semi-auto (default true)
-   * @param {boolean} [config.sendJournalDaily] - send daily journal (default true)
-   */
   constructor(config = {}) {
     super();
 
@@ -1147,7 +862,6 @@ class ExecutionEngine extends EventEmitter {
     this._dd         = config.drawdownGuard;
     this._prices     = config.priceMonitor || new PriceMonitor();
 
-    // Sub-components
     this._journal    = new SignalJournal();
     this._enforcer   = new RiskEnforcer({
       maxOpenPositions: config.maxOpenPositions || MAX_OPEN_POSITIONS,
@@ -1160,15 +874,13 @@ class ExecutionEngine extends EventEmitter {
       leverage:       config.leverage       || 1,
     });
 
-    // State
-    this._positions       = new Map();    // positionId → Position
-    this._pendingSignals  = new Map();    // signalId → { signal, journalEntry, dispatchedAt }
+    this._positions       = new Map();
+    this._pendingSignals  = new Map();
     this._skippedSignals  = new Set();
     this._autoBreakeven   = config.autoBreakeven !== false;
     this._running         = false;
     this._paused          = false;
 
-    // Stats
     this._stats = {
       signalsReceived: 0, signalsDispatched: 0,
       tradesTaken: 0, tradesSkipped: 0,
@@ -1176,10 +888,8 @@ class ExecutionEngine extends EventEmitter {
       totalPnlR: 0, errors: 0,
     };
 
-    // Wire price monitor → position updates
     this._wirePriceMonitor();
 
-    // Schedule daily summary
     if (config.sendJournalDaily !== false) {
       this._scheduleDailySummary();
     }
@@ -1187,30 +897,16 @@ class ExecutionEngine extends EventEmitter {
     console.log(`[ExecutionEngine] Initialized in ${this.mode} mode`);
   }
 
-  // ─────────────────────────────────────────────
-  //  SIGNAL INTAKE (from task-planner)
-  // ─────────────────────────────────────────────
-
-  /**
-   * Primary entry point. Called by task-planner when a signal fires.
-   * Validates, journals, and dispatches the signal.
-   *
-   * @param {Object} signal - full scored signal from signal-scorer
-   * @returns {Object} dispatch result
-   */
   async onSignal(signal) {
     this._stats.signalsReceived++;
 
     if (!signal || signal.action === 'WAIT') return { dispatched: false, reason: 'WAIT signal' };
     if (this._paused) return { dispatched: false, reason: 'Engine paused' };
 
-    // Expire old pending signals
     this._expirePendingSignals();
 
-    // Journal the signal
     const journalEntry = this._journal.logSignal(signal, {});
 
-    // Dispatch via alert dispatcher
     let dispatchResult = null;
     try {
       dispatchResult = await this._dispatcher?.sendSignal(signal);
@@ -1220,7 +916,6 @@ class ExecutionEngine extends EventEmitter {
       console.error(`[ExecutionEngine] Dispatch error: ${err.message}`);
     }
 
-    // Register as pending
     this._pendingSignals.set(signal.id, {
       signal,
       journalEntry,
@@ -1233,18 +928,6 @@ class ExecutionEngine extends EventEmitter {
     return { dispatched: true, signalId: signal.id, dispatchResult };
   }
 
-  // ─────────────────────────────────────────────
-  //  USER ACTIONS (from Telegram callbacks)
-  // ─────────────────────────────────────────────
-
-  /**
-   * User confirmed they took a trade manually.
-   * In semi-auto: places the order automatically.
-   *
-   * @param {string} signalId
-   * @param {Object} [userParams] - { entryPrice, size, sl, tp1, tp2, tp3 }
-   * @returns {Object} result
-   */
   async onTrade(signalId, userParams = {}) {
     const pending = this._pendingSignals.get(signalId);
     if (!pending) {
@@ -1254,7 +937,6 @@ class ExecutionEngine extends EventEmitter {
     const { signal } = pending;
     const isLong     = signal.action === 'LONG';
 
-    // Build entry data from user params OR signal defaults
     const entryData = {
       entryPrice: userParams.entryPrice || signal.entry?.midPoint || signal.currentPrice,
       size:       userParams.size       || signal.positionSize    || 1,
@@ -1266,7 +948,6 @@ class ExecutionEngine extends EventEmitter {
       dollarRisk: userParams.dollarRisk || signal.risk?.dollarRisk,
     };
 
-    // Risk validation
     const openPositions = [...this._positions.values()];
     const validation    = this._enforcer.validate(signal, entryData, openPositions, this._dd);
 
@@ -1278,7 +959,6 @@ class ExecutionEngine extends EventEmitter {
       return { success: false, validation };
     }
 
-    // Warnings to Telegram
     if (validation.warnings.length > 0) {
       await this._dispatcher?.sendCustom(
         `⚠️ <b>Entry Warnings for ${signal.symbol}</b>\n\n${validation.warnings.map(w => `• ${w}`).join('\n')}\n\n<i>Proceeding with trade.</i>`,
@@ -1286,7 +966,6 @@ class ExecutionEngine extends EventEmitter {
       );
     }
 
-    // ── SEMI-AUTO: place order on exchange ──
     let orderResult = null;
     if (this.mode === EXECUTION_MODE.SEMI_AUTO && this._executor.isEnabled()) {
       orderResult = await this._executor.placeEntry(signal, entryData);
@@ -1298,23 +977,18 @@ class ExecutionEngine extends EventEmitter {
       }
     }
 
-    // Create position
     const position = new Position(signal, { ...entryData, orderId: orderResult?.orderId, slOrderId: orderResult?.slOrderId }, this.mode);
     this._positions.set(position.id, position);
     this._stats.tradesTaken++;
     this._stats.positionsOpened++;
 
-    // Update journal
     this._journal.updateSignalState(signalId, SIGNAL_STATE.TAKEN, { positionId: position.id, entryPrice: entryData.entryPrice });
     this._pendingSignals.delete(signalId);
 
-    // Subscribe to price updates
     this._subscribeToPosition(position);
 
-    // Register with drawdown guard
     this._dd?.openPosition?.(position.id, signal.symbol, signal.action, entryData.size);
 
-    // Send confirmation to Telegram
     await this._sendEntryConfirmation(signal, position, orderResult, validation);
 
     this.emit('position_opened', { position: position.summary(), signal });
@@ -1323,9 +997,6 @@ class ExecutionEngine extends EventEmitter {
     return { success: true, positionId: position.id, position: position.summary(), validation, orderResult };
   }
 
-  /**
-   * User skipped the signal.
-   */
   async onSkip(signalId, reason = 'User skipped') {
     const pending = this._pendingSignals.get(signalId);
     if (!pending) return { success: false };
@@ -1339,9 +1010,6 @@ class ExecutionEngine extends EventEmitter {
     return { success: true };
   }
 
-  /**
-   * User is watching (interested but not yet in).
-   */
   async onWatch(signalId) {
     const pending = this._pendingSignals.get(signalId);
     if (!pending) return { success: false };
@@ -1352,12 +1020,6 @@ class ExecutionEngine extends EventEmitter {
     return { success: true };
   }
 
-  /**
-   * User manually closes a position (full or partial).
-   *
-   * @param {string} positionId
-   * @param {Object} params - { price, pct }
-   */
   async onClose(positionId, params = {}) {
     const position = this._positions.get(positionId);
     if (!position || position.isClosed()) {
@@ -1367,11 +1029,7 @@ class ExecutionEngine extends EventEmitter {
     const closePrice = params.price || this._prices.getPrice(position.symbol) || position.currentPrice;
     const closePct   = params.pct   || 1.0;
 
-    // Cancel exchange order in semi-auto
-    // FIX: previously silent — if this cancel fails, the code below still
-    // marks the position closed internally while the exchange-side order
-    // may still be live, meaning the account can carry exposure the system
-    // no longer thinks it has. Logged so a failed cancel is visible.
+    // FIX: previously silent — if this cancel fails, the code below still marks the position closed internally while the exchange-side order may still be live, meaning the account can carry exposure the...
     if (this.mode === EXECUTION_MODE.SEMI_AUTO && position.exchangeOrderId) {
       await this._executor.cancelOrder(position.symbol, position.exchangeOrderId)
         .catch(e => console.warn(`[ExecutionEngine] onClose: failed to cancel exchange order ${position.exchangeOrderId} for ${position.symbol} — it may still be live: ${e.message}`));
@@ -1382,7 +1040,6 @@ class ExecutionEngine extends EventEmitter {
     if (position.isClosed()) {
       await this._handlePositionClosed(position, 'MANUAL_CLOSE');
     } else {
-      // Partial close notification
       await this._dispatcher?.sendCustom(
         `✂️ <b>Partial Close</b> — ${position.symbol}\nClosed ${(closePct*100).toFixed(0)}% at <code>${_round(closePrice)}</code>\nPnL on this slice: <b>${closeResult.pnlR}R</b>\nRemaining: <b>${(closeResult.remaining*100).toFixed(0)}%</b>`
       );
@@ -1391,9 +1048,6 @@ class ExecutionEngine extends EventEmitter {
     return { success: true, closeResult, position: position.summary() };
   }
 
-  /**
-   * User manually moves SL.
-   */
   async onMoveSL(positionId, newSL) {
     const position = this._positions.get(positionId);
     if (!position || position.isClosed()) return { success: false };
@@ -1407,9 +1061,6 @@ class ExecutionEngine extends EventEmitter {
     return result;
   }
 
-  /**
-   * User sets SL to breakeven manually.
-   */
   async onSetBreakeven(positionId) {
     const position = this._positions.get(positionId);
     if (!position || position.isClosed() || position.beSet) {
@@ -1418,14 +1069,7 @@ class ExecutionEngine extends EventEmitter {
 
     const prevSL = position.currentSL;
 
-    // FIX: this previously flipped position.beSet=true and moved
-    // position.currentSL to entryPrice BEFORE calling the exchange, and
-    // never checked whether the exchange call actually succeeded. A
-    // failure was silently swallowed and the method still returned
-    // success:true — internal state and the user-facing confirmation both
-    // claimed breakeven was set even when the real exchange stop never
-    // moved. Now: the exchange update (if SEMI_AUTO) is confirmed
-    // successful BEFORE any state changes, notification, or event.
+    // FIX: this previously flipped position.beSet=true and moved position.currentSL to entryPrice BEFORE calling the exchange, and never checked whether the exchange call actually succeeded.
     if (this.mode === EXECUTION_MODE.SEMI_AUTO) {
       const result = await this._executor.setBreakeven(
         position.symbol, position.direction,
@@ -1440,9 +1084,7 @@ class ExecutionEngine extends EventEmitter {
         ).catch(() => {});
         return { success: false, reason: `Exchange update failed: ${result.reason}` };
       }
-      // Keep the position's tracked SL order ID current for any future
-      // update (e.g. trailing stop) — previously never refreshed after a
-      // breakeven move, so it would go stale after this point.
+      // trailing stop) — previously never refreshed after a breakeven move, so it would go stale after this point.
       if (result.newSLOrderId) position.slOrderId = result.newSLOrderId;
     }
 
@@ -1455,20 +1097,14 @@ class ExecutionEngine extends EventEmitter {
     return { success: true, prevSL, newSL: position.entryPrice };
   }
 
-  // ─────────────────────────────────────────────
-  //  PRICE MONITORING + POSITION LIFECYCLE
-  // ─────────────────────────────────────────────
-
   _wirePriceMonitor() {
-    // This gets called by the price monitor when new prices arrive
-    // Position updates happen here
   }
 
   _subscribeToPosition(position) {
     const unsub = this._prices.subscribe(position.symbol, async (price) => {
       if (position.isClosed()) { unsub(); return; }
 
-      const atr     = null; // ATR would come from candle feed
+      const atr     = null;
       const actions = position.onPrice(price, atr);
 
       for (const action of actions) {
@@ -1477,9 +1113,6 @@ class ExecutionEngine extends EventEmitter {
     });
   }
 
-  /**
-   * Handle a position action (TP hit, SL hit, BE set, trail updated).
-   */
   async _handlePositionAction(position, action) {
     switch (action.type) {
       case 'TP1_HIT':
@@ -1520,15 +1153,7 @@ class ExecutionEngine extends EventEmitter {
 
       case 'BREAKEVEN_SET':
         if (this._autoBreakeven) {
-          // FIX: this case previously only sent a Telegram notification and
-          // emitted an event — it NEVER called the exchange at all. Position
-          // .onPrice() (which produced this action) already flipped
-          // this.beSet=true and this.currentSL=entryPrice internally before
-          // returning the action, purely in-memory. With autoBreakeven
-          // defaulting to true, every automatic breakeven trigger in
-          // SEMI_AUTO mode told the trader "breakeven set" while the real
-          // exchange stop-loss stayed at its original (wider) level —
-          // silently, on every occurrence, not as a rare failure case.
+          // FIX: this case previously only sent a Telegram notification and emitted an event — it NEVER called the exchange at all.
           let exchangeOk = true;
           let exchangeReason = null;
           if (this.mode === EXECUTION_MODE.SEMI_AUTO) {
@@ -1584,10 +1209,8 @@ class ExecutionEngine extends EventEmitter {
       holdingTimeMs: position.holdingTimeMs(),
     };
 
-    // Record in journal
     const journalRecord = this._journal.recordOutcome(position.id, position.signalId, outcome);
 
-    // Record in drawdown guard
     if (this._dd) {
       this._dd.record({
         pnlPct:   outcome.pnlPct,
@@ -1602,13 +1225,8 @@ class ExecutionEngine extends EventEmitter {
 
     this.emit('position_closed', { position: position.summary(), outcome, journalRecord });
 
-    // Remove from active positions
     this._positions.delete(position.id);
   }
-
-  // ─────────────────────────────────────────────
-  //  TELEGRAM NOTIFICATIONS
-  // ─────────────────────────────────────────────
 
   async _sendEntryConfirmation(signal, position, orderResult, validation) {
     const isLong  = signal.action === 'LONG';
@@ -1641,10 +1259,6 @@ class ExecutionEngine extends EventEmitter {
 
     await this._dispatcher?.sendCustom(text);
   }
-
-  // ─────────────────────────────────────────────
-  //  DAILY SUMMARY
-  // ─────────────────────────────────────────────
 
   async sendDailySummary() {
     const midnight  = new Date();
@@ -1691,10 +1305,6 @@ class ExecutionEngine extends EventEmitter {
     }, midnight - now);
   }
 
-  // ─────────────────────────────────────────────
-  //  SIGNAL EXPIRY
-  // ─────────────────────────────────────────────
-
   _expirePendingSignals() {
     const now = _now();
     for (const [id, pending] of this._pendingSignals) {
@@ -1706,33 +1316,13 @@ class ExecutionEngine extends EventEmitter {
     }
   }
 
-  // ─────────────────────────────────────────────
-  //  PRICE FEED INTEGRATION
-  // ─────────────────────────────────────────────
-
-  /**
-   * Called by binance-ws / bybit-ws on each price update.
-   * Routes price to the price monitor which triggers position updates.
-   *
-   * @param {string} symbol
-   * @param {number} price
-   * @param {number} [atr] - latest ATR from candle close
-   */
   onPrice(symbol, price, atr) {
     this._prices.update(symbol, price);
 
-    // Also update positions directly with ATR for trailing
     for (const position of this._positions.values()) {
       if (position.symbol === symbol && !position.isClosed() && atr) {
-        // ATR is only available on candle close, so direct call here
         const actions = position.onPrice(price, atr);
-        // FIX: fire-and-forget is intentional here (onPrice() is called
-        // synchronously from the price-tick handler and can't itself be
-        // async without restructuring every caller), but the failure was
-        // previously invisible. This drives TP/SL-hit Telegram alerts and
-        // the tp_alert/sl_alert event emission other engines listen for —
-        // a silent failure here means a real trade-lifecycle event was
-        // dropped with zero trace anywhere.
+        // FIX: fire-and-forget is intentional here (onPrice() is called synchronously from the price-tick handler and can't itself be async without restructuring every caller), but the failure was previously...
         for (const action of actions) {
           this._handlePositionAction(position, action)
             .catch(e => console.warn(`[ExecutionEngine] onPrice: failed to handle ${action.type} for ${position.symbol} — this trade event may not have been recorded or alerted: ${e.message}`));
@@ -1740,10 +1330,6 @@ class ExecutionEngine extends EventEmitter {
       }
     }
   }
-
-  // ─────────────────────────────────────────────
-  //  CONTROLS
-  // ─────────────────────────────────────────────
 
   pause()  { this._paused = true;  this.emit('paused');  }
   resume() { this._paused = false; this.emit('resumed'); }
@@ -1754,10 +1340,6 @@ class ExecutionEngine extends EventEmitter {
     this.emit('mode_changed', { mode });
     console.log(`[ExecutionEngine] Mode changed to ${mode}`);
   }
-
-  // ─────────────────────────────────────────────
-  //  STATUS + ANALYTICS
-  // ─────────────────────────────────────────────
 
   getStatus() {
     const openPositions = [...this._positions.values()].filter(p => !p.isClosed());
@@ -1799,10 +1381,6 @@ class ExecutionEngine extends EventEmitter {
 
   getPriceMonitor() { return this._prices; }
 }
-
-// ─────────────────────────────────────────────
-//  EXPORTS
-// ─────────────────────────────────────────────
 
 module.exports = {
   ExecutionEngine,

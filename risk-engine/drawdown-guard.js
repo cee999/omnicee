@@ -1,52 +1,4 @@
-/**
- * ============================================================
- *  DRAWDOWN GUARD — Elite Circuit Breaker + Equity Protection
- *  AI Trading Assistant · Layer 3 · Risk Engine
- * ============================================================
- *
- *  CIRCUIT BREAKER STATE MACHINE:
- *    CLOSED   → Normal trading, full position size
- *    WARNING  → Approaching limits, size reduced to 75%
- *    HALF     → 50% size — multiple losses or approaching daily limit
- *    OPEN     → Trading halted — limit hit
- *    COOLING  → Post-halt cooldown before recovery begins
- *    RECOVERY → Gradual size ramp back to 100% (4-step)
- *
- *  PROTECTION LAYERS:
- *    Layer 1  — Daily Loss Limit (default 3% of account)
- *    Layer 2  — Running Drawdown (peak-to-trough, default 10%)
- *    Layer 3  — Consecutive Loss Streak (default 4 in a row)
- *    Layer 4  — Win Rate Degradation (>25% drop from baseline)
- *    Layer 5  — Equity Curve Slope Filter (regression slope < 0)
- *    Layer 6  — Volatility Spike Guard (ATR spikes = reduce size)
- *    Layer 7  — Session-Based Loss Limits (per-session caps)
- *    Layer 8  — Weekly Loss Limit (default 7%)
- *    Layer 9  — Max Trades Per Day (prevent overtrading)
- *    Layer 10 — Profit Protection (lock in gains after good run)
- *
- *  EQUITY CURVE TRACKER:
- *    Linear regression slope on last N balance points
- *    Peak tracking, high watermark, variance, Sharpe ratio
- *    Max drawdown history, recovery factor, return statistics
- *
- *  WIN RATE MONITOR:
- *    Rolling window (20 trades), per-symbol, per-session, per-grade
- *    Degradation detection at 20/30/40% drops from baseline
- *    Automatic sizing reduction on degradation
- *
- *  RECOVERY MANAGER:
- *    4-step recovery: 25% → 50% → 75% → 100%
- *    2 consecutive wins per step to advance
- *    Any loss resets to step 1
- *    Deep drawdown starts at step 0
- *
- *  Events:
- *    circuit_open, circuit_warning, circuit_half, circuit_closed
- *    recovery_advance, recovery_complete, win_rate_alert
- *    equity_slope_alert, day_reset, high_watermark, profit_protection
- *    dd_update
- * ============================================================
- */
+// WARNING → Approaching limits, size reduced to 75% HALF → 50% size — multiple losses or approaching daily limit OPEN → Trading halted — limit hit COOLING → Post-halt cooldown before recovery begins...
 
 'use strict';
 
@@ -91,10 +43,6 @@ function _utcWeek() {
   const mon = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - day + 1));
   return mon.getTime();
 }
-
-// ─────────────────────────────────────────────
-//  EQUITY CURVE TRACKER
-// ─────────────────────────────────────────────
 
 class EquityCurveTracker {
   constructor(maxPoints = 500) {
@@ -195,10 +143,6 @@ class EquityCurveTracker {
   get peak()   { return this._peak; }
   get highWatermark() { return this._highWatermark; }
 }
-
-// ─────────────────────────────────────────────
-//  WIN RATE MONITOR
-// ─────────────────────────────────────────────
 
 class WinRateMonitor {
   constructor(baseline = DEFAULT_WIN_RATE_BASELINE, window = 20) {
@@ -301,10 +245,6 @@ class WinRateMonitor {
   get totalTrades(){ return this._trades.length; }
 }
 
-// ─────────────────────────────────────────────
-//  SESSION P&L TRACKER
-// ─────────────────────────────────────────────
-
 class SessionPnLTracker {
   constructor(limit = SESSION_LOSS_LIMIT) {
     this._limit = limit;
@@ -388,10 +328,6 @@ class SessionPnLTracker {
   getHistory(n = 7) { return this._history.slice(-n); }
 }
 
-// ─────────────────────────────────────────────
-//  RECOVERY MANAGER
-// ─────────────────────────────────────────────
-
 class RecoveryManager {
   constructor(steps = RECOVERY_STEPS, winsNeeded = RECOVERY_WINS_PER_STEP) {
     this._steps      = steps;
@@ -463,10 +399,6 @@ class RecoveryManager {
   getHistory(n = 20) { return this._history.slice(-n); }
 }
 
-// ─────────────────────────────────────────────
-//  PROFIT PROTECTION ENGINE
-// ─────────────────────────────────────────────
-
 class ProfitProtection {
   constructor(config = {}) {
     this._levels = config.levels || [
@@ -506,10 +438,6 @@ class ProfitProtection {
     };
   }
 }
-
-// ─────────────────────────────────────────────
-//  VOLATILITY GUARD
-// ─────────────────────────────────────────────
 
 class VolatilityGuard {
   constructor(baselineWindow = 50, spikeMult = VOLATILITY_SPIKE_MULT) {
@@ -551,10 +479,6 @@ class VolatilityGuard {
   }
 }
 
-// ─────────────────────────────────────────────
-//  TRADE LOG
-// ─────────────────────────────────────────────
-
 class TradeLog {
   constructor(maxEntries = 1000) { this._log = []; this._max = maxEntries; }
 
@@ -592,10 +516,6 @@ class TradeLog {
   get size() { return this._log.length; }
 }
 
-// ─────────────────────────────────────────────
-//  MAIN DRAWDOWN GUARD
-// ─────────────────────────────────────────────
-
 class DrawdownGuard extends EventEmitter {
   constructor(config = {}) {
     super();
@@ -628,15 +548,7 @@ class DrawdownGuard extends EventEmitter {
     this._weeklyPnl   = 0;
     this._dailyTrades = 0;
     this._consecLoss  = 0;
-    // FIX: config.accountBalance was accepted by the constructor but never
-    // actually read — _balance was hardcoded to null and only ever set via
-    // an explicit `balance` field on record()/updateBalance(), which nothing
-    // in the live outcome-feedback pipeline provides (it only has pnlPct/pnlR).
-    // That meant _balance stayed null forever, so _evaluateCB's equity-curve
-    // max-drawdown-from-peak check (`dd.pct >= this._maxDrawdown`) always saw
-    // dd.pct === 0 and could never trip — one of the circuit breaker's several
-    // independent safety checks was silently permanently disabled. Seed from
-    // config and track it internally as trades accumulate (see record()).
+    // FIX: config.accountBalance was accepted by the constructor but never actually read — _balance was hardcoded to null and only ever set via an explicit `balance` field on record()/updateBalance(),...
     this._balance     = config.accountBalance || null;
     this._dayStart    = _utcDay();
     this._weekStart   = _utcWeek();
@@ -648,20 +560,13 @@ class DrawdownGuard extends EventEmitter {
     this._log('DrawdownGuard initialized', { maxDaily: this._maxDailyLoss, maxDD: this._maxDrawdown });
   }
 
-  // ─── RECORD TRADE ───
-
   record({ pnlPct, balance, won, symbol, signalId, grade, pnlR, session }) {
     const today = _utcDay(); const week = _utcWeek();
     if (today > this._dayStart)  this._rollDay();
     if (week  > this._weekStart) this._rollWeek();
 
     if (balance != null) this._balance = balance;
-    // FIX: the live outcome-feedback pipeline (api/server.js) only has
-    // pnlPct/pnlR for a closed trade, not the account's real dollar balance,
-    // so `balance` is never passed here in practice. Previously this meant
-    // this._balance stayed null forever. Now derive a running balance from
-    // pnlPct applied to the last known balance, seeded from config.accountBalance,
-    // so the equity curve tracker has real values to compute drawdown from.
+    // FIX: the live outcome-feedback pipeline (api/server.js) only has pnlPct/pnlR for a closed trade, not the account's real dollar balance, so `balance` is never passed here in practice.
     else if (this._balance != null) this._balance = this._balance * (1 + pnlPct / 100);
     const effectiveBalance = this._balance;
 
@@ -704,8 +609,6 @@ class DrawdownGuard extends EventEmitter {
     this.emit('dd_update', { ...status, tradeResult: { pnlPct, won, pnlR } });
     return status;
   }
-
-  // ─── EVALUATE (before new trade) ───
 
   evaluate(opts = {}) {
     const warnings = [];
@@ -784,8 +687,6 @@ class DrawdownGuard extends EventEmitter {
     };
   }
 
-  // ─── CIRCUIT BREAKER ───
-
   _evaluateCB(balance) {
     const prevState = this._cbState;
     const dd        = balance ? this._equity.drawdown(balance) : { pct: 0 };
@@ -850,8 +751,6 @@ class DrawdownGuard extends EventEmitter {
     return `Warning: ${parts.join(' | ')}`;
   }
 
-  // ─── PUBLIC CONTROLS ───
-
   manualReset(reason = 'Manual reset') {
     if (this._cbState !== CB_STATE.OPEN) {
       this._setCBState(CB_STATE.CLOSED, 'Cleared by user');
@@ -890,8 +789,6 @@ class DrawdownGuard extends EventEmitter {
 
   updateBaseline(winRate) { this._winRate.baseline = winRate; }
 
-  // ─── DAY/WEEK ROLLOVER ───
-
   _rollDay() {
     this._logEvent('DAY_RESET', `PnL: ${_round(this._dailyPnl,2)}%, Trades: ${this._dailyTrades}`);
     this._dailyPnl = 0; this._dailyTrades = 0; this._dayStart = _utcDay();
@@ -919,8 +816,6 @@ class DrawdownGuard extends EventEmitter {
     }, midnight - now);
     timer.unref?.();
   }
-
-  // ─── STATUS ───
 
   getStatus() {
     const dd         = this._balance ? this._equity.drawdown(this._balance) : { pct: 0, absolute: 0 };

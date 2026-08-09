@@ -1,43 +1,3 @@
-/**
- * ============================================================
- *  ALERT DISPATCHER — Full Production Signal Delivery Engine
- *  AI Trading Assistant · Layer 5 · Signal Pipeline
- * ============================================================
- *
- *  Features:
- *    - Telegram Bot API (messages, photos, inline keyboards)
- *    - Rich signal formatting with full AI reasoning text
- *    - Chart screenshot generation via TradingView URL
- *    - Inline keyboard buttons (Approve / Skip / Details)
- *    - Signal queue with priority ordering
- *    - Rate limiting (Telegram allows 30 messages/sec)
- *    - Retry logic with exponential backoff
- *    - Multi-channel broadcasting (groups + private chats)
- *    - Alert deduplication (no spam same signal twice)
- *    - Grade-based routing (Grade A → priority channel)
- *    - Webhook handler for user replies / callbacks
- *    - Email fallback via nodemailer
- *    - Sound alert via system notification
- *    - Signal acknowledgement tracking
- *    - Delivery receipt storage
- *    - Full bot command handlers (/start, /status, /signals, /risk)
- *    - Inline position calculator on demand
- *    - Session-aware message scheduling
- *    - Trade outcome recording via /win or /loss commands
- *    - Callback query handler for inline keyboards
- *    - Admin-only commands for risk engine control
- *    - Message templating engine with dynamic data injection
- *    - HTML and Markdown formatting modes
- *    - Sticker/emoji-based quick alerts
- *    - News alert broadcasting
- *    - Liquidation cascade emergency alerts
- *
- *  Usage:
- *    const dispatcher = new AlertDispatcher({ token: BOT_TOKEN, chatIds: [...] });
- *    await dispatcher.init();
- *    await dispatcher.sendSignal(signal);  // from signal-scorer.js
- * ============================================================
- */
 
 'use strict';
 
@@ -46,37 +6,26 @@ const http         = require('http');
 const EventEmitter = require('events');
 const { URL }      = require('url');
 
-// ─────────────────────────────────────────────
-//  CONSTANTS
-// ─────────────────────────────────────────────
-
 const TELEGRAM_API_BASE = 'https://api.telegram.org/bot';
 
-// Telegram rate limit: 30 messages/second global, 1 msg/second per chat
-const RATE_LIMIT_GLOBAL_MS   = 35;     // ms between sends (global)
-const RATE_LIMIT_PER_CHAT_MS = 1100;   // ms between sends per chat
+const RATE_LIMIT_GLOBAL_MS   = 35;
+const RATE_LIMIT_PER_CHAT_MS = 1100;
 
-// Max retries for failed Telegram calls
 const MAX_RETRIES = 5;
 
-// Alert deduplication window (ms) — same symbol+direction within window = skip
-const DEDUP_WINDOW_MS = 5 * 60 * 1000;   // 5 minutes
+const DEDUP_WINDOW_MS = 5 * 60 * 1000;
 
-// Signal queue check interval
 const QUEUE_INTERVAL_MS = 100;
 
-// Chart screenshot service URL (uses TradingView snapshot API)
 const CHART_SNAPSHOT_BASE = 'https://charts.tradingview.com/chart-snapshots';
 
-// Priority levels
 const PRIORITY = {
-  EMERGENCY: 0,   // liquidation cascades, circuit breaker
-  HIGH:      1,   // Grade A signals
-  NORMAL:    2,   // Grade B signals
-  LOW:       3,   // status updates, stats
+  EMERGENCY: 0,
+  HIGH:      1,
+  NORMAL:    2,
+  LOW:       3,
 };
 
-// Bot command list
 const BOT_COMMANDS = [
   { command: 'start',     description: 'Start the trading assistant bot' },
   { command: 'status',    description: 'System status and connection health' },
@@ -98,7 +47,6 @@ const BOT_COMMANDS = [
   { command: 'help',      description: 'Full command reference' },
 ];
 
-// Emoji map for signal formatting
 const EMOJI = {
   LONG:       '🟢',
   SHORT:      '🔴',
@@ -130,24 +78,12 @@ const EMOJI = {
   EXPLOSION:  '💥',
 };
 
-// ─────────────────────────────────────────────
-//  TELEGRAM HTTP CLIENT
-// ─────────────────────────────────────────────
-
 class TelegramClient {
   constructor(token) {
     this.token   = token;
     this.baseUrl = `${TELEGRAM_API_BASE}${token}`;
   }
 
-  /**
-   * Make a raw Telegram API request.
-   * Returns parsed JSON response body.
-   *
-   * @param {string} method   - Telegram API method name
-   * @param {Object} payload  - request body
-   * @returns {Promise<Object>}
-   */
   async call(method, payload = {}) {
     const url     = `${this.baseUrl}/${method}`;
     const body    = JSON.stringify(payload);
@@ -182,13 +118,10 @@ class TelegramClient {
     });
   }
 
-  /**
-   * Send text message with optional keyboard
-   */
   async sendMessage(chatId, text, options = {}) {
     return this.call('sendMessage', {
       chat_id:    chatId,
-      text:       text.slice(0, 4096), // Telegram limit
+      text:       text.slice(0, 4096),
       parse_mode: options.parseMode || 'HTML',
       reply_markup:           options.replyMarkup || undefined,
       disable_web_page_preview: options.noPreview !== false,
@@ -196,9 +129,6 @@ class TelegramClient {
     });
   }
 
-  /**
-   * Send photo with caption
-   */
   async sendPhoto(chatId, photoUrl, caption, options = {}) {
     return this.call('sendPhoto', {
       chat_id:   chatId,
@@ -209,9 +139,6 @@ class TelegramClient {
     });
   }
 
-  /**
-   * Edit existing message text
-   */
   async editMessage(chatId, messageId, text, options = {}) {
     return this.call('editMessageText', {
       chat_id:    chatId,
@@ -222,9 +149,6 @@ class TelegramClient {
     });
   }
 
-  /**
-   * Answer callback query (button press)
-   */
   async answerCallback(callbackQueryId, text, showAlert = false) {
     return this.call('answerCallbackQuery', {
       callback_query_id: callbackQueryId,
@@ -233,86 +157,48 @@ class TelegramClient {
     });
   }
 
-  /**
-   * Set webhook URL for receiving updates
-   */
   async setWebhook(webhookUrl) {
     return this.call('setWebhook', { url: webhookUrl });
   }
 
-  /**
-   * Delete webhook and use long polling
-   */
   async deleteWebhook() {
     return this.call('deleteWebhook');
   }
 
-  /**
-   * Get updates via long polling
-   */
   async getUpdates(offset = 0, timeout = 30) {
     return this.call('getUpdates', { offset, timeout, allowed_updates: ['message','callback_query'] });
   }
 
-  /**
-   * Set bot commands list
-   */
   async setMyCommands(commands) {
     return this.call('setMyCommands', { commands });
   }
 
-  /**
-   * Get bot info
-   */
   async getMe() {
     return this.call('getMe');
   }
 
-  /**
-   * Pin a message in a channel/group
-   */
   async pinMessage(chatId, messageId) {
     return this.call('pinChatMessage', { chat_id: chatId, message_id: messageId });
   }
 
-  /**
-   * Send sticker
-   */
   async sendSticker(chatId, stickerId) {
     return this.call('sendSticker', { chat_id: chatId, sticker: stickerId });
   }
 }
 
-// ─────────────────────────────────────────────
-//  SIGNAL QUEUE
-// ─────────────────────────────────────────────
-
 class SignalQueue {
   constructor() {
     this._queue     = [];
     this._lastSent  = 0;
-    this._chatTimes = new Map(); // chatId → last send time
+    this._chatTimes = new Map();
   }
 
-  /**
-   * Add item to queue with priority
-   * @param {Object} item - { priority, chatIds, fn: async () => {} }
-   */
   push(item) {
     this._queue.push({ ...item, addedAt: Date.now() });
-    // Sort by priority (lower number = higher priority)
     this._queue.sort((a, b) => a.priority - b.priority);
   }
 
-  /**
-   * Get next item if rate limit allows.
-   * FIX: RATE_LIMIT_PER_CHAT_MS and this._chatTimes were declared but never
-   * consulted — nothing stopped multiple messages from firing at the same
-   * chat within Telegram's ~1 msg/sec-per-chat limit, risking 429s/bans on
-   * bursts (e.g. many signals firing at once). Now scans for the first
-   * queued item that satisfies both the global and per-chat cooldown,
-   * instead of only ever looking at the front of the queue.
-   */
+  // FIX: RATE_LIMIT_PER_CHAT_MS and this._chatTimes were declared but never consulted — nothing stopped multiple messages from firing at the same chat within Telegram's ~1 msg/sec-per-chat limit, risking...
   next() {
     if (this._queue.length === 0) return null;
 
@@ -329,7 +215,7 @@ class SignalQueue {
         return item;
       }
     }
-    return null; // every queued item is still within its per-chat cooldown
+    return null;
   }
 
   async execute(item) {
@@ -339,7 +225,6 @@ class SignalQueue {
       await item.fn();
     } catch (err) {
       console.error('[SignalQueue] Execution error:', err.message);
-      // Retry logic
       if ((item.retries || 0) < MAX_RETRIES) {
         item.retries = (item.retries || 0) + 1;
         const delay = Math.min(1000 * Math.pow(2, item.retries), 30000);
@@ -352,18 +237,11 @@ class SignalQueue {
   clear() { this._queue = []; }
 }
 
-// ─────────────────────────────────────────────
-//  DEDUPLICATION MANAGER
-// ─────────────────────────────────────────────
-
 class DedupManager {
   constructor() {
-    this._seen = new Map(); // key → timestamp
+    this._seen = new Map();
   }
 
-  /**
-   * Returns true if this signal was already sent recently
-   */
   isDuplicate(signal) {
     const key = `${signal.symbol}_${signal.action}_${signal.timeframe}`;
     const last = this._seen.get(key);
@@ -374,9 +252,6 @@ class DedupManager {
 
   clear() { this._seen.clear(); }
 
-  /**
-   * Clean up old entries
-   */
   cleanup() {
     const now = Date.now();
     for (const [key, time] of this._seen) {
@@ -387,15 +262,8 @@ class DedupManager {
   }
 }
 
-// ─────────────────────────────────────────────
-//  MESSAGE FORMATTER
-// ─────────────────────────────────────────────
-
 class MessageFormatter {
 
-  /**
-   * Format a full trading signal into a rich Telegram HTML message
-   */
   static formatSignal(signal) {
     const isLong     = signal.action === 'LONG';
     const gradeEmoji = signal.score?.grade === 'A' ? EMOJI.GRADE_A
@@ -422,7 +290,6 @@ class MessageFormatter {
       `   <i>${signal.targets?.tp2?.note ?? ''}</i>`,
     ];
 
-    // Agent breakdown
     if (signal.agentBreakdown?.length > 0) {
       lines.push('');
       lines.push(`<b>━━━━━━━━ AGENT VOTES ━━━━━━━━</b>`);
@@ -433,14 +300,12 @@ class MessageFormatter {
       }
     }
 
-    // Top reasons
     if (signal.allReasons?.length > 0) {
       lines.push('');
       lines.push(`<b>━━━━━━━━ WHY THIS TRADE ━━━━━━━━</b>`);
       signal.allReasons.slice(0, 6).forEach(r => lines.push(`  ✅ ${r}`));
     }
 
-    // Trade management
     lines.push('');
     lines.push(`<b>━━━━━━━━ MANAGEMENT ━━━━━━━━</b>`);
     lines.push(`📍 Move to BE: <i>${signal.management?.moveToBreakeven ?? 'After TP1'}</i>`);
@@ -448,11 +313,9 @@ class MessageFormatter {
     lines.push(`🔄 Trail stop: <i>${signal.management?.trailingStop ?? 'ATR × 1.5'}</i>`);
     lines.push(`🚫 Invalidation: <i>${signal.management?.invalidation ?? 'Close beyond SL'}</i>`);
 
-    // HTF bias
     lines.push('');
     lines.push(`${EMOJI.UP} HTF Bias: <b>${signal.htfBias?.direction ?? '?'}</b>`);
 
-    // Footer
     lines.push('');
     lines.push(`<i>⚠️ Risk max 1-2% per trade. Confirm on your chart.</i>`);
     lines.push(`<i>📅 ${new Date(signal.timestamp).toUTCString()}</i>`);
@@ -460,9 +323,6 @@ class MessageFormatter {
     return lines.join('\n');
   }
 
-  /**
-   * Format a short inline alert (for group channels)
-   */
   static formatShortAlert(signal) {
     const isLong = signal.action === 'LONG';
     const emoji  = isLong ? EMOJI.LONG : EMOJI.SHORT;
@@ -475,9 +335,6 @@ class MessageFormatter {
     ].join('\n');
   }
 
-  /**
-   * Format system status message
-   */
   static formatStatus(status) {
     const { feed, scorer, risk, signals } = status;
 
@@ -504,9 +361,6 @@ class MessageFormatter {
     ].join('\n');
   }
 
-  /**
-   * Format a liquidation cascade alert
-   */
   static formatLiquidationCascade(data) {
     return [
       `${EMOJI.EMERGENCY} <b>LIQUIDATION CASCADE DETECTED</b>`,
@@ -521,9 +375,6 @@ class MessageFormatter {
     ].join('\n');
   }
 
-  /**
-   * Format whale trade alert
-   */
   static formatWhaleTrade(trade) {
     const emoji = trade.direction === 'BUY' ? EMOJI.BULL : EMOJI.BEAR;
     return [
@@ -534,9 +385,6 @@ class MessageFormatter {
     ].join('\n');
   }
 
-  /**
-   * Format funding rate extreme alert
-   */
   static formatFundingExtreme(extremes) {
     const lines = [`${EMOJI.WARNING} <b>EXTREME FUNDING RATES</b>`, ''];
     for (const e of extremes.slice(0, 5)) {
@@ -547,9 +395,6 @@ class MessageFormatter {
     return lines.join('\n');
   }
 
-  /**
-   * Format win/loss/BE trade outcome message
-   */
   static formatOutcome(outcome, signal) {
     const emoji = outcome.result === 'WIN' ? EMOJI.WIN
       : outcome.result === 'LOSS' ? EMOJI.LOSS : EMOJI.BREAKEVEN;
@@ -564,9 +409,6 @@ class MessageFormatter {
     ].join('\n');
   }
 
-  /**
-   * Format position size calculator result
-   */
   static formatPositionSize(calc) {
     return [
       `${EMOJI.CHART} <b>Position Size Calculator</b>`,
@@ -584,9 +426,6 @@ class MessageFormatter {
     ].join('\n');
   }
 
-  /**
-   * Format market sessions info
-   */
   static formatSessions(session) {
     const quality = session.best.quality;
     const qEmoji  = quality === 'HIGHEST' ? EMOJI.FIRE
@@ -606,9 +445,6 @@ class MessageFormatter {
     ].join('\n');
   }
 
-  /**
-   * Format help message with all commands
-   */
   static formatHelp() {
     return [
       `${EMOJI.BRAIN} <b>AI Trading Assistant — Commands</b>`,
@@ -625,15 +461,7 @@ class MessageFormatter {
   }
 }
 
-// ─────────────────────────────────────────────
-//  INLINE KEYBOARD BUILDER
-// ─────────────────────────────────────────────
-
 class KeyboardBuilder {
-  /**
-   * Build the inline keyboard for a signal message
-   * Buttons: Approve ✅ | Skip ❌ | Details 📊 | Chart 📈
-   */
   static signalKeyboard(signalId, symbol) {
     return {
       inline_keyboard: [
@@ -645,12 +473,7 @@ class KeyboardBuilder {
           { text: `📊 Details`,  callback_data: `DETAILS:${signalId}` },
           { text: `📈 Chart`,    callback_data: `CHART:${symbol}` },
         ],
-        // FIX: added — these are the entry point into manual-mode.js's
-        // ExecutionEngine, which was fully built but never wired anywhere.
-        // Unlike the WIN/LOSS/BE row below (a single guessed R-multiple),
-        // tapping Take starts REAL position tracking: TP/SL/breakeven/trail
-        // are detected from actual price action and the position is closed
-        // with a computed, accurate pnlR — not a placeholder.
+        // FIX: added — these are the entry point into manual-mode.js's ExecutionEngine, which was fully built but never wired anywhere.
         [
           { text: `📝 Take (Track)`, callback_data: `TAKE:${signalId}` },
           { text: `👁 Watch`,         callback_data: `WATCH:${signalId}` },
@@ -664,9 +487,6 @@ class KeyboardBuilder {
     };
   }
 
-  /**
-   * Confirmation keyboard for semi-auto mode
-   */
   static confirmKeyboard(signalId) {
     return {
       inline_keyboard: [[
@@ -676,9 +496,6 @@ class KeyboardBuilder {
     };
   }
 
-  /**
-   * Main menu keyboard
-   */
   static mainMenu() {
     return {
       keyboard: [
@@ -692,22 +509,8 @@ class KeyboardBuilder {
   }
 }
 
-// ─────────────────────────────────────────────
-//  CHART URL BUILDER
-// ─────────────────────────────────────────────
-
 class ChartUrlBuilder {
-  /**
-   * Builds a TradingView chart image URL for a symbol + timeframe.
-   * Uses TradingView's public snapshot service.
-   *
-   * @param {string} symbol    - e.g. 'BINANCE:BTCUSDT'
-   * @param {string} timeframe - e.g. '60' (minutes)
-   * @param {Object} levels    - { entry, sl, tp1, tp2 }
-   * @returns {string} chartUrl
-   */
   static build(symbol, timeframe, levels = {}) {
-    // TF to TradingView interval map
     const tfMap = {
       M1: '1', M5: '5', M15: '15', M30: '30',
       H1: '60', H2: '120', H4: '240', H6: '360',
@@ -717,7 +520,6 @@ class ChartUrlBuilder {
     const interval = tfMap[timeframe] || '60';
     const tvSymbol = this._formatSymbol(symbol);
 
-    // TradingView snapshot URL
     const params = new URLSearchParams({
       symbol:   tvSymbol,
       interval: interval,
@@ -731,8 +533,6 @@ class ChartUrlBuilder {
   }
 
   static _formatSymbol(symbol) {
-    // Convert BTCUSDT → BINANCE:BTCUSDT
-    // Convert XAUUSD → FOREXCOM:XAUUSD
     const forexPairs = ['EURUSD','GBPUSD','USDJPY','XAUUSD','XAGUSD','USDCAD','AUDUSD'];
     if (forexPairs.some(p => symbol.includes(p.slice(0, 3)))) {
       return `FOREXCOM:${symbol}`;
@@ -741,23 +541,7 @@ class ChartUrlBuilder {
   }
 }
 
-// ─────────────────────────────────────────────
-//  POSITION SIZE CALCULATOR
-// ─────────────────────────────────────────────
-
 class PositionCalculator {
-  /**
-   * Calculates the correct position size for a trade.
-   *
-   * @param {Object} params
-   * @param {number} params.accountBalance - total account in USD
-   * @param {number} params.riskPct        - risk per trade in % (e.g. 1.5)
-   * @param {number} params.entry          - entry price
-   * @param {number} params.stopLoss       - stop loss price
-   * @param {number} params.tp1            - take profit 1 price
-   * @param {string} params.symbol         - trading symbol (for pip value)
-   * @returns {Object} calculation result
-   */
   static calculate(params) {
     const {
       accountBalance = 1000,
@@ -773,11 +557,7 @@ class PositionCalculator {
     const tp1Points = tp1 ? Math.abs(tp1 - entry) : slPoints * 1.5;
     const rr        = slPoints > 0 ? parseFloat((tp1Points / slPoints).toFixed(2)) : 0;
 
-    // Pip value calculation (simplified)
-    // For forex pairs: 1 pip = 0.0001 for most pairs, 0.01 for JPY
-    // For gold (XAUUSD): 1 pip = 0.01
-    // For crypto: 1 unit = 1 USDT per coin
-    let pipValue = 10; // default per standard lot per pip
+    let pipValue = 10;
     let lotSize  = 0;
     let units    = 0;
 
@@ -787,18 +567,15 @@ class PositionCalculator {
       lotSize    = parseFloat((riskUSD / (pips * pipValue * 0.0001)).toFixed(4));
       units      = Math.round(lotSize * 100000);
     } else if (symbol.includes('XAU') || symbol.includes('GOLD')) {
-      // Gold: 1 pip = $1 per oz per contract
       const pips = slPoints / 0.01;
       lotSize    = parseFloat((riskUSD / pips).toFixed(3));
       units      = lotSize;
       pipValue   = 1;
     } else if (symbol.includes('BTC') || symbol.includes('ETH')) {
-      // Crypto: risk / SL distance in USDT
       lotSize  = parseFloat((riskUSD / slPoints).toFixed(6));
       units    = lotSize;
       pipValue = slPoints;
     } else {
-      // Standard forex
       const pips = slPoints / 0.0001;
       lotSize    = parseFloat((riskUSD / (pips * pipValue * 0.0001)).toFixed(4));
       units      = Math.round(lotSize * 100000);
@@ -825,13 +602,9 @@ class PositionCalculator {
   }
 }
 
-// ─────────────────────────────────────────────
-//  DELIVERY RECEIPT TRACKER
-// ─────────────────────────────────────────────
-
 class DeliveryTracker {
   constructor() {
-    this._receipts  = new Map(); // signalId → { messageIds, chatIds, timestamp }
+    this._receipts  = new Map();
     this._lastSignal = null;
   }
 
@@ -860,10 +633,6 @@ class DeliveryTracker {
 
   size() { return this._receipts.size; }
 }
-
-// ─────────────────────────────────────────────
-//  LONG POLL MANAGER
-// ─────────────────────────────────────────────
 
 class LongPollManager {
   constructor(client, handler) {
@@ -899,15 +668,7 @@ class LongPollManager {
       }
       this._conflictWarned = false;
     } catch (err) {
-      // FIX: a 409 here means Telegram is rejecting this getUpdates call
-      // because ANOTHER process is already long-polling with the exact
-      // same bot token — Telegram only allows one consumer at a time. That
-      // can't be fixed by retrying at all, let alone every 500ms forever;
-      // it needs the OTHER running instance stopped (a duplicate Render
-      // service, an old deploy that didn't fully terminate, a local dev
-      // instance — check for more than one place this token is live).
-      // Backing off hard and only logging once per backoff window turns an
-      // infinite ~2x/second spam into one clear, actionable line a minute.
+      // FIX: a 409 here means Telegram is rejecting this getUpdates call because ANOTHER process is already long-polling with the exact same bot token — Telegram only allows one consumer at a time.
       const isConflict = err.message?.includes('409') || err.message?.includes('Conflict');
       if (isConflict) {
         nextDelay = 30000;
@@ -926,18 +687,7 @@ class LongPollManager {
   }
 }
 
-// ─────────────────────────────────────────────
-//  WEBHOOK SERVER
-// ─────────────────────────────────────────────
-
 class WebhookServer {
-  /**
-   * Creates a lightweight HTTP server to receive Telegram webhook updates.
-   *
-   * @param {Function} handler - async function(update) => void
-   * @param {number} port      - port to listen on (default 3000)
-   * @param {string} secret    - secret path token
-   */
   constructor(handler, port = 3000, secret = 'trading-assistant-webhook') {
     this._handler = handler;
     this._port    = port;
@@ -988,27 +738,7 @@ class WebhookServer {
   }
 }
 
-// ─────────────────────────────────────────────
-//  MAIN ALERT DISPATCHER CLASS
-// ─────────────────────────────────────────────
-
 class AlertDispatcher extends EventEmitter {
-  /**
-   * @param {Object} config
-   * @param {string}   config.token          - Telegram bot token
-   * @param {string[]} config.chatIds        - primary chat IDs to deliver to
-   * @param {string[]} config.adminChatIds   - admin-only chat IDs
-   * @param {string}   config.gradeAChatId   - exclusive channel for Grade A signals
-   * @param {string}   config.webhookUrl     - public HTTPS URL for webhook (optional)
-   * @param {number}   config.webhookPort    - local port for webhook server (default 3000)
-   * @param {boolean}  config.useLongPoll    - use long polling instead of webhook
-   * @param {number}   config.accountBalance - default account balance for calc
-   * @param {number}   config.riskPct        - default risk % per trade
-   * @param {Object}   config.scorer         - reference to SignalScorer instance
-   * @param {Object}   config.feed           - reference to BinanceFeed instance
-   * @param {Object}   config.riskEngine     - reference to RiskEngine instance
-   * @param {Object}   config.store          - reference to MongoDB store (db.js) for subscriber persistence
-   */
   constructor(config = {}) {
     super();
 
@@ -1022,28 +752,24 @@ class AlertDispatcher extends EventEmitter {
     this.accountBalance = config.accountBalance || 1000;
     this.riskPct        = config.riskPct        || 1;
 
-    // External service references (injected)
     this.scorer         = config.scorer         || null;
     this.feed           = config.feed           || null;
     this.riskEngine     = config.riskEngine     || null;
     this._store         = config.store          || null;
 
-    // Internal state
     this._client        = new TelegramClient(this.token);
     this._queue         = new SignalQueue();
     this._dedup         = new DedupManager();
     this._delivery      = new DeliveryTracker();
     this._paused        = false;
-    this._pendingSignals = new Map(); // signalId → signal (for callback resolution)
-    this._approvedSignals = new Map(); // signalId → signal (approved, waiting for EA execution)
-    this._recordedOutcomes = new Set(); // signalId → guards against double-tapping WIN/LOSS/BE
-    this._subscribers   = new Set();  // auto-registered chat IDs from /start
-    this._bot           = null;      // bot info from getMe()
+    this._pendingSignals = new Map();
+    this._approvedSignals = new Map();
+    this._recordedOutcomes = new Set();
+    this._subscribers   = new Set();
+    this._bot           = null;
 
-    // Queue processor interval
     this._queueTimer    = null;
 
-    // Stats
     this._stats = {
       signalsSent:     0,
       messagesSent:    0,
@@ -1053,18 +779,6 @@ class AlertDispatcher extends EventEmitter {
     };
   }
 
-  // ─────────────────────────────────────────────
-  //  INITIALIZATION
-  // ─────────────────────────────────────────────
-
-  /**
-   * Initialize the dispatcher:
-   *  1. Verify bot token
-   *  2. Set bot commands
-   *  3. Start update listener (long poll or webhook)
-   *  4. Start queue processor
-   *  5. Send startup message to admin chats
-   */
   async init() {
     if (!this.token) {
       throw new Error('[AlertDispatcher] No Telegram bot token provided. Set TELEGRAM_BOT_TOKEN env var.');
@@ -1072,7 +786,6 @@ class AlertDispatcher extends EventEmitter {
 
     console.log('[AlertDispatcher] Initializing...');
 
-    // Verify token
     try {
       this._bot = await this._client.getMe();
       console.log(`[AlertDispatcher] Bot verified: @${this._bot.username} (ID: ${this._bot.id})`);
@@ -1080,7 +793,6 @@ class AlertDispatcher extends EventEmitter {
       throw new Error(`[AlertDispatcher] Bot token invalid: ${err.message}`);
     }
 
-    // Set commands
     try {
       await this._client.setMyCommands(BOT_COMMANDS);
       console.log('[AlertDispatcher] Commands registered');
@@ -1088,7 +800,6 @@ class AlertDispatcher extends EventEmitter {
       console.warn('[AlertDispatcher] Failed to set commands:', err.message);
     }
 
-    // Start update listener
     if (this.useLongPoll) {
       this._poller = new LongPollManager(this._client, (u) => this._handleUpdate(u));
       this._poller.start();
@@ -1102,17 +813,13 @@ class AlertDispatcher extends EventEmitter {
       console.log(`[AlertDispatcher] Webhook set: ${this.webhookUrl}`);
     }
 
-    // Start queue processor
     this._stats.startTime = Date.now();
     this._queueTimer = setInterval(() => this._processQueue(), QUEUE_INTERVAL_MS);
 
-    // Dedup cleanup every 10 minutes
     setInterval(() => this._dedup.cleanup(), 10 * 60 * 1000);
 
-    // Load subscribers from MongoDB
     await this._loadSubscribers();
 
-    // Send startup notification
     await this._broadcastToAdmins(
       `${EMOJI.ROCKET} <b>AI Trading Assistant Online</b>\n\n` +
       `Bot: @${this._bot.username}\n` +
@@ -1126,30 +833,17 @@ class AlertDispatcher extends EventEmitter {
     console.log('[AlertDispatcher] Ready ✓');
   }
 
-  // ─────────────────────────────────────────────
-  //  SIGNAL DELIVERY
-  // ─────────────────────────────────────────────
-
-  /**
-   * Main signal delivery function.
-   * Called by task-planner.js or signal-scorer.js when a signal fires.
-   *
-   * @param {Object} signal - full signal from signal-scorer.js
-   * @returns {Promise<void>}
-   */
   async sendSignal(signal) {
     if (this._paused) {
       console.log('[AlertDispatcher] Paused — signal queued but not sent');
       return;
     }
 
-    // Deduplication check
     if (this._dedup.isDuplicate(signal)) {
       console.log(`[AlertDispatcher] Duplicate signal suppressed: ${signal.symbol} ${signal.action}`);
       return;
     }
 
-    // Ensure signal has a unique ID
     if (!signal.id) {
       signal.id = `${signal.symbol}-${signal.action}-${Date.now()}`;
     }
@@ -1162,7 +856,6 @@ class AlertDispatcher extends EventEmitter {
     const keyboard  = KeyboardBuilder.signalKeyboard(signal.id, signal.symbol);
     const chartUrl  = ChartUrlBuilder.build(signal.symbol, signal.timeframe);
 
-    // Compute position size suggestion
     let posCalcText = '';
     if (signal.entry && signal.stopLoss) {
       const calc = PositionCalculator.calculate({
@@ -1176,14 +869,11 @@ class AlertDispatcher extends EventEmitter {
       posCalcText = `\n\n${EMOJI.CHART} <b>Suggested size:</b> ${calc.lotSize} lots / $${calc.riskUSD} risk`;
     }
 
-    // FIX: chartUrl was computed but never attached to the outgoing message —
-    // the chart link feature was silently dead. Append it now.
+    // FIX: chartUrl was computed but never attached to the outgoing message — the chart link feature was silently dead.
     const chartLinkText = chartUrl
       ? `\n\n${EMOJI.CHART} <a href="${chartUrl}">View ${signal.symbol} chart on TradingView</a>`
       : '';
 
-    // Free, no-cost explainability layer (signal-pipeline/signal-explainer.js) —
-    // shows the "why" breakdown even when the paid AI Advisor is disabled.
     let explanationText = '';
     if (signal.explanation) {
       const { summary, cautions } = signal.explanation;
@@ -1193,7 +883,6 @@ class AlertDispatcher extends EventEmitter {
       }
     }
 
-    // Queue delivery to all configured chats + subscribers
     const allChatIds = this._getAllChatIds();
     for (const chatId of allChatIds) {
       this._queue.push({
@@ -1216,7 +905,6 @@ class AlertDispatcher extends EventEmitter {
       });
     }
 
-    // Grade A → extra channel
     if (signal.score?.grade === 'A' && this.gradeAChatId) {
       this._queue.push({
         priority: PRIORITY.HIGH,
@@ -1231,14 +919,10 @@ class AlertDispatcher extends EventEmitter {
       });
     }
 
-    // Emit for any attached listeners (e.g. web dashboard)
     this.emit('signal_sent', signal);
     console.log(`[AlertDispatcher] Signal queued: ${signal.action} ${signal.symbol} | Grade ${signal.score?.grade} | Score ${signal.score?.final}`);
   }
 
-  /**
-   * Send a liquidation cascade emergency alert
-   */
   async sendLiquidationCascade(data) {
     const text = MessageFormatter.formatLiquidationCascade(data);
 
@@ -1255,20 +939,8 @@ class AlertDispatcher extends EventEmitter {
     this.emit('cascade_alert', data);
   }
 
-  // FIX: manual-mode.js's ExecutionEngine (a fully-built manual/semi-auto
-  // position-tracking system) calls dispatcher.sendTPHit/sendSLHit/
-  // sendBreakeven/sendTrailUpdate — none of which existed anywhere on this
-  // class. Since those calls aren't wrapped in try/catch in
-  // ExecutionEngine._handlePositionAction, and the exception surfaces
-  // asynchronously (inside an async listener callback whose synchronous
-  // invocation IS wrapped in try/catch by PriceMonitor, but whose eventual
-  // promise rejection is NOT), wiring in ExecutionEngine without these would
-  // have produced an unhandled promise rejection on the very first TP/SL/BE/
-  // trail event of any manually-tracked position — a real crash risk.
+  // FIX: manual-mode.js's ExecutionEngine (a fully-built manual/semi-auto position-tracking system) calls dispatcher.sendTPHit/sendSLHit/ sendBreakeven/sendTrailUpdate — none of which existed anywhere on...
 
-  /**
-   * Notify that a take-profit level was hit on a manually-tracked position.
-   */
   async sendTPHit(signalId, tpNumber, price, pnlR, remainingPct, symbol) {
     const text = `${EMOJI.GRADE_A} <b>TP${tpNumber} HIT</b> — ${symbol}\n` +
       `Price: ${price} | +${pnlR.toFixed(2)}R\n` +
@@ -1284,9 +956,6 @@ class AlertDispatcher extends EventEmitter {
     this.emit('tp_hit_notified', { signalId, tpNumber, price, pnlR, symbol });
   }
 
-  /**
-   * Notify that a stop loss was hit on a manually-tracked position.
-   */
   async sendSLHit(signalId, price, pnlR, symbol, wasBreakeven) {
     const text = `${wasBreakeven ? EMOJI.CHART : EMOJI.ALERT} <b>${wasBreakeven ? 'BREAKEVEN STOP' : 'SL HIT'}</b> — ${symbol}\n` +
       `Price: ${price} | ${pnlR >= 0 ? '+' : ''}${pnlR.toFixed(2)}R`;
@@ -1301,9 +970,6 @@ class AlertDispatcher extends EventEmitter {
     this.emit('sl_hit_notified', { signalId, price, pnlR, symbol, wasBreakeven });
   }
 
-  /**
-   * Notify that a position's stop loss was moved to breakeven.
-   */
   async sendBreakeven(positionId, symbol, newSL, direction) {
     const text = `${EMOJI.CHART} <b>BREAKEVEN SET</b> — ${direction} ${symbol}\n` +
       `Stop moved to ${newSL} — this trade can no longer lose.`;
@@ -1318,9 +984,6 @@ class AlertDispatcher extends EventEmitter {
     this.emit('breakeven_notified', { positionId, symbol, newSL, direction });
   }
 
-  /**
-   * Notify that a position's trailing stop was updated.
-   */
   async sendTrailUpdate(positionId, symbol, direction, newSL, delta, unrealizedPnlR) {
     const text = `${EMOJI.CHART} <b>TRAIL UPDATED</b> — ${direction} ${symbol}\n` +
       `New stop: ${newSL} (moved ${delta > 0 ? '+' : ''}${delta})\n` +
@@ -1336,11 +999,7 @@ class AlertDispatcher extends EventEmitter {
     this.emit('trail_notified', { positionId, symbol, direction, newSL, delta });
   }
 
-  /**
-   * Send an arbitrary HTML-formatted message (used by ExecutionEngine for
-   * entry-blocked/warning/order-failure notices — same missing-method
-   * pattern as sendTPHit et al above).
-   */
+  // Send an arbitrary HTML-formatted message (used by ExecutionEngine for entry-blocked/warning/order-failure notices — same missing-method pattern as sendTPHit et al above).
   async sendCustom(text, options = {}) {
     for (const chatId of this._getAllChatIds()) {
       this._queue.push({
@@ -1351,10 +1010,6 @@ class AlertDispatcher extends EventEmitter {
     }
   }
 
-  /**
-   * Send the end-of-day manual-mode journal summary (signals, risk, best
-   * setup) — called once daily by ExecutionEngine._scheduleDailySummary().
-   */
   async sendDailySummary({ signals = {}, risk = {}, sessions = {}, topSetup = null } = {}) {
     const lines = [
       `${EMOJI.BRAIN} <b>Daily Summary</b>`,
@@ -1373,11 +1028,7 @@ class AlertDispatcher extends EventEmitter {
     }
   }
 
-  /**
-   * Send whale trade detection alert
-   */
   async sendWhaleTrade(trade) {
-    // Only send if trade is very large (>$500K)
     if (trade.usdtValue < 500000) return;
 
     const text = MessageFormatter.formatWhaleTrade(trade);
@@ -1390,9 +1041,6 @@ class AlertDispatcher extends EventEmitter {
     }
   }
 
-  /**
-   * Send funding rate extreme alert
-   */
   async sendFundingExtreme(extremes) {
     const text = MessageFormatter.formatFundingExtreme(extremes);
     for (const chatId of this._getAllChatIds()) {
@@ -1404,9 +1052,6 @@ class AlertDispatcher extends EventEmitter {
     }
   }
 
-  /**
-   * Broadcast a plain text message to all chats
-   */
   async broadcast(text, priority = PRIORITY.NORMAL) {
     for (const chatId of this._getAllChatIds()) {
       this._queue.push({
@@ -1416,10 +1061,6 @@ class AlertDispatcher extends EventEmitter {
       });
     }
   }
-
-  // ─────────────────────────────────────────────
-  //  UPDATE HANDLER (Messages + Callbacks)
-  // ─────────────────────────────────────────────
 
   async _handleUpdate(update) {
     try {
@@ -1433,9 +1074,6 @@ class AlertDispatcher extends EventEmitter {
     }
   }
 
-  /**
-   * Handle incoming text messages (bot commands)
-   */
   async _handleMessage(message) {
     const chatId  = message.chat.id;
     const text    = message.text || '';
@@ -1443,7 +1081,6 @@ class AlertDispatcher extends EventEmitter {
 
     this._stats.commandsHandled++;
 
-    // Extract command and args
     const parts   = text.split(' ');
     const command = parts[0].toLowerCase().replace('@' + (this._bot?.username ?? ''), '');
     const args    = parts.slice(1);
@@ -1539,7 +1176,6 @@ class AlertDispatcher extends EventEmitter {
       }
 
       case '/calc': {
-        // /calc ENTRY STOPLOSS TP1
         if (args.length < 2) {
           await this._client.sendMessage(chatId,
             `Usage: /calc <entry> <stoploss> [tp1]\nExample: /calc 2345 2330 2380`
@@ -1602,11 +1238,9 @@ class AlertDispatcher extends EventEmitter {
         break;
 
       default:
-        // Auto-register any user who messages the bot
         if (!this._subscribers.has(String(chatId)) && !this.chatIds.includes(String(chatId))) {
           await this._registerSubscriber(chatId, message.from);
         }
-        // Unknown command — show quick help
         if (text.startsWith('/')) {
           await this._client.sendMessage(chatId,
             `Unknown command. Try /help for a list of commands.`
@@ -1616,9 +1250,6 @@ class AlertDispatcher extends EventEmitter {
     }
   }
 
-  /**
-   * Handle inline keyboard button presses
-   */
   async _handleCallback(callback) {
     const chatId          = callback.message?.chat?.id;
     const messageId       = callback.message?.message_id;
@@ -1680,7 +1311,7 @@ class AlertDispatcher extends EventEmitter {
         }
 
         case 'CHART': {
-          const symbol   = signalId; // in CHART callback, signalId is actually the symbol
+          const symbol   = signalId;
           const chartUrl = ChartUrlBuilder.build(symbol, 'H1');
           await this._client.answerCallback(callbackQueryId, 'Chart link sent!', false);
           await this._client.sendMessage(chatId,
@@ -1693,18 +1324,13 @@ class AlertDispatcher extends EventEmitter {
         case 'LOSS':
         case 'BE': {
           const result  = action;
-          // Guard against double-tapping the same button (or Telegram
-          // redelivering the callback) at the UI layer, before the
-          // storage-level dedupe check in recordOutcomeEverywhere even runs.
           if (this._recordedOutcomes.has(signalId)) {
             await this._client.answerCallback(callbackQueryId, 'Already recorded for this signal', true);
             break;
           }
           this._recordedOutcomes.add(signalId);
 
-          // NOTE: these are placeholder R-multiples for a single quick tap —
-          // a button can't capture the real P&L of a specific trade. This is
-          // a genuine UX limitation, not something wiring can fix.
+          // NOTE: these are placeholder R-multiples for a single quick tap — a button can't capture the real P&L of a specific trade.
           const pnlMap  = { WIN: 1.5, LOSS: -1, BE: 0 };
           const pnlR    = pnlMap[result];
           const outcome = { result, pnlPct: pnlR, pnlR, note: `Recorded via Telegram callback` };
@@ -1713,23 +1339,7 @@ class AlertDispatcher extends EventEmitter {
             this.scorer.recordTradeOutcome(signalId, outcome);
           }
 
-          // FIX: this handler — the primary way most users will record an
-          // outcome, via a single Telegram tap — only ever fed
-          // scorer.recordTradeOutcome(), which updates a SEPARATE circuit
-          // breaker (signal-scorer.js's own DrawdownCircuitBreaker) that is
-          // NOT the same object as drawdownGuard (risk-engine/drawdown-guard.js),
-          // which is what actually gates new trades pre-signal. It also never
-          // touched adaptiveLearning, bayesianEng, walkForward,
-          // institutionalGates, sessionFilter, or institutionalRiskManager.
-          // FIX (reconciled during merge): an earlier version of this fix
-          // called the engines directly here, un-awaited, and ALSO emitted
-          // 'trade_outcome' below — which index.js listens for and records
-          // through the same pipeline again. Un-awaited + emit-right-after
-          // is a real race: the direct call's mongoStore write might not be
-          // durable yet when the listener's dedupe check runs, double-
-          // counting the outcome. Call the single shared implementation and
-          // await it here instead — one write, no race, and the emit below
-          // becomes a safe, idempotent no-op for any other listener.
+          // It also never touched adaptiveLearning, bayesianEng, walkForward, institutionalGates, sessionFilter, or institutionalRiskManager.
           try {
             const { recordOutcomeEverywhere } = require('./outcome-recorder');
             const { getEngines } = require('../api/realtime');
@@ -1738,7 +1348,7 @@ class AlertDispatcher extends EventEmitter {
               signalId, signal, outcome: { pnlR, result },
               mongoStore, engines: getEngines(),
             });
-          } catch (_) { /* registry/db not available (e.g. standalone dispatcher usage) — non-fatal */ }
+          } catch (_) { }
 
           await this._client.answerCallback(callbackQueryId, `${result} recorded!`, true);
           this.emit('trade_outcome', { signalId, outcome, signal });
@@ -1764,10 +1374,7 @@ class AlertDispatcher extends EventEmitter {
             await this._client.answerCallback(callbackQueryId, 'Manual tracking is not enabled.', true);
             break;
           }
-          // FIX: previously silent — the bot confirms "👁 Watching" to the
-          // user immediately below regardless of whether this actually
-          // succeeded, so a failure here was both invisible AND actively
-          // misleading (user believes tracking started when it didn't).
+          // FIX: previously silent — the bot confirms "👁 Watching" to the user immediately below regardless of whether this actually succeeded, so a failure here was both invisible AND actively misleading (user...
           await this.executionEngine.onWatch(signalId)
             .catch(e => console.warn(`[AlertDispatcher] onWatch failed for signal ${signalId}: ${e.message}`));
           await this._client.answerCallback(callbackQueryId, '👁 Watching — no position opened.', false);
@@ -1775,7 +1382,6 @@ class AlertDispatcher extends EventEmitter {
         }
 
         case 'EXECUTE': {
-          // Semi-auto execution
           if (signal) {
             this.emit('execute_signal', { signal, chatId });
             await this._client.answerCallback(callbackQueryId, '⚡ Executing trade!', true);
@@ -1803,10 +1409,6 @@ class AlertDispatcher extends EventEmitter {
       this._stats.errorsCount++;
     }
   }
-
-  // ─────────────────────────────────────────────
-  //  COMMAND HELPERS
-  // ─────────────────────────────────────────────
 
   async _sendStatusMessage(chatId) {
     const status = {
@@ -1875,13 +1477,6 @@ class AlertDispatcher extends EventEmitter {
     await this._client.sendMessage(chatId, lines.join('\n'));
   }
 
-  /**
-   * /outlook — this week + next week: economic calendar (real, from
-   * FinnhubFeed), regime per symbol, and real CFTC institutional
-   * (commercial/hedge-fund) positioning where it's at a historical
-   * extreme. Not a prediction — a summary of what's actually scheduled
-   * and what's actually already known.
-   */
   async _sendMarketOutlook(chatId) {
     if (typeof this.getMarketOutlookDeps !== 'function') {
       await this._client.sendMessage(chatId, `${EMOJI.WARNING} Outlook unavailable — trading engine not yet initialized.`);
@@ -1897,14 +1492,7 @@ class AlertDispatcher extends EventEmitter {
       return;
     }
 
-    // NOTE: MarketOutlookBuilder deliberately stopped returning calendar
-    // data (outlook.week / outlook.nextWeek no longer exist — see the
-    // "Calendar is intentionally NOT part of Market Outlook" comment in
-    // market-outlook.js). This handler used to read those fields, which
-    // meant every /outlook call threw "Cannot read properties of
-    // undefined (reading 'tier1Events')" the moment it ran — caught by
-    // the smoke test, never actually fixed here until now. Calendar
-    // events live on the Intel tab / GET /api/calendar instead.
+    // NOTE: MarketOutlookBuilder deliberately stopped returning calendar data (outlook.week / outlook.nextWeek no longer exist — see the "Calendar is intentionally NOT part of Market Outlook" comment in...
     const lines = [`${EMOJI.CHART} <b>Market Outlook — This Week &amp; Next</b>`, ''];
     lines.push(outlook.narrative);
     lines.push('');
@@ -1936,13 +1524,7 @@ class AlertDispatcher extends EventEmitter {
     const signal  = this._pendingSignals.get(lastSignalId);
     const pnlMap  = { WIN: this.riskPct * 1.5, LOSS: -this.riskPct, BREAKEVEN: 0 };
     const pnlPct  = parseFloat(args[0] || pnlMap[result]);
-    // FIX: recordOutcome() (signal-pipeline/adaptive-learning-engine.js)
-    // derives WIN/LOSS/BREAKEVEN from outcome.pnlR, not from a `result`
-    // string — this object never had a pnlR field, so every /win, /loss, and
-    // /be would have been silently misrecorded as BREAKEVEN (pnlR defaults
-    // to 0) even after the scorer wiring below was fixed. riskPct is our
-    // best available proxy for 1R here, since this dispatcher only tracks
-    // percent-of-account risk, not literal R-multiples.
+    // FIX: recordOutcome() (signal-pipeline/adaptive-learning-engine.js) derives WIN/LOSS/BREAKEVEN from outcome.pnlR, not from a `result` string — this object never had a pnlR field, so every /win, /loss,...
     const pnlR = this.riskPct > 0 ? pnlPct / this.riskPct : (result === 'WIN' ? 1 : result === 'LOSS' ? -1 : 0);
     const outcome = {
       result,
@@ -1951,11 +1533,7 @@ class AlertDispatcher extends EventEmitter {
       note:   `Manual via /${result.toLowerCase()}`,
     };
 
-    // FIX: this.scorer was never assigned anywhere in the codebase, so this
-    // outcome was recorded nowhere — the confirmation message sent below was
-    // the ONLY effect of /win, /loss, /be. index.js listens for the
-    // 'trade_outcome' event emitted below and feeds it through the same real
-    // pipeline used by /api/outcomes (signal-pipeline/outcome-recorder.js).
+    // FIX: this.scorer was never assigned anywhere in the codebase, so this outcome was recorded nowhere — the confirmation message sent below was the ONLY effect of /win, /loss, /be.
     if (this.scorer) {
       this.scorer.recordTradeOutcome(lastSignalId, outcome);
     }
@@ -1968,28 +1546,17 @@ class AlertDispatcher extends EventEmitter {
     this.emit('trade_outcome', { signalId: lastSignalId, outcome, signal });
   }
 
-  // ─────────────────────────────────────────────
-  //  INTERNAL UTILITIES
-  // ─────────────────────────────────────────────
-
-  /**
-   * Get all chat IDs to broadcast to (configured + subscribers)
-   */
   _getAllChatIds() {
     const all = new Set(this.chatIds.map(String));
     for (const id of this._subscribers) all.add(id);
     return [...all];
   }
 
-  /**
-   * Register a subscriber and persist to MongoDB
-   */
   async _registerSubscriber(chatId, fromUser) {
     const id = String(chatId);
     this._subscribers.add(id);
     if (this._store?.upsertTelegramUser) {
       try {
-        // Ensure user is marked as subscribed in DB
         const userUpdate = fromUser ? { ...fromUser, id: chatId } : { id: chatId };
         await this._store.upsertTelegramUser({ ...userUpdate, subscribed: true });
       } catch (e) {
@@ -1999,9 +1566,6 @@ class AlertDispatcher extends EventEmitter {
     console.log(`[AlertDispatcher] Subscriber registered: ${id} (total: ${this._subscribers.size})`);
   }
 
-  /**
-   * Load subscribers from MongoDB on startup
-   */
   async _loadSubscribers() {
     if (!this._store?.getSubscriberChatIds) return;
     try {
@@ -2024,13 +1588,10 @@ class AlertDispatcher extends EventEmitter {
   }
 
   _isAdmin(userId) {
-    // All users in admin chats are considered admins
-    // In production, maintain an admin user ID whitelist
     return true;
   }
 
   _getSessionDetector() {
-    // Lazy import to avoid circular deps
     try {
       return require('./signal-scorer');
     } catch {
@@ -2047,10 +1608,6 @@ class AlertDispatcher extends EventEmitter {
     const item = this._queue.next();
     if (item) await this._queue.execute(item);
   }
-
-  // ─────────────────────────────────────────────
-  //  PUBLIC API
-  // ─────────────────────────────────────────────
 
   pause()  { this._paused = true;  console.log('[AlertDispatcher] Paused'); }
   resume() { this._paused = false; console.log('[AlertDispatcher] Resumed'); }
@@ -2070,7 +1627,6 @@ class AlertDispatcher extends EventEmitter {
     sig.executedAt = Date.now();
     sig.executionDetails = executionDetails;
     this.emit('signal_executed', { signalId, signal: sig, executionDetails });
-    // Notify via Telegram
     const text = `${EMOJI.LIGHTNING} <b>TRADE EXECUTED</b>\n\n` +
       `${sig.action === 'LONG' ? EMOJI.LONG : EMOJI.SHORT} ${sig.action} <code>${sig.symbol}</code>\n` +
       `Lot: <b>${executionDetails.lotSize || '?'}</b>\n` +
@@ -2105,10 +1661,6 @@ class AlertDispatcher extends EventEmitter {
   }
 }
 
-// ─────────────────────────────────────────────
-//  EXPORTS
-// ─────────────────────────────────────────────
-
 module.exports = {
   AlertDispatcher,
   TelegramClient,
@@ -2126,37 +1678,3 @@ module.exports = {
   BOT_COMMANDS,
 };
 
-/**
- * ─────────────────────────────────────────────
- *  USAGE EXAMPLE
- * ─────────────────────────────────────────────
- *
- *  const { AlertDispatcher } = require('./alert-dispatcher');
- *
- *  const dispatcher = new AlertDispatcher({
- *    token:          process.env.TELEGRAM_BOT_TOKEN,
- *    chatIds:        [process.env.TELEGRAM_CHAT_ID],
- *    gradeAChatId:   process.env.GRADE_A_CHANNEL_ID,
- *    useLongPoll:    true,
- *    accountBalance: 5000,
- *    riskPct:        1.5,
- *    scorer:         scorerInstance,
- *    feed:           feedInstance,
- *  });
- *
- *  await dispatcher.init();
- *
- *  // Send a signal
- *  dispatcher.on('signal_approved', ({ signal }) => {
- *    console.log('User approved:', signal.symbol, signal.action);
- *  });
- *
- *  dispatcher.on('execute_signal', ({ signal }) => {
- *    // Pass to execution.js for order placement
- *    executionEngine.placeOrder(signal);
- *  });
- *
- *  // Called automatically by task-planner.js
- *  await dispatcher.sendSignal(scoredSignal);
- * ─────────────────────────────────────────────
- */

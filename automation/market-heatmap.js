@@ -1,34 +1,3 @@
-/**
- * ============================================================
- *  MARKET HEAT MAP
- *  AI Trading Assistant · Layer 6 · Professional Dashboard
- * ============================================================
- *
- *  Doc item #56: "Visualizes strength and weakness across tracked
- *  markets."
- *
- *  Not a new data source — a compositing layer. You already have two
- *  independent scoreboards:
- *
- *    - OpportunityRanker: "how good is the setup on this symbol right
- *      now" (score, grade, whether it actually fired or got blocked)
- *    - RelativeStrengthEngine: "how is this symbol actually moving
- *      relative to its own typical noise, and relative to everything
- *      else you track"
- *
- *  A symbol can score high on one and be unremarkable on the other —
- *  e.g. a clean A-grade setup on a symbol that's barely moved (patient,
- *  well-formed reversal) vs. a symbol ripping hard with no qualifying
- *  setup yet (momentum building, nothing to act on yet). Collapsing
- *  those into one number would hide that distinction; this keeps both
- *  visible per symbol and buckets them for a grid-style UI.
- *
- *  Usage:
- *    const { MarketHeatMap } = require('./market-heatmap');
- *    const heatmap = new MarketHeatMap();
- *    const grid = heatmap.build({ opportunityRanker, relativeStrength, candleStores, symbols, timeframe });
- * ============================================================
- */
 
 'use strict';
 
@@ -52,34 +21,16 @@ function bucketOf(score) {
 
 class MarketHeatMap {
   constructor(config = {}) {
-    // Blend weight between "setup quality right now" (opportunity) and
-    // "how the symbol is actually moving" (relative strength). Opportunity
-    // gets more weight by default since it's directly actionable; relative
-    // strength is more of an early-warning/context signal.
+    // Opportunity gets more weight by default since it's directly actionable; relative strength is more of an early-warning/context signal.
     this.opportunityWeight = config.opportunityWeight ?? 0.65;
     this.relativeStrengthWeight = config.relativeStrengthWeight ?? 0.35;
   }
 
-  /**
-   * Normalize a RelativeStrengthEngine volAdjScore (unbounded, roughly
-   * -3..+3 in practice for a volatility-adjusted z-like score) onto a
-   * 0-100 scale so it can be blended with the opportunity score.
-   */
   _normalizeRelStrength(volAdjScore) {
     if (!Number.isFinite(volAdjScore)) return 50;
-    // squashes to 0-100, centered at 50, saturating around +/-3
     return round(clamp(50 + (volAdjScore / 3) * 50, 0, 100));
   }
 
-  /**
-   * @param {Object} params
-   * @param {Object} params.opportunityRanker    - instance with getRanked()
-   * @param {Object} [params.relativeStrength]   - instance with rank()
-   * @param {Object} [params.candleStores]       - required if relativeStrength is supplied
-   * @param {Array}  [params.symbols]            - required if relativeStrength is supplied
-   * @param {string} [params.timeframe='H1']
-   * @returns {{ tiles: Array, generatedAt: number }}
-   */
   build({ opportunityRanker, relativeStrength, candleStores, symbols, timeframe = 'H1' } = {}) {
     if (!opportunityRanker) {
       return { tiles: [], generatedAt: Date.now(), reason: 'no_opportunity_ranker' };
@@ -92,11 +43,10 @@ class MarketHeatMap {
     if (relativeStrength && candleStores && symbols) {
       try {
         relRanked = relativeStrength.rank(candleStores, symbols, timeframe);
-      } catch (_) { /* relative strength optional — degrade gracefully */ }
+      } catch (_) { }
     }
     const relBySymbol = new Map(relRanked.map(r => [r.symbol, r]));
 
-    // Union of every symbol either engine knows about.
     const allSymbols = new Set([...oppBySymbol.keys(), ...relBySymbol.keys()]);
 
     const tiles = [];
@@ -109,8 +59,6 @@ class MarketHeatMap {
         : null;
       const relStrengthNormalized = rel ? this._normalizeRelStrength(rel.volAdjScore) : null;
 
-      // Blend whatever's available; if only one engine has this symbol,
-      // use that one alone rather than penalizing it for missing data.
       let heatScore;
       if (opportunityScore != null && relStrengthNormalized != null) {
         heatScore = round(opportunityScore * this.opportunityWeight + relStrengthNormalized * this.relativeStrengthWeight);

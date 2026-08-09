@@ -1,42 +1,12 @@
 'use strict';
 
-/**
- * ============================================================
- *  COT REPORT PARSER
- *  File: feeds/cot-report-parser.js
- * ============================================================
- *
- * Extracted from feeds/news-feed.js, which originally bundled this
- * alongside six other classes (NewsFeed, NewsIngestionEngine,
- * SentimentLexicon, ClaudeNLPAnalyzer, CentralBankToneTracker,
- * FearGreedEngine) — all of which turned out to be dead code, never
- * imported anywhere outside that file. Real news/sentiment for the live
- * signal pipeline flows through feeds/finnhub-feed.js -> agents/
- * sentiment-agent.js instead; this was leftover from an earlier
- * architecture. COTReportParser was the one piece actually in use
- * (see index.js's loadModule('./feeds/news-feed', 'COTReportParser')),
- * so it's kept here on its own rather than deleted with the rest.
- */
+// never imported anywhere outside that file. Real news/sentiment for the live signal pipeline flows through feeds/finnhub-feed.js -> agents/ sentiment-agent.js instead; this was leftover from an...
 
 class COTReportParser {
-  /**
-   * Parses CFTC Commitment of Traders report data (legacy futures-only
-   * format). CFTC publishes weekly (Fridays, for Tuesday's data).
-   *
-   * Categories:
-   *   - Commercial (hedgers / "smart money") — net position often
-   *     contrarian to retail at extremes
-   *   - Non-commercial (large speculators / "smart money momentum")
-   *   - Non-reportable (small speculators / "dumb money", often wrong
-   *     at extremes)
-   */
   constructor() {
-    this._reports = new Map(); // symbol → [{ date, commercial, largeSpec, smallSpec }]
+    this._reports = new Map();
   }
 
-  /**
-   * Ingest a raw COT report row (format matches CFTC's standard CSV/API fields)
-   */
   ingest(symbol, reportData) {
     const parsed = {
       date: reportData.report_date || reportData.date,
@@ -56,15 +26,11 @@ class COTReportParser {
     if (!this._reports.has(symbol)) this._reports.set(symbol, []);
     const hist = this._reports.get(symbol);
     hist.push(parsed);
-    if (hist.length > 156) hist.shift(); // ~3 years of weekly data
+    if (hist.length > 156) hist.shift();
 
     return this.analyze(symbol);
   }
 
-  /**
-   * Full analysis: current positioning, week-over-week change,
-   * percentile extremity, and trading signal.
-   */
   analyze(symbol) {
     const hist = this._reports.get(symbol);
     if (!hist || hist.length === 0) return null;
@@ -78,19 +44,16 @@ class COTReportParser {
       smallSpec:  round(latest.smallSpecNet - previous.smallSpecNet, 0),
     } : null;
 
-    // Percentile of current large-spec net position vs trailing history
     const largeSpecHistory = hist.map(h => h.largeSpecNet);
     const percentile = this._percentileRank(largeSpecHistory, latest.largeSpecNet);
 
     const isExtreme = percentile >= COT_EXTREME_PERCENTILE || percentile <= (100 - COT_EXTREME_PERCENTILE);
 
-    // Signal logic: extreme large-spec positioning historically precedes reversals.
-    // Commercial net is often the contrarian "smart money" signal.
     let signal = 'NEUTRAL';
     if (isExtreme && percentile >= COT_EXTREME_PERCENTILE) {
-      signal = 'EXTREME_LONG_SPEC_REVERSAL_RISK'; // large specs maximally long → contrarian bearish
+      signal = 'EXTREME_LONG_SPEC_REVERSAL_RISK';
     } else if (isExtreme && percentile <= (100 - COT_EXTREME_PERCENTILE)) {
-      signal = 'EXTREME_SHORT_SPEC_REVERSAL_RISK'; // large specs maximally short → contrarian bullish
+      signal = 'EXTREME_SHORT_SPEC_REVERSAL_RISK';
     }
 
     return {

@@ -1,22 +1,5 @@
 'use strict';
 
-/**
- * ============================================================
- *  INSTITUTIONAL GATES — Enhanced Multi-Layer Validation
- *  Zero Tolerance Signal Quality Enforcement
- * ============================================================
- *
- *  Upgrades:
- *    - Ensemble validation integration (MC, Bayesian, Statistical)
- *    - Regime transition awareness (warn on unstable regimes)
- *    - Consecutive loss circuit breaker per symbol
- *    - Time-of-day quality requirements
- *    - Multi-timeframe alignment requirement
- *    - Minimum agent consensus threshold
- *    - Walk-forward parameter health check
- * ============================================================
- */
-
 function round(n, d = 4) {
   return Number.isFinite(+n) ? parseFloat((+n).toFixed(d)) : 0;
 }
@@ -31,7 +14,7 @@ class InstitutionalGates {
     this.minAgentConsensus = config.minAgentConsensus || 0.5;
     this.minEnsembleScore = config.minEnsembleScore || 55;
     this.requireEnsemble = config.requireEnsemble !== false;
-    this._symbolLossStreak = new Map(); // symbol -> consecutive losses
+    this._symbolLossStreak = new Map();
     this._maxSymbolLossStreak = config.maxSymbolLossStreak || 3;
   }
 
@@ -44,13 +27,11 @@ class InstitutionalGates {
     const direction = signal?.action || signal?.direction;
     const symbol = signal?.symbol || 'UNKNOWN';
 
-    // Gate 1: Basic signal quality
     if (!signal || direction === 'WAIT') failures.push('Signal is WAIT');
     if (score < this.minScore) failures.push(`Score ${score} below hard floor ${this.minScore}`);
     if (rr && rr < this.minRR) failures.push(`TP1 R:R ${rr} below minimum ${this.minRR}`);
     if (stopRiskPct > 3.5) warnings.push(`Wide stop distance ${round(stopRiskPct, 2)}% requires reduced size`);
 
-    // Gate 2: Regime checks
     if (regime?.tradeability != null && regime.tradeability < this.minRegimeTradeability) {
       failures.push(`Regime tradeability ${regime.tradeability}/100 below ${this.minRegimeTradeability}`);
     }
@@ -58,7 +39,6 @@ class InstitutionalGates {
       failures.push('Choppy regime requires Grade A signal');
     }
 
-    // Gate 3: Regime transition instability
     if (regime?.earlyWarning?.warning) {
       warnings.push(`Regime change warning: ${regime.earlyWarning.note}`);
     }
@@ -69,14 +49,12 @@ class InstitutionalGates {
       warnings.push('Multi-scale regime misalignment — short and medium term disagree');
     }
 
-    // Gate 4: Entry quality
     if (entryOptimization?.rejected) {
       warnings.push(`Entry optimizer rejected ideal zone: ${entryOptimization.reason}`);
     } else if (entryOptimization?.qualityScore && entryOptimization.qualityScore < 60) {
       warnings.push(`Entry quality is marginal (${entryOptimization.qualityScore}/100)`);
     }
 
-    // Gate 5: Risk engine
     if (this.requireRiskApproval && riskEvaluation && riskEvaluation.approved === false) {
       failures.push(`Risk engine blocked trade: ${riskEvaluation.reason}`);
     }
@@ -87,7 +65,6 @@ class InstitutionalGates {
       warnings.push(`Drawdown/risk state reduced size to ${round(riskEvaluation.drawdown.sizingFactor * 100, 0)}%`);
     }
 
-    // Gate 6: Agent consensus
     const disagreement = this._disagreement(direction, votes);
     if (disagreement.opposingCore) failures.push(disagreement.opposingCore);
     if (disagreement.opposing.length) warnings.push(`Opposing agents: ${disagreement.opposing.join(', ')}`);
@@ -97,7 +74,6 @@ class InstitutionalGates {
       failures.push(`Agent consensus ${round(consensus * 100, 1)}% below ${this.minAgentConsensus * 100}% minimum`);
     }
 
-    // Gate 7: Ensemble validation
     if (this.requireEnsemble && ensemble) {
       if (!ensemble.approved) {
         failures.push(`Ensemble validation rejected: ${(ensemble.hardRejections || []).join(', ') || 'low ensemble score'}`);
@@ -110,7 +86,6 @@ class InstitutionalGates {
       }
     }
 
-    // Gate 8: Adaptive learning block
     if (learning?.action === 'BLOCK') {
       failures.push(`Learning engine blocked: ${learning.note}`);
     } else if (learning?.blacklisted) {
@@ -119,7 +94,6 @@ class InstitutionalGates {
       warnings.push(`Learning engine warning: ${learning.note}`);
     }
 
-    // Gate 9: Symbol loss streak
     const streak = this._symbolLossStreak.get(symbol) || 0;
     if (streak >= this._maxSymbolLossStreak) {
       failures.push(`${symbol} has ${streak} consecutive losses — symbol paused`);

@@ -1,18 +1,5 @@
 'use strict';
 
-/**
- * RelativeStrengthEngine
- * -----------------------
- * Ranks assets by comparative performance over a lookback window — doc item
- * #23. Reads directly from the candle stores the feeds are already
- * populating (candleStores[symbol][timeframe]), so no new data source is
- * required.
- *
- * Percent change is normalized against each symbol's own recent volatility
- * (ATR-ish: average true range as % of price) so a 2% move in a low-vol
- * forex pair and a 2% move in a high-vol crypto pair aren't compared
- * apples-to-oranges — the raw % change alone would always rank crypto first.
- */
 class RelativeStrengthEngine {
   constructor({ lookback = 20 } = {}) {
     this.lookback = lookback;
@@ -48,12 +35,6 @@ class RelativeStrengthEngine {
     return count > 0 ? sum / count : null;
   }
 
-  /**
-   * @param {Object} candleStores - candleStores[symbol][timeframe] = candle[]
-   * @param {string[]} symbols
-   * @param {string} timeframe
-   * @returns {Array<{symbol, changePct, volAdjScore, rank}>} sorted strongest-first
-   */
   rank(candleStores, symbols, timeframe) {
     const rows = [];
     for (const symbol of symbols) {
@@ -62,8 +43,6 @@ class RelativeStrengthEngine {
       const atrPct = this._avgTrueRangePct(candles);
       if (changePct === null) continue;
 
-      // Volatility-adjusted score: move size relative to typical noise for
-      // that symbol. Guards against div-by-zero with a small floor.
       const volAdjScore = atrPct && atrPct > 0.01
         ? changePct / atrPct
         : changePct;
@@ -76,7 +55,6 @@ class RelativeStrengthEngine {
     return rows;
   }
 
-  /** Convenience: strongest N and weakest N in one call. */
   leadersAndLaggards(candleStores, symbols, timeframe, n = 3) {
     const ranked = this.rank(candleStores, symbols, timeframe);
     return {

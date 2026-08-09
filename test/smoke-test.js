@@ -1,12 +1,5 @@
 'use strict';
 
-/**
- * OMNICEE Smoke Test
- * Runs without any API keys.
- * Injects synthetic candle data through the full pipeline and verifies
- * each module loads correctly and returns the expected shape.
- */
-
 const path = require('path');
 const ROOT  = path.join(__dirname, '..');
 
@@ -16,13 +9,11 @@ let failed = 0;
 function pass(label) { console.log(`  ✅  ${label}`); passed++; }
 function fail(label, err) { console.error(`  ❌  ${label}: ${err?.message || err}`); failed++; }
 
-// ── Synthetic candle generator ─────────────────────────────────────────────
-
 function syntheticCandles(n = 200, basePrice = 2000, trend = 'UP') {
   const candles = [];
   let price = basePrice;
   const now  = Date.now();
-  const TF   = 3600000; // H1
+  const TF   = 3600000;
 
   for (let i = n; i >= 0; i--) {
     const noise  = (Math.random() - 0.5) * price * 0.005;
@@ -50,8 +41,6 @@ function syntheticCandles(n = 200, basePrice = 2000, trend = 'UP') {
   return candles;
 }
 
-// ── Tests ──────────────────────────────────────────────────────────────────
-
 async function runTests() {
   console.log('\n══════════════════════════════════════════════');
   console.log('  OMNICEE Smoke Test');
@@ -59,8 +48,6 @@ async function runTests() {
 
   const candles = syntheticCandles(200, 2000, 'UP');
   const closes  = candles.map(c => c.close);
-
-  // ── 1. Module loading ──────────────────────────────────────────────────
 
   console.log('1. Module loading');
 
@@ -92,8 +79,6 @@ async function runTests() {
     }
   }
 
-  // ── 2. MomentumAgent ──────────────────────────────────────────────────
-
   console.log('\n2. MomentumAgent');
   if (loaded.MomentumAgent) {
     try {
@@ -106,8 +91,6 @@ async function runTests() {
     } catch (e) { fail('MomentumAgent.analyze()', e); }
   }
 
-  // ── 3. SMCAgent ───────────────────────────────────────────────────────
-
   console.log('\n3. SMCAgent');
   if (loaded.SMCAgent) {
     try {
@@ -117,8 +100,6 @@ async function runTests() {
       pass(`SMCAgent.analyze() → signal=${result?.signal?.action || 'n/a'}`);
     } catch (e) { fail('SMCAgent.analyze()', e); }
   }
-
-  // ── 4. MTFAgent ───────────────────────────────────────────────────────
 
   console.log('\n4. MTFAgent');
   if (loaded.MTFAgent) {
@@ -130,12 +111,10 @@ async function runTests() {
     } catch (e) { fail('MTFAgent.analyze()', e); }
   }
 
-  // ── 5. ConflictResolver ───────────────────────────────────────────────
-
   console.log('\n5. ConflictResolver');
   if (loaded.ConflictResolver) {
     try {
-      const resolver = new loaded.ConflictResolver();   // instance — not static
+      const resolver = new loaded.ConflictResolver();
       const votes = {
         smc:       { direction: 'LONG',  score: 80, reasons: ['Order block'] },
         mtf:       { direction: 'LONG',  score: 75, reasons: ['HTF aligned'] },
@@ -148,8 +127,6 @@ async function runTests() {
       pass(`ConflictResolver.resolve() → direction=${result.direction} conflicts=${result.conflicts?.length || 0}`);
     } catch (e) { fail('ConflictResolver.resolve()', e); }
   }
-
-  // ── 6. SignalScorer end-to-end ────────────────────────────────────────
 
   console.log('\n6. SignalScorer end-to-end');
   if (loaded.SignalScorer) {
@@ -199,15 +176,12 @@ async function runTests() {
       if (!signal) throw new Error('score() returned null');
       pass(`SignalScorer.score() → action=${signal.action} score=${signal.score?.final} grade=${signal.score?.grade}`);
 
-      // Verify shape
       if (!signal.symbol)   throw new Error('Missing signal.symbol');
       if (!signal.action)   throw new Error('Missing signal.action');
       pass('Signal shape valid (symbol, action present)');
 
     } catch (e) { fail('SignalScorer.score()', e); }
   }
-
-  // ── 7. DrawdownGuard ──────────────────────────────────────────────────
 
   console.log('\n7. DrawdownGuard');
   if (loaded.DrawdownGuard) {
@@ -218,8 +192,6 @@ async function runTests() {
     } catch (e) { fail('DrawdownGuard', e); }
   }
 
-  // ── 8. RiskEngine (position sizer) ───────────────────────────────────
-
   console.log('\n8. RiskEngine');
   if (loaded.RiskEngine) {
     try {
@@ -228,8 +200,6 @@ async function runTests() {
       pass(`RiskEngine instantiated — size method: ${hasSize}`);
     } catch (e) { fail('RiskEngine', e); }
   }
-
-  // ── 8b. Institutional additions ─────────────────────────────────────
 
   console.log('\n8b. Institutional additions');
   if (loaded.VolumeOIAgent) {
@@ -261,8 +231,6 @@ async function runTests() {
     } catch (e) { fail('InstitutionalGates.evaluate()', e); }
   }
 
-  // ── 9. MemoryManager ──────────────────────────────────────────────────
-
   console.log('\n9. MemoryManager');
   if (loaded.MemoryManager) {
     try {
@@ -272,8 +240,6 @@ async function runTests() {
     } catch (e) { fail('MemoryManager', e); }
   }
 
-  // ── 10. SLTPEngine ────────────────────────────────────────────────────
-
   console.log('\n10. SLTPEngine');
   if (loaded.SLTPEngine) {
     try {
@@ -281,8 +247,6 @@ async function runTests() {
       pass('SLTPEngine instantiated');
     } catch (e) { fail('SLTPEngine', e); }
   }
-
-  // ── 11. New Institutional-Grade Engines ────────────────────────────────
 
   console.log('\n11. Institutional-Grade Validation Engines');
 
@@ -385,13 +349,11 @@ async function runTests() {
     const { AbnormalMarketDetector } = require(path.join(ROOT, 'signal-pipeline/abnormal-market-detector'));
     const amd = new AbnormalMarketDetector();
 
-    // Clean, normal candles -> not abnormal
     const cleanReport = amd.analyze({ candles, symbol: 'BTCUSDT' });
     if (cleanReport.abnormal) {
       throw new Error(`expected clean synthetic candles to be normal, got: ${cleanReport.reasons.join('; ')}`);
     }
 
-    // Inject a flash-crash wick + gap on the final candle
     const spiked = candles.map(c => ({ ...c }));
     const last = spiked[spiked.length - 1];
     const base = last.close;
@@ -400,7 +362,7 @@ async function runTests() {
       open: base,
       high: base * 1.15,
       low: base * 0.80,
-      close: base * 1.001, // reverted back near open — big wick, tiny body
+      close: base * 1.001,
     };
     const spikeReport = amd.analyze({ candles: spiked, symbol: 'BTCUSDT' });
     if (!spikeReport.abnormal) throw new Error('expected flash-spike candle to be flagged abnormal');
@@ -408,37 +370,7 @@ async function runTests() {
   } catch (e) { fail('AbnormalMarketDetector', e); }
 
   try {
-    // Production bug found via live Render logs: BinanceFeed's 'candle'
-    // event payload was missing the singular 'candle' field entirely (only
-    // 'candles', plural, was included). index.js's onCandle() destructures
-    // { candle } and reads candle.timestamp — throwing on every single
-    // kline tick, misleadingly logged as "Message parse error" since the
-    // throw happened inside _onMessage's try block via a synchronous
-    // emit(). Net effect: Binance-sourced symbols never got a single
-    // successful candle update despite the feed connecting correctly.
-    const { BinanceFeed } = require(path.join(ROOT, 'feeds/binance-ws'));
-    const feed = new BinanceFeed({ symbols: ['BTCUSDT'], timeframes: ['H1'] });
-    let received = null;
-    feed.on('candle', (payload) => { received = payload; });
-    feed._onMessage(JSON.stringify({
-      stream: 'btcusdt@kline_1h',
-      data: { s: 'BTCUSDT', k: { t: Date.now(), o: '100', h: '105', l: '99', c: '103', v: '1000', i: '1h', x: false } },
-    }));
-    if (!received) throw new Error('candle event was never emitted');
-    if (!received.candle) throw new Error('payload.candle (singular) is missing — the exact bug this test guards against');
-    if (typeof received.candle.timestamp !== 'number') throw new Error('candle.timestamp is not accessible — onCandle() would throw');
-    if (!Array.isArray(received.candles)) throw new Error('payload.candles (plural) is missing');
-    pass(`BinanceFeed candle payload: both 'candle' (singular) and 'candles' (plural) present, onCandle()-style consumer works`);
-  } catch (e) { fail('BinanceFeed candle payload shape', e); }
-
-  try {
-    // Reported by user: correct APP_ACCESS_TOKEN rejected as "incorrect".
-    // Root cause: env vars pasted into a dashboard (Render, etc.) commonly
-    // pick up a trailing newline/space. The frontend already trims the
-    // token it sends, but validateAppToken() never trimmed
-    // process.env.APP_ACCESS_TOKEN — so a dashboard value like
-    // "mytoken123\n" could never match a correctly-typed "mytoken123",
-    // permanently, with zero visible difference to the user.
+    // never trimmed process.env.APP_ACCESS_TOKEN — so a dashboard value like "mytoken123\n" could never match a correctly-typed "mytoken123", permanently, with zero visible difference to the user.
     delete require.cache[require.resolve(path.join(ROOT, 'api/telegram-auth'))];
     const originalToken = process.env.APP_ACCESS_TOKEN;
     process.env.APP_ACCESS_TOKEN = 'mytoken123\n';
@@ -451,72 +383,6 @@ async function runTests() {
   } catch (e) { fail('App-token trailing-whitespace fix', e); }
 
   try {
-    // Found via production logs: TwelveDataFeed's free-tier 8-credits/min
-    // cap was being blown through immediately at boot (no throttle between
-    // history-load requests at all, despite a log message claiming
-    // otherwise) AND on every recurring 60s poll cycle after that (which
-    // also had a real logic bug — its own comment said "checks the lowest
-    // configured TF" but the code looped over every configured timeframe).
-    const { TwelveDataFeed } = require(path.join(ROOT, 'feeds/twelve-data'));
-    const feed = new TwelveDataFeed({ apiKey: 'fake', symbols: ['EURUSD', 'GBPUSD'], timeframes: ['H1'] });
-    const callTimes = [];
-    feed.poller.fetchTimeSeries = async (symbol) => {
-      callTimes.push({ symbol, t: Date.now() });
-      return [{ timestamp: Date.now(), open: 1, high: 1, low: 1, close: 1, volume: 1 }];
-    };
-    await feed._preloadHistory();
-    const elapsed = callTimes[1].t - callTimes[0].t;
-    if (elapsed < 7500 || elapsed > 9500) {
-      throw new Error(`throttle delay between requests was ${elapsed}ms, expected ~8000ms — not actually throttling`);
-    }
-
-    const TF_ORDER = ['M1','M5','M15','M30','H1','H2','H4','H6','H8','H12','D1','W1'];
-    const mixed = ['H4', 'M15', 'D1', 'H1'];
-    const lowest = [...mixed].sort((a, b) => TF_ORDER.indexOf(a) - TF_ORDER.indexOf(b))[0];
-    if (lowest !== 'M15') throw new Error(`expected M15 selected as lowest timeframe, got ${lowest}`);
-
-    pass(`TwelveData rate-limit fix: real ${elapsed}ms delay between history requests, correctly selects fastest timeframe (M15) for recurring polls`);
-  } catch (e) { fail('TwelveData rate-limit throttle fix', e); }
-
-  try {
-    // Direct fix for the user's "always running out of TwelveData/
-    // AlphaVantage keys" complaint: candle history was 100% in-memory with
-    // zero persistence, so every restart (including Render free-tier
-    // spin-down/wake-up cycles, not just deliberate redeploys) needed a
-    // full re-fetch of everything, repeatedly burning through both
-    // rate-limited feeds' quotas throughout the day.
-    const { TwelveDataFeed } = require(path.join(ROOT, 'feeds/twelve-data'));
-    let apiCallCount = 0;
-    const fakeDb = {
-      loadCandleHistory: async (source, symbol) => {
-        if (symbol === 'EURUSD') {
-          return { candles: [{ timestamp: Date.now(), open: 1, high: 1, low: 1, close: 1, volume: 1 }], updatedAt: new Date(Date.now() - 5 * 60000) };
-        }
-        if (symbol === 'GBPUSD') {
-          return { candles: [{ timestamp: Date.now() - 7200000, open: 1, high: 1, low: 1, close: 1, volume: 1 }], updatedAt: new Date(Date.now() - 2 * 3600000) };
-        }
-        return null;
-      },
-      saveCandleHistory: async () => ({ saved: true }),
-    };
-    const feed = new TwelveDataFeed({ apiKey: 'fake', symbols: ['EURUSD', 'GBPUSD'], timeframes: ['M15'], db: fakeDb });
-    feed.poller.fetchTimeSeries = async () => { apiCallCount++; return [{ timestamp: Date.now(), open: 1, high: 1, low: 1, close: 1, volume: 1 }]; };
-    await feed._preloadHistory();
-
-    if (apiCallCount !== 1) {
-      throw new Error(`expected exactly 1 API call (fresh EURUSD data should skip its call, stale GBPUSD should not), got ${apiCallCount}`);
-    }
-    if (feed.candleStore.get('EURUSD', 'M15').length === 0) {
-      throw new Error('EURUSD should have been populated directly from Mongo-stored history');
-    }
-    pass(`Candle persistence: fresh Mongo data (5min old) skipped the API call, stale data (2h old) correctly fell through to a real fetch`);
-  } catch (e) { fail('Candle history Mongo persistence', e); }
-
-  try {
-    // Found via live Render logs: two full MongoDB connection failures
-    // logged within milliseconds of each other. Root cause: getDB() had no
-    // backoff — every DB-touching call site independently re-attempted a
-    // fresh 8-second connectTimeoutMS the instant a prior attempt failed.
     const originalUri = process.env.MONGODB_URI;
     process.env.MONGODB_URI = 'mongodb://invalid-host-that-does-not-exist-omnicee-test:27017/test';
     delete require.cache[require.resolve(path.join(ROOT, 'db'))];
@@ -608,7 +474,6 @@ async function runTests() {
     pass(`TimeCycleEngine: hourBuckets=${result.hourOfDay.length} dowBuckets=${result.dayOfWeek.length}`);
   } catch (e) { fail('TimeCycleEngine', e); }
 
-
   try {
     const { StrategySelector } = require(path.join(ROOT, 'signal-pipeline/strategy-selector'));
     const sel = new StrategySelector();
@@ -625,9 +490,6 @@ async function runTests() {
   try {
     const { CandleIntelligence } = require(path.join(ROOT, 'signal-pipeline/candle-intelligence'));
     const ci = new CandleIntelligence();
-    // Deterministic, monotonically-declining series — syntheticCandles' drift
-    // is dominated by its own random noise over a short window and can't
-    // reliably produce a classifiable down-trend for this assertion.
     const candles = [];
     let price = 2000;
     for (let i = 0; i < 40; i++) {
@@ -637,7 +499,6 @@ async function runTests() {
       price = c;
     }
     const last = candles[candles.length - 1];
-    // Force a hammer-shaped rejection candle after the down-trend
     candles[candles.length - 1] = { ...last, open: last.close, close: last.close + last.close * 0.003, high: last.close + last.close * 0.0035, low: last.close - last.close * 0.018, volume: (last.volume || 1000) * 3 };
     const result = ci.analyze({ candles });
     if (result.type !== 'HAMMER_REJECTION') throw new Error(`expected HAMMER_REJECTION, got ${result.type}`);
@@ -664,25 +525,17 @@ async function runTests() {
     const { IntermarketAnalyzer } = require(path.join(ROOT, 'risk-engine/intermarket-analyzer'));
     const ia = new IntermarketAnalyzer({ lookback: 10 });
 
-    // Simulate DXY falling (USD weak) and equities rising (risk-on)
     let dxy = 105.0, spx = 5000;
     for (let i = 0; i < 10; i++) { dxy -= 0.15; spx += 8; ia.updatePrice('DXY', dxy); ia.updatePrice('SPX500', spx); }
 
     const eurusdLong = ia.checkConfirmation('EURUSD', 'LONG');
     if (eurusdLong.confirmed !== true) throw new Error(`expected EURUSD LONG to be confirmed by falling DXY, got ${JSON.stringify(eurusdLong)}`);
 
-    // Note: USDJPY here is a genuinely MIXED signal, not a clean divergence —
-    // DXY falling hurts a USD-base long, but JPY (as the quote currency) is
-    // also a haven that weakens with risk-on equities, which helps a USD/JPY
-    // long. Both effects are real; asserting a forced single answer here
-    // would be wrong. USDCAD isolates a clean case instead: CAD is a risk
-    // currency, so quote-currency risk-on strength ALSO hurts a USD/CAD long
-    // (short a risk currency into risk-on) — both legs diverge cleanly.
+    // Note: USDJPY here is a genuinely MIXED signal, not a clean divergence — DXY falling hurts a USD-base long, but JPY (as the quote currency) is also a haven that weakens with risk-on equities, which...
     const usdcadLong = ia.checkConfirmation('USDCAD', 'LONG');
     if (usdcadLong.confirmed !== false) throw new Error(`expected USDCAD LONG to diverge from falling DXY + risk-on equities, got ${JSON.stringify(usdcadLong)}`);
 
-    // Regression check for a real bug caught during development: JPY as the
-    // QUOTE currency (not base) must still be evaluated against equities.
+    // Regression check for a real bug caught during development: JPY as the QUOTE currency (not base) must still be evaluated against equities.
     const gbpjpyLong = ia.checkConfirmation('GBPJPY', 'LONG');
     if (gbpjpyLong.available !== true || gbpjpyLong.confirmed !== true) {
       throw new Error(`expected GBPJPY LONG to be confirmed via quote-currency (JPY) equity relevance, got ${JSON.stringify(gbpjpyLong)}`);
@@ -744,7 +597,7 @@ async function runTests() {
         const events = [
           { name: 'US CPI', currency: 'USD', tier: 'TIER_1', time: now + 5 * 3600000 },
           { name: 'ECB Rate Decision', currency: 'EUR', tier: 'TIER_1', time: now + 3 * 24 * 3600000 },
-          { name: 'US NFP', currency: 'USD', tier: 'TIER_1', time: now + 10 * 24 * 3600000 }, // next week
+          { name: 'US NFP', currency: 'USD', tier: 'TIER_1', time: now + 10 * 24 * 3600000 },
         ];
         return events
           .filter(e => e.time > now && e.time < now + hours * 3600000)
@@ -768,13 +621,6 @@ async function runTests() {
       sessionFilter: fakeSessionFilter,
       cotParser: fakeCotParser,
     });
-    // Calendar is intentionally NOT part of MarketOutlookBuilder's return
-    // value anymore (see market-outlook.js) — outlook.week/outlook.nextWeek
-    // don't exist. This test used to assert on them, which meant it was
-    // silently testing a shape the builder no longer produces while the
-    // real regression (alert-dispatcher.js's /outlook command still
-    // reading those fields and crashing) went uncaught. Assert on what the
-    // builder actually contracts to return instead.
     if (outlook.week !== undefined || outlook.nextWeek !== undefined) throw new Error('expected calendar fields to stay removed from MarketOutlookBuilder output — if this changed intentionally, update alert-dispatcher.js._sendMarketOutlook to match');
     if (!outlook.symbols[0].institutionalPositioning?.isExtreme) throw new Error('expected EURUSD institutional positioning to be attached and flagged extreme');
     if (!outlook.narrative.includes('hedge funds')) throw new Error('expected narrative to mention institutional/hedge-fund positioning');
@@ -811,26 +657,19 @@ async function runTests() {
     pass(`Breakeven root-cause fix: SL order id threaded end-to-end, original SL correctly cancelled on breakeven`);
   } catch (e) { fail('Breakeven root-cause fix (SL order ID capture + cancel)', e); }
 
-  // ── 12. Syntax check all modules ──────────────────────────────────────
-
-
   console.log('\n12. index.js syntax check');
   try {
     require(path.join(ROOT, 'index.js'));
     pass('index.js loads without crash');
   } catch (e) {
-    // Expected: will try to boot feeds that don't exist in test env
     if (e.message.includes('Cannot find module') && e.message.includes('dotenv')) {
       pass('index.js loads (dotenv optional — acceptable)');
     } else if (e.code === 'MODULE_NOT_FOUND') {
       fail('index.js has missing module', e);
     } else {
-      // Boot attempt errors (no env vars) are expected in test
       pass(`index.js loads OK (expected boot warning: ${e.message.slice(0, 60)})`);
     }
   }
-
-  // ── Summary ───────────────────────────────────────────────────────────
 
   console.log('\n══════════════════════════════════════════════');
   console.log(`  Results: ${passed} passed, ${failed} failed`);

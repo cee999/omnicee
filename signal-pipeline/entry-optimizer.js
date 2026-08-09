@@ -1,69 +1,34 @@
-/**
- * ============================================================
- *  ENTRY OPTIMIZER — OTE + FVG + OB Zone Refinement
- *  AI Trading Assistant · Layer 5 · Signal Pipeline
- * ============================================================
- *
- *  Responsibilities:
- *    - Refine entry zones from raw SMC signals
- *    - OTE (Order Type Entry): rank entries by proximity to target zone
- *    - FVG targeting (Fair Value Gap = best fill)
- *    - Orderblock refinement (adjust for sweep structure)
- *    - Liquidity pool targeting (equal levels)
- *    - Entry quality scoring (0-100)
- *    - Multiple entry options (conservative vs aggressive)
- *
- *  Input:  raw SMC signal (orderBlocks, fairValueGaps, equalLevels)
- *  Output: optimized entry zones + quality score
- * ============================================================
- */
 
 'use strict';
 
-// ─────────────────────────────────────────────
-//  UTILITIES
-// ─────────────────────────────────────────────
-
-function _round(n, d = 5)    { 
+function _round(n, d = 5)    {
   if (!Number.isFinite(n)) return 0;
-  return parseFloat((+n).toFixed(d)); 
+  return parseFloat((+n).toFixed(d));
 }
 
-function _pct(a, b)          { 
+function _pct(a, b)          {
   if (!Number.isFinite(a) || !Number.isFinite(b)) return 0;
-  return b !== 0 ? Math.abs(a - b) / Math.abs(b) : 0; 
+  return b !== 0 ? Math.abs(a - b) / Math.abs(b) : 0;
 }
 
 function _within(a, b, tol)  { return _pct(a, b) <= tol; }
 
-function _avg(arr)            { 
+function _avg(arr)            {
   // FIX: Check for empty array before reducing
   if (!Array.isArray(arr) || arr.length === 0) return 0;
   const valid = arr.filter(v => Number.isFinite(v));
   if (valid.length === 0) return 0;
-  return valid.reduce((s, v) => s + v, 0) / valid.length; 
+  return valid.reduce((s, v) => s + v, 0) / valid.length;
 }
 
 function _clamp(v, min, max)  { return Math.max(min, Math.min(max, v)); }
 function _now()               { return Date.now(); }
 
-// ─────────────────────────────────────────────
-//  ENTRY OPTIMIZER CLASS
-// ─────────────────────────────────────────────
-
 class EntryOptimizer {
   constructor(config = {}) {
-    this.minQuality = config.minQuality || 50; // 0-100 quality score
+    this.minQuality = config.minQuality || 50;
   }
 
-  /**
-   * Optimize entry zone from SMC analysis.
-   *
-   * @param {Object} smcAnalysis - from smc-agent
-   * @param {Object} signal      - full signal object
-   * @param {Array}  candles     - OHLCV data
-   * @returns {Object} optimized entry
-   */
   optimize({ smcAnalysis, signal, candles }) {
     try {
       if (!smcAnalysis) {
@@ -74,20 +39,11 @@ class EntryOptimizer {
       const isLong = direction === 'LONG';
       const currentPrice = candles && candles.length > 0 ? candles[candles.length - 1].close : null;
 
-      // Extract structures
       const orderBlocks = smcAnalysis.orderBlocks || {};
-      // FIX: was reading smcAnalysis.fairValueGaps, which doesn't exist on the
-      // analysis object at all — SMCAgent.analyze() returns it as
-      // smcAnalysis.fvgs.{bullish,bearish} (already direction-split, each
-      // entry using fvgHigh/fvgLow field names). Because the old key was
-      // always undefined, `fvgs` fell back to [], .filter() always returned
-      // [], and fvgZone was ALWAYS null — meaning the FVG_TIGHT entry type
-      // (quality 85, the highest-quality option, "best momentum entry") could
-      // never be selected for any signal, system-wide.
+      // FIX: was reading smcAnalysis.fairValueGaps, which doesn't exist on the analysis object at all — SMCAgent.analyze() returns it as smcAnalysis.fvgs.{bullish,bearish} (already direction-split, each...
       const fvgsByDir = smcAnalysis.fvgs || {};
       const eqLevels = smcAnalysis.equalLevels || {};
 
-      // Get relevant OB
       const relevantOB = isLong ? orderBlocks.bullish : orderBlocks.bearish;
       if (!relevantOB || relevantOB.length === 0) {
         return this._defaultEntry(signal);
@@ -95,30 +51,16 @@ class EntryOptimizer {
 
       const primary = relevantOB[0];
       // FIX: obLow/obHigh were being swapped based on direction (isLong ?
-      // primary.obLow : primary.obHigh), but OrderBlockDetector always stores
-      // obHigh = candle.high and obLow = candle.low — literal numeric bounds
-      // regardless of bullish/bearish type (obHigh >= obLow always). Swapping
-      // them for SHORT signals produced zoneLow > zoneHigh. Downstream,
-      // PositionLifecycle's inZone check in sl-tp-engine.js
-      // (currentPrice >= zoneLow && currentPrice <= zoneHigh) can NEVER be
-      // true when zoneLow > zoneHigh — meaning every SHORT trade using an
-      // OB-based entry (the default/fallback entry type) could never
-      // register as 'entered', silently breaking SL/TP tracking and PnL for
-      // short trades. Zone bounds must always be literal min/max, regardless
-      // of trade direction.
       const obLow = primary.obLow;
       const obHigh = primary.obHigh;
 
-      // FVG zone (tightest entry)
       let fvgZone = null;
       const relevantFVGs = isLong
         ? (fvgsByDir.bullish || [])
         : (fvgsByDir.bearish || []);
       if (relevantFVGs.length > 0) {
         const fvg = relevantFVGs[0];
-        // FIX: same zone-inversion issue as the OB fix above — fvgHigh/fvgLow
-        // are always literal numeric bounds (fvgHigh >= fvgLow) regardless of
-        // bullish/bearish type, so these must not be swapped by direction either.
+        // FIX: same zone-inversion issue as the OB fix above — fvgHigh/fvgLow are always literal numeric bounds (fvgHigh >= fvgLow) regardless of bullish/bearish type, so these must not be swapped by direction...
         fvgZone = {
           low: fvg.fvgLow,
           high: fvg.fvgHigh,
@@ -126,7 +68,6 @@ class EntryOptimizer {
         };
       }
 
-      // Liquidity zone (equal lows/highs)
       let liquidityZone = null;
       const relevant = isLong ? eqLevels.eql : eqLevels.eqh;
       if (relevant && relevant.length > 0) {
@@ -141,10 +82,8 @@ class EntryOptimizer {
         }
       }
 
-      // Rank entries
       const entries = [];
 
-      // 1. Conservative: mid of OB
       entries.push({
         zoneLow: _round(obLow),
         zoneHigh: _round(obHigh),
@@ -154,7 +93,6 @@ class EntryOptimizer {
         note: 'Inside primary orderblock — safest entry',
       });
 
-      // 2. Tight: FVG if available
       if (fvgZone) {
         entries.push({
           zoneLow: _round(fvgZone.low),
@@ -166,7 +104,6 @@ class EntryOptimizer {
         });
       }
 
-      // 3. Liquidity: equal lows/highs
       if (liquidityZone) {
         const halfSpread = Math.abs(obHigh - obLow) / 4;
         entries.push({
@@ -180,13 +117,11 @@ class EntryOptimizer {
         });
       }
 
-      // Select best entry
       let best = entries[0];
       for (const e of entries) {
         if (e.quality > best.quality) best = e;
       }
 
-      // Quality score
       let qualityScore = best.quality;
       if (currentPrice) {
         const zoneSpread = Math.abs(best.zoneHigh - best.zoneLow);
@@ -210,7 +145,7 @@ class EntryOptimizer {
 
   _defaultEntry(signal) {
     const midPoint = signal.entry?.midPoint || signal.entryPrice || 0;
-    const spread = midPoint * 0.005; // 0.5% spread
+    const spread = midPoint * 0.005;
 
     return {
       entry: {

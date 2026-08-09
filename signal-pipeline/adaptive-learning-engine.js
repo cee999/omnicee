@@ -1,23 +1,5 @@
 'use strict';
 
-/**
- * ============================================================
- *  ADAPTIVE LEARNING ENGINE — Enhanced with Deep Pattern Memory
- *  Reinforcement Learning · Mistake Prevention · Pattern Decay
- * ============================================================
- *
- *  Upgrades over v1:
- *    - Deep pattern memory with multiple granularity levels
- *    - Reinforcement learning: Q-value updates for setup quality
- *    - Mistake blacklist: permanently blocks catastrophic patterns
- *    - Recency-weighted learning (recent outcomes matter more)
- *    - Multi-dimensional similarity matching (fuzzy fingerprints)
- *    - Consecutive loss detection per pattern
- *    - Regime-aware pattern evaluation
- *    - Decay factor for old patterns (stale data matters less)
- * ============================================================
- */
-
 function round(n, d = 4) {
   return Number.isFinite(+n) ? parseFloat((+n).toFixed(d)) : 0;
 }
@@ -31,16 +13,11 @@ function bucket(value, bands) {
   return bands[bands.length - 1]?.[0] || 'unknown';
 }
 
-/**
- * Q-Learning table for setup quality evaluation.
- * State = pattern fingerprint key, Action = TAKE or SKIP.
- * Learns from realized outcomes to adjust willingness to take setups.
- */
 class QLearningTable {
   constructor(config = {}) {
-    this._alpha = config.learningRate || 0.15;   // learning rate
-    this._gamma = config.discountFactor || 0.90; // future discount
-    this._table = new Map(); // key -> { take: Q, skip: Q }
+    this._alpha = config.learningRate || 0.15;
+    this._gamma = config.discountFactor || 0.90;
+    this._table = new Map();
   }
 
   getQ(stateKey) {
@@ -74,17 +51,12 @@ class QLearningTable {
   size() { return this._table.size; }
 }
 
-/**
- * Mistake Blacklist — permanently blocks catastrophic pattern signatures.
- * A pattern is blacklisted if it produces N consecutive losses or
- * an extremely negative expectancy.
- */
 class MistakeBlacklist {
   constructor(config = {}) {
     this.maxConsecutiveLosses = config.maxConsecutiveLosses || 3;
     this.catastrophicLossR = config.catastrophicLossR || -3;
-    this._blacklisted = new Map(); // patternKey -> { reason, blockedAt, losses }
-    this._consecutiveLosses = new Map(); // patternKey -> count
+    this._blacklisted = new Map();
+    this._consecutiveLosses = new Map();
   }
 
   recordOutcome(patternKey, pnlR) {
@@ -108,7 +80,6 @@ class MistakeBlacklist {
         });
       }
     } else {
-      // Reset consecutive counter on win/breakeven
       this._consecutiveLosses.set(patternKey, 0);
     }
   }
@@ -121,7 +92,6 @@ class MistakeBlacklist {
     return this._blacklisted.get(patternKey) || null;
   }
 
-  // Allow redemption after a cooling period (default 7 days)
   prune(coolingPeriodMs = 7 * 24 * 60 * 60 * 1000) {
     const now = Date.now();
     for (const [key, info] of this._blacklisted) {
@@ -144,10 +114,9 @@ class AdaptiveLearningEngine {
     this.cacheTtlMs = Number(config.cacheTtlMs || process.env.LEARNING_CACHE_TTL_MS || 5 * 60 * 1000);
     this._cache = new Map();
 
-    // New: RL and mistake prevention components
     this._qTable = new QLearningTable(config.qLearning || {});
     this._blacklist = new MistakeBlacklist(config.blacklist || {});
-    this._recentOutcomes = []; // sliding window of recent outcomes for recency analysis
+    this._recentOutcomes = [];
     this._maxRecentOutcomes = config.maxRecentOutcomes || 500;
     this._decayHalfLifeDays = config.decayHalfLifeDays || 30;
   }
@@ -194,7 +163,6 @@ class AdaptiveLearningEngine {
     ].join('|');
   }
 
-  // Coarse key for fuzzy matching when exact key has no data
   coarseKey(fp) {
     return [
       fp.symbol,
@@ -211,7 +179,6 @@ class AdaptiveLearningEngine {
     const patternKey = this.key(fingerprint);
     const coarsePatternKey = this.coarseKey(fingerprint);
 
-    // Check blacklist first — hard block
     if (this._blacklist.isBlacklisted(patternKey)) {
       const reason = this._blacklist.getBlacklistReason(patternKey);
       return {
@@ -225,7 +192,6 @@ class AdaptiveLearningEngine {
       };
     }
 
-    // Check coarse blacklist
     if (this._blacklist.isBlacklisted(coarsePatternKey)) {
       const reason = this._blacklist.getBlacklistReason(coarsePatternKey);
       return {
@@ -239,14 +205,12 @@ class AdaptiveLearningEngine {
       };
     }
 
-    // Q-Learning recommendation
     const rlRecommendation = this._qTable.recommend(patternKey);
     const coarseRL = this._qTable.recommend(coarsePatternKey);
 
     const profile = await this._profile(patternKey);
     const coarseProfile = await this._profile(coarsePatternKey);
 
-    // Use exact match if available, else fall back to coarse
     const activeProfile = (profile && profile.samples >= this.minSamples)
       ? profile
       : (coarseProfile && coarseProfile.samples >= this.minSamples)
@@ -254,7 +218,6 @@ class AdaptiveLearningEngine {
         : null;
 
     if (!activeProfile) {
-      // No historical data — use RL signal if available
       let rlPenalty = 0;
       if (rlRecommendation.action === 'SKIP' && rlRecommendation.confidence > 30) {
         rlPenalty = 5;
@@ -280,10 +243,8 @@ class AdaptiveLearningEngine {
     let penalty = 0;
     let action = 'ALLOW';
 
-    // Recency-weighted analysis
     const recencyPenalty = this._recencyAnalysis(patternKey);
 
-    // RL penalty/bonus
     let rlPenalty = 0;
     if (rlRecommendation.action === 'SKIP' && rlRecommendation.confidence > 30) {
       rlPenalty = Math.min(8, rlRecommendation.confidence * 0.1);
@@ -328,16 +289,13 @@ class AdaptiveLearningEngine {
     const pnlR = Number(outcome?.pnlR ?? outcome?.r ?? 0);
     const result = pnlR > 0 ? 'WIN' : pnlR < 0 ? 'LOSS' : 'BREAKEVEN';
 
-    // Update Q-learning table (reward = pnlR normalized)
     const reward = pnlR > 0 ? Math.min(pnlR, 3) : Math.max(pnlR, -3);
     this._qTable.update(patternKey, 'take', reward);
     this._qTable.update(coarsePatternKey, 'take', reward * 0.7);
 
-    // Update mistake blacklist
     this._blacklist.recordOutcome(patternKey, pnlR);
     this._blacklist.recordOutcome(coarsePatternKey, pnlR);
 
-    // Track recent outcome for recency analysis
     this._recentOutcomes.push({
       patternKey,
       pnlR,
@@ -368,7 +326,6 @@ class AdaptiveLearningEngine {
     return doc;
   }
 
-  // Analyze recent outcomes for this pattern with recency weighting
   _recencyAnalysis(patternKey) {
     const now = Date.now();
     const halfLife = this._decayHalfLifeDays * 24 * 60 * 60 * 1000;
@@ -379,14 +336,13 @@ class AdaptiveLearningEngine {
     let totalWeight = 0;
     for (const outcome of matching) {
       const age = now - outcome.timestamp;
-      const weight = Math.exp(-0.693 * age / halfLife); // exponential decay
+      const weight = Math.exp(-0.693 * age / halfLife);
       weightedPnl += outcome.pnlR * weight;
       totalWeight += weight;
     }
 
     const recencyWeightedEV = totalWeight > 0 ? weightedPnl / totalWeight : 0;
 
-    // If recent weighted EV is deeply negative, add penalty
     if (recencyWeightedEV < -0.5) return Math.min(10, Math.abs(recencyWeightedEV) * 5);
     return 0;
   }
@@ -401,7 +357,6 @@ class AdaptiveLearningEngine {
     return value;
   }
 
-  // Periodically prune stale blacklist entries
   maintenance() {
     this._blacklist.prune();
   }

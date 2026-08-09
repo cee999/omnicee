@@ -1,34 +1,8 @@
 'use strict';
 
-/**
- * ============================================================
- *  OMNICEE — Entry Point
- *  Boots the entire system in the correct order and wires
- *  all modules together.
- *
- *  Boot sequence:
- *    1. Load .env config
- *    2. Create AlertDispatcher (Telegram)
- *    3. Create data feeds (BinanceFeed + TwelveData)
- *    4. Create all 5 agents per symbol
- *    5. Create ConflictResolver + SignalScorer
- *    6. Create RiskEngine (DrawdownGuard + PositionSizer + SessionFilter)
- *    7. Create TaskPlanner (orchestrates agents → scorer → dispatcher)
- *    8. Wire event listeners
- *    9. Connect feeds, init dispatcher, start planner
- * ============================================================
- */
+try { require('dotenv').config(); } catch (_) { }
 
-// ── 0. Config ──────────────────────────────────────────────────────────────
-
-try { require('dotenv').config(); } catch (_) { /* dotenv optional */ }
-
-// FIX: index.js never required db.js at all before — only api/server.js
-// did. Needed now so feeds can persist/restore candle history across
-// restarts (see feeds/twelve-data.js's saveCandleHistory/loadCandleHistory
-// usage) rather than re-fetching everything from rate-limited APIs on
-// every boot. db.js's own functions already no-op safely when
-// MONGODB_URI isn't set, so no extra guarding needed here.
+// FIX: index.js never required db.js at all before — only api/server.js did.
 const db = require('./db');
 
 const LOG_LEVEL = (process.env.LOG_LEVEL || 'info').toLowerCase();
@@ -39,7 +13,7 @@ const log = {
   error: (...a) => console.error('[ERROR]', ...a),
 };
 
-// ── 1. Validate critical env vars ─────────────────────────────────────────
+// Validate critical env vars
 
 function requireEnv(name, fallback) {
   const val = process.env[name] || fallback;
@@ -52,36 +26,20 @@ function requireEnv(name, fallback) {
 const BOT_TOKEN       = requireEnv('TELEGRAM_BOT_TOKEN', '');
 const CHAT_IDS        = (requireEnv('TELEGRAM_CHAT_IDS', '') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
-// Default matches the dashboard ticker so every tab has live prices out of
-// the box. Override via SYMBOLS env to trade a smaller/larger set.
 const SYMBOLS         = (requireEnv('SYMBOLS', 'EURUSD,GBPUSD,USDJPY,XAUUSD,USOIL,UUP,BTCUSDT,ETHUSDT') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
 const TIMEFRAMES_STR  = (requireEnv('TIMEFRAMES', 'H1,H4') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
-const MIN_SCORE       = parseFloat(requireEnv('MIN_SIGNAL_SCORE', '65')); // signal-only: 65 fires more; raise to 75+ for stricter
+const MIN_SCORE       = parseFloat(requireEnv('MIN_SIGNAL_SCORE', '65'));
 const RISK_PCT        = parseFloat(requireEnv('RISK_PCT_PER_TRADE', '1.0'));
 const MAX_DAILY_LOSS  = parseFloat(requireEnv('MAX_DAILY_LOSS_PCT', '3.0'));
 const MAX_DRAWDOWN    = parseFloat(requireEnv('MAX_DRAWDOWN_PCT', '10.0'));
 const ACCOUNT_BALANCE = parseFloat(requireEnv('ACCOUNT_BALANCE', '10000'));
 const REQUIRE_KZ      = requireEnv('REQUIRE_KILLZONE', 'false') === 'true';
-const SIGNAL_SOFT_GATES = requireEnv('SIGNAL_SOFT_GATES', 'true') !== 'false'; // default ON — fewer hard blocks
-// FIX: intermarket analysis (DXY/equity cross-confirmation) — the last item
-// on the original audit's "does not exist" list. Configurable since not
-// FIX: was 'DXY' / 'SPX500', with a comment claiming "every TwelveData
-// plan/region resolves 'DXY' the same way" — confirmed against TwelveData's
-// own indices page (twelvedata.com/indices), which states indices data is
-// "coming soon" and isn't a live product yet. Any literal index symbol
-// fails with "symbol or figi parameter is missing or invalid" regardless of
-// plan/region — this isn't a formatting or tier issue, the feature doesn't
-// exist there yet. UUP (Invesco DB US Dollar Index Bullish Fund) and SPY
-// (SPDR S&P 500 ETF Trust) are the standard, widely-used ETF proxies for
-// the Dollar Index and S&P 500 respectively — fully supported as ordinary
-// ETF data, and track their underlying index closely enough for
-// intermarket-analysis purposes.
+const SIGNAL_SOFT_GATES = requireEnv('SIGNAL_SOFT_GATES', 'true') !== 'false';
+// FIX: intermarket analysis (DXY/equity cross-confirmation) — the last item on the original audit's "does not exist" list.
 const DXY_SYMBOL          = process.env.DXY_SYMBOL          || 'UUP';
 const EQUITY_INDEX_SYMBOL = process.env.EQUITY_INDEX_SYMBOL || 'SPY';
-
-// ── 2. Load modules ────────────────────────────────────────────────────────
 
 const path = require('path');
 const mongoStore = loadModule('./db', 'MongoStore') || {};
@@ -95,7 +53,6 @@ function loadModule(relPath, label) {
   }
 }
 
-// ── WebSocket bus (optional — only if ws-server.js is running) ─────────────
 let wsBus = null;
 try {
   wsBus = require('./webapp/ws-server').bus;
@@ -157,61 +114,34 @@ const { AIAdvisor }          = loadModule('./signal-pipeline/ai-advisor',       
 const { MarketHoursGate, SymbolManager } = loadModule('./orchestrator/scheduling-gate', 'MarketHoursGate') || {};
 const { AuditTrail }          = loadModule('./orchestrator/audit-trail',             'AuditTrail')         || {};
 
-// ConflictResolver is instantiated (not static) — create one singleton
 const conflictResolver = ConflictResolverClass ? new ConflictResolverClass() : null;
 
-// TrapDetector keeps its own rolling per-call history but is stateless enough
-// to share across symbols; CompressionDetector, TimeCycleEngine,
-// AbnormalMarketDetector, StrategySelector, and CandleIntelligence are all
-// fully stateless per call — safe to share across symbols too.
 const trapDetector        = TrapDetector        ? new TrapDetector()        : null;
 const compressionDetector = CompressionDetector ? new CompressionDetector() : null;
 const abnormalMarketDetector = AbnormalMarketDetector ? new AbnormalMarketDetector() : null;
 const timeCycleEngine     = TimeCycleEngine     ? new TimeCycleEngine()     : null;
 const strategySelector    = StrategySelector    ? new StrategySelector()    : null;
 const candleIntelligence  = CandleIntelligence  ? new CandleIntelligence()  : null;
-// AIAdvisor no-ops safely (fails open) if ANTHROPIC_API_KEY isn't set — see
-// signal-pipeline/ai-advisor.js. Logged once at startup below so it's obvious
-// from the boot log whether the agentic layer is actually active.
 const aiAdvisor = AIAdvisor ? new AIAdvisor({ apiKey: process.env.ANTHROPIC_API_KEY }) : null;
 if (aiAdvisor) {
   log.info(aiAdvisor.enabled
     ? `AI Advisor active (model=${aiAdvisor.model}) — advisory-only, fails open on any error`
     : 'AI Advisor loaded but disabled — ANTHROPIC_API_KEY not set in .env');
 }
-// SymbolManager (extracted from orphaned task-planner.js) — seeded with the
-// exact SYMBOLS list already configured via .env, so nothing changes by
-// default; it exists so a symbol can be blacklisted at runtime (e.g. via a
-// future admin action) without touching the SYMBOLS env var or restarting.
 const symbolManager = SymbolManager ? new SymbolManager({ symbols: SYMBOLS }) : null;
 
-// AuditTrail (extracted from orphaned task-planner.js) — records every
-// analysis cycle result, fired or not, so "what did the pipeline decide
-// about X in the last hour" doesn't require grepping logs.
 const auditTrail = AuditTrail ? new AuditTrail() : null;
 
-// ── 3. System state ────────────────────────────────────────────────────────
-
-/** Per-symbol candle stores — { symbol: { TF: candle[] } } */
 const candleStores = {};
-// FIX: VolumeOIAgent.analyze() already reads last.fundingRate / last.openInterest
-// directly off candle objects — that plumbing was built correctly, but nothing
-// ever attached real values to candles, so those reads always fell back to 0.
-// BybitFeed (which has a fully-built funding/OI engine) was never even
-// instantiated anywhere. Populated by bootBybitFeed() below.
-const bybitFundingOI = {}; // symbol -> { fundingRate, openInterest }
-const lastMarketEmit = {}; // symbol -> timestamp of last market_update emit (throttle, see onCandle)
+// BybitFeed (which has a fully-built funding/OI engine) was never even instantiated anywhere.
+const bybitFundingOI = {};
+const lastMarketEmit = {};
 
-/** Per-symbol agent instances */
 const agentPool = {};
 
-/** Track last vote per symbol for signal assembly */
 const lastVotes = {};
 
-// In-flight analysis guard — prevents duplicate concurrent analyses per symbol+TF
 const inFlight = new Set();
-
-// ── 4. Initialise per-symbol agent pool ────────────────────────────────────
 
 function initAgentsForSymbol(symbol) {
   agentPool[symbol] = {
@@ -235,12 +165,6 @@ function initAgentsForSymbol(symbol) {
   log.info(`Agents initialised for ${symbol}`);
 }
 
-// ── 5. Signal pipeline ─────────────────────────────────────────────────────
-
-/**
- * Runs the full signal pipeline for one symbol on one timeframe.
- * Called when a candle closes.
- */
 async function runAnalysisCycle(symbol, timeframe) {
   const key = `${symbol}:${timeframe}`;
   if (inFlight.has(key)) {
@@ -248,8 +172,6 @@ async function runAnalysisCycle(symbol, timeframe) {
     return;
   }
 
-  // Symbol/hours gates run before anything else — no point running the full
-  // agent pipeline on a blacklisted symbol or during a confirmed dead zone.
   if (symbolManager && !symbolManager.isAllowed(symbol)) {
     log.debug(`${key}: symbol blacklisted/not whitelisted — skipping`);
     return;
@@ -268,14 +190,7 @@ async function runAnalysisCycle(symbol, timeframe) {
       return;
     }
 
-    // FIX: nothing in this pipeline ever asked "is the data I'm about to
-    // trade on actually trustworthy?" — a flash-crash wick, a frozen/stale
-    // feed repeating the same price, or a huge range on almost no volume
-    // would flow straight into all six agents and the scorer exactly like
-    // clean data. Gate severe cases before spending any compute on them (and
-    // before they pollute lastVotes[symbol] for reuse next cycle); elevated
-    // cases are logged and annotated but allowed through, same "dampen not
-    // block" philosophy as TrapDetector below.
+    // FIX: nothing in this pipeline ever asked "is the data I'm about to trade on actually trustworthy?" — a flash-crash wick, a frozen/stale feed repeating the same price, or a huge range on almost no...
     let abnormalMarket = null;
     if (abnormalMarketDetector) {
       abnormalMarket = abnormalMarketDetector.analyze({ candles, symbol });
@@ -294,7 +209,6 @@ async function runAnalysisCycle(symbol, timeframe) {
 
     log.info(`[Analysis] ${key} — ${candles.length} candles`);
 
-    // ── Run agents in parallel (including new institutional agents) ──
     const [smcResult, mtfResult, momResult, volumeResult, microResult, fractalResult] = await Promise.all([
       agents.smc?.analyze(candles)
         .catch(e => { log.warn(`SMC error [${key}]: ${e.message}`); return null; }),
@@ -315,13 +229,7 @@ async function runAnalysisCycle(symbol, timeframe) {
         .catch(e => { log.warn(`Fractal error [${key}]: ${e.message}`); return null; }),
     ]);
 
-    // Sentiment/Pattern run less frequently (every 3rd cycle per symbol)
-    // FIX: this comment already documented the intent to run BOTH sentiment
-    // and pattern on a reduced cadence, but the code only ever called
-    // agents.sentiment — agents.pattern.analyze() was never called anywhere,
-    // meaning PatternAgent's vote (Wyckoff/harmonics/H&S/divergences) had
-    // zero influence on any signal ever, despite being instantiated and
-    // fully implemented. Both now share the same cadence draw.
+    // FIX: this comment already documented the intent to run BOTH sentiment and pattern on a reduced cadence, but the code only ever called agents.sentiment — agents.pattern.analyze() was never called...
     const runReducedCadenceAgents = Math.random() > 0.66;
 
     const sentResult = agents.sentiment && runReducedCadenceAgents
@@ -334,7 +242,6 @@ async function runAnalysisCycle(symbol, timeframe) {
       ? await agents.pattern.analyze(candles).catch(e => { log.warn(`Pattern error [${key}]: ${e.message}`); return null; })
       : lastVotes[symbol]?.pattern || null;
 
-    // Store votes for next cycle reuse
     if (smcResult)   lastVotes[symbol].smc       = smcResult;
     if (mtfResult)   lastVotes[symbol].mtf        = mtfResult;
     if (momResult)   lastVotes[symbol].momentum   = momResult;
@@ -344,7 +251,6 @@ async function runAnalysisCycle(symbol, timeframe) {
     if (microResult)   lastVotes[symbol].microstructure  = microResult;
     if (fractalResult) lastVotes[symbol].fractal         = fractalResult;
 
-    // ── Check we have the three minimum votes ──
     const votes = lastVotes[symbol];
     if (!votes.smc || !votes.mtf || !votes.momentum) {
       log.debug(`${key}: incomplete votes — smc:${!!votes.smc} mtf:${!!votes.mtf} mom:${!!votes.momentum}`);
@@ -370,11 +276,7 @@ async function runAnalysisCycle(symbol, timeframe) {
       wsBus.emit('regime_update', { symbol, timeframe, ...regime });
     }
 
-    // FIX: institutionalRiskManager was instantiated + connected but never fed
-    // live data — setRegime()/updateLiquidity() had zero call sites, so its
-    // regime-aware Kelly multiplier and liquidity check were permanently blind.
-    // Spread has no real feed anywhere in this codebase (grepped — confirmed),
-    // so we use candle range/close as a documented proxy, not a real quote spread.
+    // FIX: institutionalRiskManager was instantiated + connected but never fed live data — setRegime()/updateLiquidity() had zero call sites, so its regime-aware Kelly multiplier and liquidity check were...
     if (institutionalRiskManager) {
       if (regime?.regime && institutionalRiskManager.setRegime) {
         institutionalRiskManager.setRegime(regime.regime);
@@ -388,7 +290,6 @@ async function runAnalysisCycle(symbol, timeframe) {
       }
     }
 
-    // ── Conflict resolution ──
     const currentPrice = candles[candles.length - 1].close;
     const conflictCtx  = { symbol, timeframe, currentPrice };
 
@@ -402,15 +303,12 @@ async function runAnalysisCycle(symbol, timeframe) {
       resolvedVotes = resolved.votes;
     }
 
-    // FIX: sessionFilter (holiday/weekend/liquidity/killzone/rollover/news-blackout
-    // gate) was instantiated in buildSingletons() but its .check() method was never
-    // called anywhere in the pipeline — it was silently doing nothing. Wired in here.
+    // FIX: sessionFilter (holiday/weekend/liquidity/killzone/rollover/news-blackout gate) was instantiated in buildSingletons() but its .check() method was never called anywhere in the pipeline — it was...
     let sessionQuality = null;
     if (sessionFilter?.check) {
       sessionQuality = sessionFilter.check(symbol, Date.now());
       if (!sessionQuality.allowed) {
         const isCrypto = /USDT|USDC|BTC$|ETH$/.test(symbol);
-        // Soft gates: crypto always continues; FX continues but tagged (signal-only app)
         if (SIGNAL_SOFT_GATES || isCrypto) {
           log.debug(`${key}: session soft-block (${sessionQuality.reason}) — continuing under soft gates`);
           try {
@@ -423,7 +321,6 @@ async function runAnalysisCycle(symbol, timeframe) {
               gatesPassed: [],
             });
           } catch (_) {}
-          // do not return — allow scoring so users see near-miss / live candidates
         } else {
           log.debug(`${key}: session filter blocked — ${sessionQuality.reason}`);
           try {
@@ -440,10 +337,7 @@ async function runAnalysisCycle(symbol, timeframe) {
       }
     }
 
-    // FIX: drawdownGuard.evaluate() — the actual pre-trade circuit-breaker /
-    // daily-loss / recovery-mode gate — was never called. Only getStatus()
-    // (read-only) and recordSignal() (post-hoc logging) were used, so the
-    // circuit breaker never actually stopped a new trade from firing.
+    // FIX: drawdownGuard.evaluate() — the actual pre-trade circuit-breaker / daily-loss / recovery-mode gate — was never called.
     let drawdownEval = null;
     if (drawdownGuard?.evaluate) {
       drawdownEval = drawdownGuard.evaluate({ price: currentPrice });
@@ -453,7 +347,6 @@ async function runAnalysisCycle(symbol, timeframe) {
       }
     }
 
-    // ── Score ──
     if (!scorer) { log.warn('SignalScorer not available'); return; }
 
     let signal = await scorer.score(resolvedVotes, {
@@ -463,10 +356,6 @@ async function runAnalysisCycle(symbol, timeframe) {
       timestamp: Date.now(),
     });
 
-    // Record this cycle's evaluation on the watchlist scoreboard regardless
-    // of whether it fires — this is what lets /api/watchlist answer "what's
-    // close to setting up?" instead of only ever showing signals that
-    // already cleared every gate.
     if (opportunityRanker) {
       opportunityRanker.update(symbol, {
         action:       signal?.action || 'WAIT',
@@ -502,11 +391,6 @@ async function runAnalysisCycle(symbol, timeframe) {
       return;
     }
 
-    // ── Trap + compression context ──
-    // Trap detector: is this signal firing right at a level that just
-    // produced a bull/bear trap (failed breakout + reversal)? If so, dampen
-    // conviction rather than blocking outright — the reversal itself may
-    // still be tradeable in the opposite direction next cycle.
     let trapContext = null;
     if (trapDetector) {
       trapContext = trapDetector.shouldDampenBreakout({
@@ -521,40 +405,22 @@ async function runAnalysisCycle(symbol, timeframe) {
       }
     }
 
-    // Compression detector: purely informational context attached to the
-    // signal (and fed to the scanner below) — a squeeze doesn't block a
-    // signal, but it flags elevated expansion/whipsaw risk around it.
     let compressionContext = null;
     if (compressionDetector) {
       compressionContext = compressionDetector.analyze({ candles });
     }
 
-    // Abnormal market detector: severe cases were already gated out entirely
-    // near the top of this cycle (before agents even ran). 'elevated' cases
-    // were allowed through but should still flag the signal for the risk
-    // engine to consider sizing down, same "dampen not block" pattern as
-    // trap/compression above.
     if (abnormalMarket?.abnormal && abnormalMarket.severity === 'elevated') {
       signal = { ...signal, riskFlags: { ...(signal.riskFlags || {}), abnormalMarket: true, abnormalReasons: abnormalMarket.reasons } };
     }
 
-    // Time cycle engine: informational only — historical hour-of-day /
-    // day-of-week edge (or lack of one) for this symbol, attached to the
-    // signal for display/journaling. Never blocks or resizes on its own;
-    // sample sizes from a single symbol's own history aren't strong enough
-    // evidence for that, but they're useful context on the signal card.
+    // Never blocks or resizes on its own; sample sizes from a single symbol's own history aren't strong enough evidence for that, but they're useful context on the signal card.
     let timeCycleContext = null;
     if (timeCycleEngine) {
       timeCycleContext = timeCycleEngine.currentWindowBias({ candles });
     }
 
-    // AI Strategy Selector: does THIS signal's direction/setup fit the
-    // regime that's actually in play right now? Trend-following calls get
-    // a lean in DIRECTIONAL regimes, breakout-style calls get discounted
-    // in CHOP. This tilts the already-scored confidence and can raise
-    // (never lower) the minimum-score bar for choppier/less tradeable
-    // regimes — it does not mutate the shared scorer instance, so there's
-    // no cross-symbol race condition from concurrent regimes.
+    // never lower) the minimum-score bar for choppier/less tradeable regimes — it does not mutate the shared scorer instance, so there's no cross-symbol race condition from concurrent regimes.
     let strategyContext = null;
     if (strategySelector) {
       strategyContext = strategySelector.select({ regime, signalAction: signal.action, adaptiveLearningEngine: adaptiveLearning });
@@ -573,11 +439,6 @@ async function runAnalysisCycle(symbol, timeframe) {
       }
     }
 
-    // Candle Intelligence: does the most recent candle itself look like a
-    // decisive, well-formed bar, or a low-conviction non-event? Attached as
-    // context rather than a hard filter — a low candle-quality score on an
-    // otherwise well-confirmed multi-agent signal is a caution flag, not
-    // an automatic reject.
     let candleContext = null;
     if (candleIntelligence) {
       candleContext = candleIntelligence.analyze({ candles });
@@ -593,9 +454,7 @@ async function runAnalysisCycle(symbol, timeframe) {
 
     log.info(`[SIGNAL] ${signal.action} ${symbol} @ ${currentPrice} | Score: ${signal.score?.final} | Grade: ${signal.score?.grade}`);
 
-    // FIX: correlationFilter was instantiated but its .check() method was
-    // never called — nothing prevented stacking correlated/duplicate/
-    // over-limit positions before a signal fired. Wired in here.
+    // FIX: correlationFilter was instantiated but its .check() method was never called — nothing prevented stacking correlated/duplicate/ over-limit positions before a signal fired.
     if (correlationFilter?.check) {
       const corrCheck = correlationFilter.check(symbol, signal.action, RISK_PCT);
       if (!corrCheck.allowed) {
@@ -604,7 +463,6 @@ async function runAnalysisCycle(symbol, timeframe) {
       }
     }
 
-    // ── Refine entry, build SL/TP, then gate the setup ──
     let fullSignal = {
       ...signal,
       regime,
@@ -634,10 +492,10 @@ async function runAnalysisCycle(symbol, timeframe) {
     let riskEvaluation = null;
 
     if (entryOptimizer && signal.action !== 'WAIT') {
-      entryOptimization = entryOptimizer.optimize({ 
-        smcAnalysis: smcResult?.analysis || lastVotes[symbol].smc?.analysis, 
-        signal, 
-        candles 
+      entryOptimization = entryOptimizer.optimize({
+        smcAnalysis: smcResult?.analysis || lastVotes[symbol].smc?.analysis,
+        signal,
+        candles
       });
       if (!entryOptimization?.rejected && entryOptimization?.entry) {
         const e = entryOptimization.entry;
@@ -674,15 +532,7 @@ async function runAnalysisCycle(symbol, timeframe) {
               })
             : { approved: true, reason: 'RiskEngine unavailable' };
 
-          // FIX: institutionalRiskManager.validateAndSizePosition() was never
-          // called anywhere (only .connect() was) — its Kelly/regime/liquidity/
-          // portfolio-cap sizing had zero influence on any real trade. It
-          // returns its OWN absolute position size in different units than
-          // RiskEngine's (accountBalance/currentPrice-based Kelly units vs
-          // SL-distance-based risk units), so we don't substitute one for the
-          // other — instead we take the *ratio* of its post-checks size to its
-          // own pre-checks size (unit-independent, 0..1) and fold that in the
-          // same way sessionQuality/drawdownEval already scale down below.
+          // FIX: institutionalRiskManager.validateAndSizePosition() was never called anywhere (only .connect() was) — its Kelly/regime/liquidity/ portfolio-cap sizing had zero influence on any real trade.
           let institutionalRisk = null;
           let institutionalFactor = 1;
           if (institutionalRiskManager?.validateAndSizePosition) {
@@ -697,9 +547,7 @@ async function runAnalysisCycle(symbol, timeframe) {
             }
           }
 
-          // FIX: sessionQuality.multiplier and drawdownEval.sizingFactor were
-          // computed above but nothing ever applied them to the actual
-          // position size — they were pure dead weight. Fold them in now.
+          // FIX: sessionQuality.multiplier and drawdownEval.sizingFactor were computed above but nothing ever applied them to the actual position size — they were pure dead weight.
           if (riskEvaluation?.approved && riskEvaluation.positionSize > 0) {
             const combinedFactor =
               (sessionQuality?.multiplier ?? 1) * (drawdownEval?.sizingFactor ?? 1) * institutionalFactor;
@@ -719,17 +567,7 @@ async function runAnalysisCycle(symbol, timeframe) {
               riskEvaluation.drawdownSizingFactor = drawdownEval?.sizingFactor ?? 1;
               riskEvaluation.note = `${riskEvaluation.note || ''} | Size scaled ${(combinedFactor * 100).toFixed(0)}% (session/drawdown)`;
             }
-            // FIX: /api/ea/signals (the MT5 EA polling endpoint) was sending a
-            // completely static riskPct straight from an env var — ignoring
-            // effectiveRisk (RiskEngine's own correlation/session adjustment)
-            // AND the session/drawdown combinedFactor above entirely. That
-            // meant every risk-reduction safeguard computed server-side (this
-            // session's session-quality gate, drawdown circuit breaker, and
-            // the pre-existing correlation reduction) had zero effect on the
-            // size of any trade actually placed by the automated MT5 bridge —
-            // it only ever affected the position-size TEXT shown to a human
-            // via Telegram. finalRiskPct now carries the real, fully-adjusted
-            // risk percentage through to that endpoint.
+            // FIX: /api/ea/signals (the MT5 EA polling endpoint) was sending a completely static riskPct straight from an env var — ignoring effectiveRisk (RiskEngine's own correlation/session adjustment) AND the...
             riskEvaluation.finalRiskPct = Math.round(
               (riskEvaluation.effectiveRisk ?? RISK_PCT) * combinedFactor * 100
             ) / 100;
@@ -759,7 +597,6 @@ async function runAnalysisCycle(symbol, timeframe) {
       };
     }
 
-    // ── Run institutional-grade validation engines in parallel ──
     const [mcResult, bayesianResult, statResult] = await Promise.all([
       monteCarlo?.simulate
         ? monteCarlo.simulate({ candles, signal, tradePlan, regime })
@@ -775,10 +612,8 @@ async function runAnalysisCycle(symbol, timeframe) {
       return [null, null, null];
     });
 
-    // Walk-forward check (uses cached analysis, fast)
     const wfResult = walkForward?.analyze ? walkForward.analyze() : null;
 
-    // Ensemble validation — combines all layers
     let ensembleResult = null;
     if (ensembleEng?.evaluate) {
       ensembleResult = ensembleEng.evaluate({
@@ -793,7 +628,6 @@ async function runAnalysisCycle(symbol, timeframe) {
         microstructure: votes.microstructure || null,
       }, signal);
 
-      // Apply ensemble penalty to score
       if (ensembleResult?.totalPenalty && signal.score?.final != null) {
         signal.score = {
           ...signal.score,
@@ -852,11 +686,6 @@ async function runAnalysisCycle(symbol, timeframe) {
       return;
     }
 
-    // Safety net: if the combined session/drawdown/institutional-risk
-    // scaling above collapsed positionSize to (near) zero, don't dispatch a
-    // signal that risks nothing — institutionalGates has no positionSize
-    // check of its own, so without this a 0-size signal could otherwise
-    // still reach Telegram/the Mini App/the MT5 EA.
     if (riskEvaluation?.positionSize != null && riskEvaluation.positionSize <= 0) {
       log.warn(`[RISK BLOCK] ${symbol} ${timeframe}: position size scaled to zero (session/drawdown/institutional risk combined)`);
       return;
@@ -864,13 +693,7 @@ async function runAnalysisCycle(symbol, timeframe) {
 
     let executionPlan = null; // purged: ExecutionManager was advisory-only (TWAP/VWAP never gated)
 
-    // FIX: intermarket analysis (DXY/equity-index cross-confirmation) — the
-    // last item from the original audit's "does not exist" list. Advisory
-    // only, matching the pattern above: this is a well-known FX heuristic,
-    // not a physical law (see risk-engine/intermarket-analyzer.js), so it
-    // informs rather than gates. Logged as a warning on genuine divergence
-    // so it's visible without silently blocking a signal that passed every
-    // deterministic filter already.
+    // FIX: intermarket analysis (DXY/equity-index cross-confirmation) — the last item from the original audit's "does not exist" list.
     let intermarketCheck = null;
     if (intermarketAnalyzer) {
       try {
@@ -934,16 +757,7 @@ async function runAnalysisCycle(symbol, timeframe) {
       };
     }
 
-    // ── AI Advisor (agentic layer) ──
-    // The one LLM-based check in the pipeline, deliberately placed last —
-    // it only ever runs on a signal that has already cleared every
-    // deterministic gate (scoring, trap/compression/abnormal-market,
-    // regime-fit floor) and has its full entry/SL/TP plan built, so it's
-    // reviewing a complete, real setup rather than a partial one. Advisory
-    // only: it can say SKIP or REDUCE_SIZE, but it never adjusts risk
-    // parameters or touches execution directly, and any error/timeout/
-    // missing-key fails OPEN (proceeds as TAKE) rather than blocking a
-    // trade on an LLM outage.
+    // never adjusts risk parameters or touches execution directly, and any error/timeout/ missing-key fails OPEN (proceeds as TAKE) rather than blocking a trade on an LLM outage.
     let aiAdvisorVerdict = null;
     if (aiAdvisor) {
       aiAdvisorVerdict = await aiAdvisor.evaluate({
@@ -968,7 +782,6 @@ async function runAnalysisCycle(symbol, timeframe) {
       }
     }
 
-    // ── Store in memory ──
     if (memory?.saveSignal) {
       memory.saveSignal(fullSignal).catch(e => log.warn(`Memory save error: ${e.message}`));
     }
@@ -976,10 +789,6 @@ async function runAnalysisCycle(symbol, timeframe) {
       mongoStore.saveSignal(fullSignal).catch(e => log.warn(`Mongo signal save error: ${e.message}`));
     }
 
-    // AI Advisor SKIP is checked here — after journaling (so vetoed setups
-    // are still visible for review, e.g. "was the advisor right to skip
-    // this one?"), but before this signal consumes any risk-model budget
-    // or reaches dispatch/execution.
     if (aiAdvisorVerdict?.recommendation === 'SKIP') {
       log.info(`${key}: AI Advisor recommends SKIP — ${aiAdvisorVerdict.reasoning}`);
       if (auditTrail) {
@@ -999,22 +808,13 @@ async function runAnalysisCycle(symbol, timeframe) {
       });
     }
 
-    // Track this position in the portfolio-risk model so future correlation
-    // and exposure checks (see validateAndSizePosition above) account for it.
     if (institutionalRiskManager?.executePosition) {
       try {
         institutionalRiskManager.executePosition(symbol, riskEvaluation.positionSize, currentPrice, signal.action);
       } catch (e) { log.warn(`InstitutionalRiskManager executePosition error: ${e.message}`); }
     }
 
-    // ── Dispatch to Telegram ──
-    // FIX: when ExecutionEngine is active, route through it instead of
-    // calling dispatcher.sendSignal() directly — onSignal() calls
-    // dispatcher.sendSignal() internally (so the Telegram message is
-    // unchanged) but ALSO journals the signal and registers it in
-    // ExecutionEngine's own pending-signals map, which is required for the
-    // TAKE/WATCH buttons to find it by signalId later. Without this, those
-    // buttons would always fail with "signal not found or expired".
+    // FIX: when ExecutionEngine is active, route through it instead of calling dispatcher.sendSignal() directly — onSignal() calls dispatcher.sendSignal() internally (so the Telegram message is unchanged)...
     if (executionEngine?.onSignal) {
       await executionEngine.onSignal(fullSignal).catch(e => {
         log.error(`ExecutionEngine dispatch error: ${e.message}`);
@@ -1025,10 +825,8 @@ async function runAnalysisCycle(symbol, timeframe) {
       });
     }
 
-    // ── Emit to Mini App via WebSocket bus ──
     if (wsBus) {
       wsBus.emit('signal', fullSignal);
-      // Also emit updated stats
       wsBus.emit('stats_update', {
         total:    Object.values(lastVotes).reduce((s, v) => s + (v._signalCount || 0), 0),
         gradeA:   fullSignal.score?.grade === 'A' ? 1 : 0,
@@ -1056,14 +854,11 @@ async function runAnalysisCycle(symbol, timeframe) {
       });
     }
 
-    // Update drawdown guard on signal fire
     if (drawdownGuard?.recordSignal) {
       drawdownGuard.recordSignal(fullSignal);
     }
 
-    // FIX: SignalMonitor was instantiated and connected but createSignal() was
-    // never called anywhere, so its weakening/reversal-risk tracking never
-    // actually monitored any live signal. Register the fired signal here.
+    // FIX: SignalMonitor was instantiated and connected but createSignal() was never called anywhere, so its weakening/reversal-risk tracking never actually monitored any live signal.
     if (signalMonitor?.createSignal && fullSignal.id) {
       signalMonitor.createSignal(fullSignal.id, {
         score: fullSignal.score?.final,
@@ -1083,7 +878,6 @@ async function runAnalysisCycle(symbol, timeframe) {
   }
 }
 
-/** Build multi-TF data object for MTFAgent from current candle stores */
 function buildMTFData(symbol) {
   const store = candleStores[symbol] || {};
   const data  = {};
@@ -1093,21 +887,10 @@ function buildMTFData(symbol) {
   return data;
 }
 
-// FIX: agents.sentiment.analyze() was being called with a raw candles ARRAY
-// (agents.sentiment.analyze(candles)) where it expects a structured
-// { cot, fearGreed, lsRatio, upcomingEvents, social, articles } object.
-// Since candles.cot / candles.fearGreed / etc. are all undefined on an
-// array, EVERY sub-analyzer inside SentimentAgent (COT, Fear&Greed,
-// Long/Short Ratio, Social) was silently disabled — only the NLP news arm
-// could ever fire, and only if a working news fetcher was configured. This
-// builds the real object instead, including real CFTC COT data.
-const _cotCache = {}; // symbol -> { analysis, ts } — CFTC updates weekly, no need to re-fetch every cycle
-// Live insider-trading intel (SEC Form 4 via OpenInsider). Updated by feed
-// events; consumed by buildSentimentExternalData → SentimentAgent.
-// Market-wide bias: cluster buys / executive purchases = risk-on (LONG bias);
-// concentrated selling = risk-off. Applies to all symbols as macro smart-money flow.
+// FIX: agents.sentiment.analyze() was being called with a raw candles ARRAY (agents.sentiment.analyze(candles)) where it expects a structured { cot, fearGreed, lsRatio, upcomingEvents, social, articles...
+const _cotCache = {};
 const insiderIntel = {
-  direction: 'NEUTRAL', // LONG | SHORT | NEUTRAL
+  direction: 'NEUTRAL',
   score: 0,
   note: '',
   clusters: 0,
@@ -1140,7 +923,6 @@ function updateInsiderIntelFromFeed(feed) {
       else if (sig.includes('SELL') || sig === 'SHORT' || sig === 'BEARISH') execSell++;
     }
 
-    // Aggregate market bias
     let direction = 'NEUTRAL';
     let score = 40;
     const notes = [];
@@ -1163,7 +945,6 @@ function updateInsiderIntelFromFeed(feed) {
       notes.push(`${execSell} key executive sale(s)`);
     }
     if (sentiment?.score != null && Number.isFinite(sentiment.score)) {
-      // blend soft market-wide sentiment from feed analyzer
       const s = Number(sentiment.score);
       if (s > 20 && direction !== 'SHORT') { direction = direction === 'NEUTRAL' ? 'LONG' : direction; score = Math.max(score, 50 + s / 5); }
       if (s < -20 && direction !== 'LONG') { direction = direction === 'NEUTRAL' ? 'SHORT' : direction; score = Math.max(score, 50 + Math.abs(s) / 5); }
@@ -1183,7 +964,7 @@ function updateInsiderIntelFromFeed(feed) {
   }
 }
 
-const _newsCache = {}; // category -> { articles, ts } — Finnhub free tier is rate-limited, cache by asset-class category
+const _newsCache = {};
 
 async function buildSentimentExternalData(symbol) {
   const data = {};
@@ -1200,12 +981,7 @@ async function buildSentimentExternalData(symbol) {
           _cotCache[symbol] = { analysis, ts: Date.now() };
         }
       }
-      // FIX: COTAnalyzer.analyze() (agents/sentiment-agent.js) destructures
-      // `commercials` (plural) from its input, but COTReportParser.analyze()
-      // (feeds/cot-report-parser.js) returns the field as `commercial` (singular).
-      // Passing the raw analysis straight through would silently zero out
-      // the commercial-hedger side of the signal while largeSpec/smallSpec
-      // (whose key names happen to match) kept working. Bridge explicitly.
+      // FIX: COTAnalyzer.analyze() (agents/sentiment-agent.js) destructures `commercials` (plural) from its input, but COTReportParser.analyze() (feeds/cot-report-parser.js) returns the field as `commercial`...
       if (analysis) {
         data.cot = {
           commercials:  { long: analysis.commercial.long, short: analysis.commercial.short },
@@ -1219,30 +995,19 @@ async function buildSentimentExternalData(symbol) {
     }
   }
 
-  // FIX: SentimentAgent WAS being called every cycle and DID feed a real vote
-  // into signal scoring (macroSent), but its news component was silently
-  // dead: index.js never passed `newsApiKey`, so SentimentAgent's internal
-  // NewsFetcher always fell through to a neutral synthetic placeholder
-  // article — real headlines never reached it, from any source, ever. Also
-  // fixed a NaN bug in aggregateArticles() (agents/sentiment-agent.js) that
-  // would have silently zeroed out real news scoring anyway even with a key.
-  // This system already has a connected FinnhubFeed (used for the economic
-  // calendar) with a free market-news endpoint, so reuse it instead of
-  // requiring a second, unset API key.
+  // Also fixed a NaN bug in aggregateArticles() (agents/sentiment-agent.js) that would have silently zeroed out real news scoring anyway even with a key.
   if (finnhubFeed?.enabled?.()) {
     try {
       const isCrypto = symbol.endsWith('USDT') || symbol.endsWith('USDC') || symbol.endsWith('BTC');
       const category = isCrypto ? 'crypto' : 'forex';
       const cached = _newsCache[category];
-      const stale = !cached || (Date.now() - cached.ts) > 5 * 60000; // refresh news every 5 min
+      const stale = !cached || (Date.now() - cached.ts) > 5 * 60000;
       let raw = cached?.articles;
       if (stale) {
         raw = await finnhubFeed.marketNews(category);
         _newsCache[category] = { articles: raw, ts: Date.now() };
       }
       if (Array.isArray(raw) && raw.length) {
-        // Map Finnhub's {headline, summary, datetime (unix seconds), source,
-        // url} shape to what NLPAnalyzer.aggregateArticles() expects.
         data.articles = raw.slice(0, 20).map(a => ({
           title: a.headline,
           description: a.summary,
@@ -1257,7 +1022,6 @@ async function buildSentimentExternalData(symbol) {
     }
   }
 
-  // SEC Form 4 insider flow (OpenInsider) — market-wide smart-money bias
   if (insiderIntel && insiderIntel.updatedAt) {
     data.insider = {
       direction: insiderIntel.direction,
@@ -1272,17 +1036,12 @@ async function buildSentimentExternalData(symbol) {
   return data;
 }
 
-// ── 6. Candle ingestion ────────────────────────────────────────────────────
-
 const MAX_CANDLES_PER_TF = 500;
 
 function onCandle({ symbol, timeframe, candle, isClosed }) {
   if (!SYMBOLS.includes(symbol)) return;
   if (!TIMEFRAMES_STR.includes(timeframe)) return;
 
-  // Broker (Exness/MT5) is the price authority. Reject Yahoo/free/third-party
-  // candle updates for a symbol that has a recent broker tick so charts and
-  // signals stay on broker OHLC, not Yahoo mid.
   const src = candle?.source || '';
   const isBroker = src === 'mt5_ea';
   if (!isBroker) {
@@ -1299,19 +1058,14 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
 
   const arr = store[timeframe];
 
-  // Update or push
   if (arr.length && arr[arr.length - 1].timestamp === candle.timestamp) {
-    arr[arr.length - 1] = candle;  // update in-progress candle
+    arr[arr.length - 1] = candle;
   } else {
     arr.push(candle);
     if (arr.length > MAX_CANDLES_PER_TF) arr.shift();
   }
 
-  // FIX: attach real funding/OI (see bybitFundingOI declaration above) to the
-  // candle actually sitting in the store — must happen AFTER the push/replace
-  // above, and must mutate `arr[arr.length-1]` (not the raw `candle` param),
-  // since a later in-progress update would otherwise overwrite it with a
-  // fresh candle object lacking these fields.
+  // FIX: attach real funding/OI (see bybitFundingOI declaration above) to the candle actually sitting in the store — must happen AFTER the push/replace above, and must mutate `arr[arr.length-1]` (not the...
   const liveOI = bybitFundingOI[symbol];
   if (liveOI) {
     const target = arr[arr.length - 1];
@@ -1319,49 +1073,27 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
     if (liveOI.openInterest != null) target.openInterest = liveOI.openInterest;
   }
 
-  // FIX: this was inlined here, reachable ONLY through onCandle() — meaning
-  // any live price source that doesn't go through the full candle pipeline
-  // (Finnhub's WS ticks, the MT5 EA's pushed ticks — see below) fed the
-  // frontend ticker fine but silently skipped executionEngine.onPrice()
-  // entirely, so a manually-tracked forex position only got its TP/SL/BE/
-  // trailing checked on TwelveData's own candle-close cadence — even
-  // though those newer sources are specifically MORE real-time and better
-  // suited to exactly this kind of time-sensitive check. Extracted so any
-  // live price source can drive both without needing a full candle object
-  // or touching candleStores.
+  // FIX: this was inlined here, reachable ONLY through onCandle() — meaning any live price source that doesn't go through the full candle pipeline (Finnhub's WS ticks, the MT5 EA's pushed ticks — see...
   onLivePrice(symbol, candle.close, {
     change: candle.open ? ((candle.close - candle.open) / candle.open * 100) : 0,
   });
 
-  // Only run analysis on closed candles to avoid noise
   if (isClosed) {
     setImmediate(() => runAnalysisCycle(symbol, timeframe));
   }
 }
 
-// FIX: see the comment above where this replaced onCandle()'s inlined
-// version. Drives manual-position TP/SL/BE/trailing monitoring
-// (executionEngine.onPrice) and the frontend's live price ticker
-// (market_update, throttled to ~1/sec/symbol) from ANY price source — a
-// closed/in-progress candle from onCandle() above, or a raw WS trade tick
-// from Finnhub. Deliberately does NOT touch candleStores — TwelveData/
-// Binance/Bybit/onMT5Tick (below) are the sources that feed the OHLC
-// history the agents run technical analysis against; this is purely the
-// real-time layer on top of that.
-// Price authority: broker (mt5_ea) > exchange WS (binance/bybit) > paid APIs
-// > yahoo-free. Free mid rates will NEVER match Exness/MT5 bid-ask — only
-// the EA push (POST /api/ea/prices) can. When a recent broker tick exists,
-// ignore lower-priority sources so the dashboard matches MetaTrader.
+// FIX: see the comment above where this replaced onCandle()'s inlined version.
 const PRICE_SOURCE_RANK = {
   mt5_ea: 100,
   tradingview: 90,
-  deriv: 55,           // free live WS ticks — better than Yahoo, below broker
+  deriv: 55,
   finnhub: 50,
   candle: 40,
   unknown: 0,
 };
-const BROKER_PRICE_HOLD_MS = Number(process.env.BROKER_PRICE_HOLD_MS) || 60000; // keep Exness/MT5 price for 60s — TwelveData/Yahoo cannot overwrite
-const lastPriceBySymbol = {}; // symbol -> { price, source, rank, ts }
+const BROKER_PRICE_HOLD_MS = Number(process.env.BROKER_PRICE_HOLD_MS) || 60000;
+const lastPriceBySymbol = {};
 
 function onLivePrice(symbol, price, { change = null, bias = null, source = 'candle', bid = null, ask = null } = {}) {
   if (!SYMBOLS.includes(symbol)) return;
@@ -1371,15 +1103,13 @@ function onLivePrice(symbol, price, { change = null, bias = null, source = 'cand
   const rank = PRICE_SOURCE_RANK[source] ?? PRICE_SOURCE_RANK.unknown;
   const prev = lastPriceBySymbol[symbol];
 
-  // Higher-authority (MT5) only blocks lower sources while it is FRESH.
   // If the EA / PC is offline, mt5_ea timestamps go stale and Deriv must win.
   const holdMs = source === 'deriv'
-    ? Math.min(BROKER_PRICE_HOLD_MS, 12000) // Deriv can take over 12s after last MT5 tick
+    ? Math.min(BROKER_PRICE_HOLD_MS, 12000)
     : BROKER_PRICE_HOLD_MS;
   if (prev && prev.rank > rank && (now - prev.ts) < holdMs) {
     return;
   }
-  // Same rank throttle: broker ticks can be faster (100ms); others 400ms
   const sameRankMin = source === 'mt5_ea' ? 50 : 400;
   if (prev && prev.rank === rank && (now - prev.ts) < sameRankMin) {
     return;
@@ -1417,24 +1147,7 @@ const TIMEFRAME_MS = {
   D1: 86400e3, W1: 7 * 86400e3,
 };
 
-// FIX: the MT5 EA sits on James's own broker's live tick feed — the single
-// most real-time forex price source available here, cheaper and higher-
-// fidelity than any REST/WS API on a free tier — but its ticks previously
-// only reached onLivePrice() (ticker + position monitoring), never
-// candleStores. That meant the agents' actual technical analysis for forex
-// still depended entirely on TwelveData's rate-limited polling / Finnhub's
-// WS supplement, even on symbols where a much better live feed already
-// existed. This builds real OHLC candles directly from broker ticks, one
-// per configured timeframe (a single tick updates the H1 candle AND the H4
-// candle simultaneously, same as any real market), and calls onCandle()
-// exactly like Binance/TwelveData/Finnhub already do — so isClosed-gated
-// analysis fires on genuine candle-close boundaries, not on every tick.
-// Coexists with TwelveData/Finnhub for the same symbol (both write through
-// onCandle() into the same candleStores slot, keyed by matching wall-clock
-// timestamps) rather than replacing them outright — whichever source has
-// the freshest data for a given candle naturally wins, and MT5 ticks
-// (roughly 1/sec, see mt5/OmniceeEA.mq5's InpPriceSync) will usually be
-// freshest whenever the EA is actually connected and reporting.
+// FIX: the MT5 EA sits on James's own broker's live tick feed — the single most real-time forex price source available here, cheaper and higher- fidelity than any REST/WS API on a free tier — but its...
 const mt5CandleBuilders = {};
 
 function onMT5Tick(symbol, price, { bid, ask, timestamp } = {}) {
@@ -1444,14 +1157,12 @@ function onMT5Tick(symbol, price, { bid, ask, timestamp } = {}) {
 
   for (const tf of TIMEFRAMES_STR) {
     const durationMs = TIMEFRAME_MS[tf];
-    if (!durationMs) continue; // unrecognized timeframe string — skip, don't guess
+    if (!durationMs) continue;
     const bucketStart = Math.floor(now / durationMs) * durationMs;
     const key = `${symbol}_${tf}`;
     const prev = mt5CandleBuilders[key];
 
     if (!prev || prev.timestamp !== bucketStart) {
-      // New bucket — the previous one (if any) is now closed. Finalize it
-      // before starting the new one, so runAnalysisCycle sees a complete bar.
       if (prev) {
         try { onCandle({ symbol, timeframe: tf, candle: { ...prev }, isClosed: true }); }
         catch (e) { log.warn(`onMT5Tick close [${symbol} ${tf}]: ${e.message}`); }
@@ -1472,12 +1183,8 @@ function onMT5Tick(symbol, price, { bid, ask, timestamp } = {}) {
     catch (e) { log.warn(`onMT5Tick update [${symbol} ${tf}]: ${e.message}`); }
   }
 
-  // Always push broker mid to the ticker with highest authority so Yahoo/free
-  // rates cannot overwrite Exness/MT5 prices while the EA is connected.
   onLivePrice(symbol, price, { source: 'mt5_ea', bid, ask });
 }
-
-// ── 7. Instantiate singletons ──────────────────────────────────────────────
 
 let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, institutionalGates,
     adaptiveLearning, drawdownGuard, riskEngine, sessionFilter, correlationFilter, memory,
@@ -1486,30 +1193,17 @@ let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, institutionalGates,
     finnhubFeed, cftcCotFeed, cotParser, executionEngine, opportunityRanker, relativeStrength,
     dataIntegrityMonitor, intermarketAnalyzer, alphaVantageFeed, fmpFeed;
 
-// FIX: several feeds (Bybit, TwelveData, Myfxbook) emit errors
-// in two different shapes — a raw Error (has .message) from the underlying
-// connection, and a { source, error } wrapper from their own parse/poll
-// handlers (the real message is nested at .error.message). Naive
-// `err.message` access silently produces "undefined" or "[object Object]"
-// for the wrapper shape, right when the message is what you need most.
-// Shared here so all four feeds extract it the same, correct way.
+// FIX: several feeds (Bybit, TwelveData, Myfxbook) emit errors in two different shapes — a raw Error (has .message) from the underlying connection, and a { source, error } wrapper from their own...
 function feedErrorMessage(err) {
   return err?.error?.message || err?.message || (typeof err === 'string' ? err : JSON.stringify(err));
 }
 
 function buildSingletons() {
-  // AlertDispatcher
   if (AlertDispatcher && BOT_TOKEN) {
     dispatcher = new AlertDispatcher({ token: BOT_TOKEN, chatIds: CHAT_IDS, store: mongoStore });
     log.info(`AlertDispatcher created — ${CHAT_IDS.length} chat(s) + auto-subscribe enabled`);
 
-    // FIX: the /win, /loss, /be Telegram commands emitted 'trade_outcome' but
-    // nothing in this file ever listened for it — dispatcher._recordOutcome()
-    // sent a confirmation message and recorded the outcome NOWHERE (it called
-    // `this.scorer.recordTradeOutcome()`, and `dispatcher.scorer` is never
-    // assigned anywhere in this codebase). This is the primary real-world way
-    // a manual-mode user reports a trade result, so wire it into the same
-    // pipeline /api/outcomes and the record_outcome socket event already use.
+    // FIX: the /win, /loss, /be Telegram commands emitted 'trade_outcome' but nothing in this file ever listened for it — dispatcher._recordOutcome() sent a confirmation message and recorded the outcome...
     dispatcher.on('trade_outcome', async ({ signalId, outcome, signal }) => {
       if (!recordOutcomeEverywhere) return;
       const result = await recordOutcomeEverywhere({
@@ -1527,7 +1221,6 @@ function buildSingletons() {
     dispatcher = null;
   }
 
-  // DrawdownGuard
   if (DrawdownGuard) {
     drawdownGuard = new DrawdownGuard({
       maxDailyLossPct:  MAX_DAILY_LOSS,
@@ -1540,17 +1233,7 @@ function buildSingletons() {
     });
     log.info('DrawdownGuard created');
 
-    // FIX: risk_update (the frontend's Session PnL / Circuit Breaker /
-    // Sizing display) previously only broadcast from inside the
-    // signal-approval code path (see onSignal-adjacent block further down)
-    // — meaning risk state, which is a standing system property that
-    // exists whether or not any trade has ever happened (circuit breaker
-    // status, current sizing factor), never reached the frontend until
-    // the first signal was approved. A quiet system with zero approved
-    // signals looked completely static even though DrawdownGuard was
-    // tracking real state the entire time. Now also broadcasts on a
-    // timer, independent of signal activity — the on-approval emission
-    // stays as-is for immediate updates right after a trade.
+    // FIX: risk_update (the frontend's Session PnL / Circuit Breaker / Sizing display) previously only broadcast from inside the signal-approval code path (see onSignal-adjacent block further down) —...
     if (wsBus) {
       const broadcastRiskUpdate = () => {
         const status = drawdownGuard.getStatus();
@@ -1565,15 +1248,14 @@ function buildSingletons() {
         });
       };
       broadcastRiskUpdate();
-      setInterval(broadcastRiskUpdate, 30000); // every 30s, independent of signal activity
+      setInterval(broadcastRiskUpdate, 30000);
     }
   }
 
-  // SignalScorer — pass circuit breaker state check
   if (SignalScorer) {
     scorer = new SignalScorer({
       minScore:      MIN_SCORE,
-      sessionFilter: !SIGNAL_SOFT_GATES, // soft mode skips dead-zone hard reject in scorer
+      sessionFilter: !SIGNAL_SOFT_GATES,
       newsBlackout:  true,
       requireKillzone: REQUIRE_KZ,
       circuitBreaker: {
@@ -1585,54 +1267,34 @@ function buildSingletons() {
     scorer.on('signal', (sig) => {
       log.info(`[Scorer signal event] ${sig.action} ${sig.symbol} score=${sig.score?.final}`);
     });
-    // FIX: AlertDispatcher was constructed without `scorer` in its config,
-    // so this.scorer was always null in production — silently no-opping the
-    // WIN/LOSS/BE handler's scorer.recordTradeOutcome() call and leaving
-    // getStats()'s scorer/risk/signals fields permanently empty.
+    // FIX: AlertDispatcher was constructed without `scorer` in its config, so this.scorer was always null in production — silently no-opping the WIN/LOSS/BE handler's scorer.recordTradeOutcome() call and...
     if (dispatcher) dispatcher.scorer = scorer;
     log.info('SignalScorer created');
   } else {
     log.error('SignalScorer module missing — signals cannot be scored');
   }
 
-  // Getter (not a captured snapshot) so a future /outlook command always
-  // reads whatever regimeEngine/candleStores/sessionFilter/cotParser
-  // currently hold, regardless of the order the rest of this init
-  // sequence assigns them in.
   if (dispatcher) {
     dispatcher.getMarketOutlookDeps = () => ({ regimeEngine, candleStores, sessionFilter, cotParser, symbols: SYMBOLS });
   }
 
-  // FIX: manual-mode.js's ExecutionEngine (~1,700 lines — SignalJournal,
-  // RiskEnforcer, PriceMonitor, partial TP/trailing/breakeven tracking) was
-  // imported nowhere in the entire codebase. Mode is MANUAL (not SEMI_AUTO):
-  // no exchange orders are placed — that's what the MT5 EA bridge is for.
-  // This purely tracks trades a person takes manually off the Telegram
-  // signal, with real price-driven TP/SL/BE/trail detection instead of the
-  // WIN/LOSS/BE buttons' guessed R-multiples.
+  // FIX: manual-mode.js's ExecutionEngine (~1,700 lines — SignalJournal, RiskEnforcer, PriceMonitor, partial TP/trailing/breakeven tracking) was imported nowhere in the entire codebase.
   if (ExecutionEngine && dispatcher) {
     executionEngine = new ExecutionEngine({
       mode: 'MANUAL',
       dispatcher,
       drawdownGuard,
       maxOpenPositions: 5,
-      maxRiskPct: RISK_PCT * 3, // hard ceiling across all concurrently-tracked manual positions
+      maxRiskPct: RISK_PCT * 3,
       sendJournalDaily: true,
     });
-    dispatcher.executionEngine = executionEngine; // consumed by _handleCallback's TAKE/WATCH cases
+    dispatcher.executionEngine = executionEngine;
 
-    // FIX: real, computed P&L from actual price action — closing this loop
-    // properly is what the WIN/LOSS/BE buttons could never do (they only
-    // ever recorded a placeholder R-multiple). Feed the SAME comprehensive
-    // outcome pipeline used by /api/outcomes and the WIN/LOSS/BE fix above.
+    // FIX: real, computed P&L from actual price action — closing this loop properly is what the WIN/LOSS/BE buttons could never do (they only ever recorded a placeholder R-multiple).
     executionEngine.on('position_closed', async ({ position, outcome }) => {
       if (!recordOutcomeEverywhere) return;
       try {
-        // FIX: fetch the actual full stored signal (matching the pattern
-        // /api/outcomes already uses) instead of reconstructing a minimal
-        // one from Position's own limited fields — adaptiveLearning.
-        // recordOutcome()'s fingerprint() needs entry/tradePlan/riskEvaluation
-        // fields that Position doesn't carry.
+        // FIX: fetch the actual full stored signal (matching the pattern /api/outcomes already uses) instead of reconstructing a minimal one from Position's own limited fields — adaptiveLearning.
         const recent = await mongoStore.getRecentSignals?.({ limit: 200 }).catch(() => []);
         const signal = (recent || []).find(s => s.id === position.signalId) || {
           id: position.signalId, symbol: position.symbol, regime: position.regime,
@@ -1640,18 +1302,7 @@ function buildSingletons() {
         };
 
         const liveEngines = require('./api/realtime').getEngines();
-        // FIX: refactored to use the shared recordOutcomeEverywhere utility
-        // instead of hand-rolled duplicate calls — picks up
-        // institutionalRiskManager.recordTradeResult() and
-        // riskEngine.recordTrade() (feeds the Kelly Criterion overlay) which
-        // this listener was originally missing, and gets cross-path
-        // idempotency for free via mongoStore.getTradeOutcome() (e.g. if
-        // this same signal was somehow also WIN/LOSS/BE-tapped).
-        // drawdownGuard is deliberately OMITTED from the engines object here:
-        // ExecutionEngine._handlePositionClosed() already calls
-        // this._dd.record() directly with the real outcome (see
-        // manual-mode.js) — including it here would double-count this
-        // trade's PnL in the circuit breaker's daily total.
+        // FIX: refactored to use the shared recordOutcomeEverywhere utility instead of hand-rolled duplicate calls — picks up institutionalRiskManager.recordTradeResult() and riskEngine.recordTrade() (feeds...
         const { drawdownGuard: _omit, ...engines } = liveEngines;
         const result = await recordOutcomeEverywhere({
           signalId: position.signalId, signal, outcome, mongoStore, engines,
@@ -1667,13 +1318,11 @@ function buildSingletons() {
     log.info('ExecutionEngine created (MANUAL mode) — Take/Watch buttons active');
   }
 
-  // SL/TP Engine
   if (SLTPEngine) {
     sltp = new SLTPEngine();
     log.info('SLTPEngine created');
   }
 
-  // EntryOptimizer
   if (EntryOptimizer) {
     entryOptimizer = new EntryOptimizer();
     log.info('EntryOptimizer created');
@@ -1719,7 +1368,6 @@ function buildSingletons() {
     log.info('AdaptiveLearningEngine created (with RL + Mistake Blacklist)');
   }
 
-  // Monte Carlo Simulation Engine
   if (MonteCarloEngine) {
     monteCarlo = new MonteCarloEngine({
       simulations: parseInt(process.env.MC_SIMULATIONS || '5000', 10),
@@ -1729,7 +1377,6 @@ function buildSingletons() {
     log.info('MonteCarloEngine created (5000 sims × 3 methods = 15000 paths)');
   }
 
-  // Bayesian Probability Engine
   if (BayesianEngine) {
     bayesianEng = new BayesianEngine({
       basePrior: parseFloat(process.env.BAYES_PRIOR || '0.50'),
@@ -1738,7 +1385,6 @@ function buildSingletons() {
     log.info('BayesianEngine created (LR + NaiveBayes + BetaBinomial)');
   }
 
-  // Statistical Validator
   if (StatisticalValidator) {
     statValidator = new StatisticalValidator({
       minTestsPassed: parseInt(process.env.STAT_MIN_TESTS || '5', 10),
@@ -1747,7 +1393,6 @@ function buildSingletons() {
     log.info('StatisticalValidator created (10 hypothesis tests)');
   }
 
-  // Walk-Forward Optimizer
   if (WalkForwardOptimizer) {
     walkForward = new WalkForwardOptimizer({
       minSamples: parseInt(process.env.WF_MIN_SAMPLES || '20', 10),
@@ -1756,7 +1401,6 @@ function buildSingletons() {
     log.info('WalkForwardOptimizer created');
   }
 
-  // Ensemble Validation Engine
   if (EnsembleEngine) {
     ensembleEng = new EnsembleEngine({
       minConfidence: parseFloat(process.env.ENSEMBLE_MIN_CONFIDENCE || '60'),
@@ -1764,39 +1408,29 @@ function buildSingletons() {
     log.info('EnsembleEngine created (9-layer consensus validation)');
   }
 
-  // PositionSizer (exported as RiskEngine in position-sizer.js)
   if (RiskEngine) {
     riskEngine = new RiskEngine({
       accountBalance: ACCOUNT_BALANCE,
       riskPct:        RISK_PCT,
       sizingMethod:   'ATR',
-      // FIX: useKelly defaulted to false and _performanceStats had zero real
-      // trade data feeding it (recordTrade() existed with no call sites) —
-      // now wired via signal-pipeline/outcome-recorder.js. Safe to enable:
-      // the Kelly overlay only ever REDUCES size below the ATR-based amount
-      // (see position-sizer.js ~line 465 — `if (kellySize < sizing.units)`),
-      // never increases it, and stays inactive until 10+ real trades exist.
+      // FIX: useKelly defaulted to false and _performanceStats had zero real trade data feeding it (recordTrade() existed with no call sites) — now wired via signal-pipeline/outcome-recorder.js.
       useKelly:       true,
-      // FIX: without this, DrawdownGuard's circuit breaker never actually
-      // influenced position sizing/approval — see position-sizer.js.
+      // FIX: without this, DrawdownGuard's circuit breaker never actually influenced position sizing/approval — see position-sizer.js.
       drawdownGuard,
     });
     log.info('RiskEngine (position sizer) created');
   }
 
-  // SessionFilter
   if (SessionFilter) {
     sessionFilter = new SessionFilter();
     log.info('SessionFilter created');
   }
 
-  // CorrelationFilter
   if (CorrelationFilter) {
     correlationFilter = new CorrelationFilter({ maxOpenPositions: 5 });
     log.info('CorrelationFilter created');
   }
 
-  // MemoryManager (in-memory fallback is built into it)
   if (MemoryManager) {
     memory = new MemoryManager({
       redisUrl:    process.env.REDIS_URL    || null,
@@ -1805,10 +1439,9 @@ function buildSingletons() {
     log.info('MemoryManager created (in-memory fallback active if no Redis/PG)');
   }
 
-  // Signal Monitor - Real-time signal strength tracking
   if (SignalMonitor) {
     signalMonitor = new SignalMonitor({
-      checkIntervalMs: 60000, // Check every minute
+      checkIntervalMs: 60000,
     });
     signalMonitor.on('signal_weakening', (data) => {
       log.warn(`[SignalMonitor] Signal weakening: ${data.signalId} - ${data.alert.message}`);
@@ -1822,9 +1455,7 @@ function buildSingletons() {
       log.warn(`[SignalMonitor] Signal failed: ${data.signalId} - ${data.alert.message}`);
       dispatcher?.sendMessage?.(`❌ *Signal Failed*\n${data.signalId}\n${data.alert.message}`)?.catch(() => {});
     });
-    // FIX: without this handler, SignalMonitor's periodic check_signal ticks
-    // had nothing to act on — no market data was ever fed back in, so
-    // weakening/reversal detection could never actually fire.
+    // FIX: without this handler, SignalMonitor's periodic check_signal ticks had nothing to act on — no market data was ever fed back in, so weakening/reversal detection could never actually fire.
     signalMonitor.on('check_signal', ({ signalId }) => {
       const status = signalMonitor.getSignalStatus(signalId);
       const meta = status?.metadata;
@@ -1848,7 +1479,6 @@ function buildSingletons() {
     log.info('SignalMonitor created');
   }
 
-  // Institutional Risk Manager - Jane Street/Wall Street grade risk management
   if (InstitutionalRiskManager) {
     institutionalRiskManager = new InstitutionalRiskManager({
       accountBalance: ACCOUNT_BALANCE,
@@ -1861,28 +1491,18 @@ function buildSingletons() {
     log.info('InstitutionalRiskManager created (Kelly Criterion, Correlation Analysis, Tail Risk)');
   }
 
-  // Myfxbook Feed - Economic calendar and community sentiment
   if (MyfxbookFeed && process.env.MYFXBOOK_EMAIL && process.env.MYFXBOOK_PASSWORD) {
     myfxbookFeed = new MyfxbookFeed({
       email: process.env.MYFXBOOK_EMAIL,
       password: process.env.MYFXBOOK_PASSWORD,
       pollIntervalMs: 5 * 60000,
     });
-    // FIX: this feed emits 'error' (feeds/myfxbook-feed.js — connection and
-    // poll failures) but had NO listener registered anywhere. Node's
-    // EventEmitter throws synchronously when an 'error' event has zero
-    // listeners — confirmed directly, not assumed. This process does have a
-    // global process.on('uncaughtException') safety net (setupShutdown()
-    // below) that would prevent a hard crash, but relying on that loses all
-    // diagnostic context (which feed, what actually failed) and Node's own
-    // docs explicitly warn against treating that as safe to keep running on.
+    // FIX: this feed emits 'error' (feeds/myfxbook-feed.js — connection and poll failures) but had NO listener registered anywhere.
     myfxbookFeed.on('error', (err) => log.error(`MyfxbookFeed error: ${feedErrorMessage(err)}`));
     myfxbookFeed.on('economic_surprise', (data) => {
       log.info(`[Myfxbook] Economic surprise: ${data.event.name} - ${data.impact}`);
       dispatcher?.sendMessage?.(`📊 *Economic Surprise*\n${data.event.name}\nImpact: ${data.impact}\nCurrencies: ${data.affectedCurrencies.join(', ')}`)?.catch(() => {});
-      // FIX: this event only ever reached Telegram — the web/Mini App
-      // frontend had zero visibility into institutional flow data despite
-      // the backend fully computing it. Relay to the live dashboard too.
+      // FIX: this event only ever reached Telegram — the web/Mini App frontend had zero visibility into institutional flow data despite the backend fully computing it.
       wsBus?.emit('intel', { kind: 'economic_surprise', ...data, timestamp: Date.now() });
     });
     myfxbookFeed.on('extreme_retail_positioning', (data) => {
@@ -1898,8 +1518,6 @@ function buildSingletons() {
     log.warn('MyfxbookFeed disabled - missing credentials or module');
   }
 
-  // OpenInsider Feed — SEC Form 4 insider trading (cluster buys / executive flow)
-  // Infused into SentimentAgent as market-wide risk-on/risk-off smart-money bias.
   if (OpenInsiderFeed) {
     openInsiderFeed = new OpenInsiderFeed({});
     openInsiderFeed.on('error', (err) => log.error(`OpenInsiderFeed error: ${feedErrorMessage(err)}`));
@@ -1923,12 +1541,9 @@ function buildSingletons() {
     log.info('OpenInsiderFeed created — SEC Form 4 cluster/executive tracking active');
   }
 
-  // Alpha Vantage Feed - macro news sentiment
   if (AlphaVantageFeed) {
     alphaVantageFeed = new AlphaVantageFeed({});
     if (alphaVantageFeed.enabled()) {
-      // Same convention as myfxbookFeed above — an
-      // unhandled 'error' event on an EventEmitter crashes the process.
       alphaVantageFeed.on('error', (err) => log.error(`AlphaVantageFeed error: ${feedErrorMessage(err)}`));
       alphaVantageFeed.on('sentiment_shift', (data) => {
         log.info(`[AlphaVantage] Macro sentiment shifted to ${data.label} (${data.score}, ${data.articleCount} articles)`);
@@ -1941,25 +1556,10 @@ function buildSingletons() {
     }
   }
 
-  // FIX: FinnhubFeed existed but was never instantiated anywhere, and its
-  // economic-calendar data (added alongside this fix) was the missing real
-  // data source for sessionFilter's EconomicCalendarTierSystem — that gate
-  // was fully built and (as of an earlier fix this session) correctly
-  // consulted before every trade, but nothing ever fed it real events, so it
-  // silently reported "CLEAR" 100% of the time. Poll it periodically here.
-  // FIX: this poll used to run only when Finnhub was configured, meaning
-  // sessionFilter's EconomicCalendarTierSystem gate had zero real event
-  // awareness whenever FINNHUB_API_KEY was unset (or Finnhub had an outage
-  // or hit its quota) — a single point of failure feeding a safety-critical
-  // blackout gate. FMPFeed (feeds/fmp-feed.js) is a second, independent
-  // source normalized to the identical shape; either feed alone is enough
-  // to keep the gate fed, and having both gives real redundancy instead of
-  // a silent single point of failure.
+  // FIX: FinnhubFeed existed but was never instantiated anywhere, and its economic-calendar data (added alongside this fix) was the missing real data source for sessionFilter's EconomicCalendarTierSystem...
   if (FinnhubFeed) finnhubFeed = new FinnhubFeed({ apiKey: process.env.FINNHUB_API_KEY || '' });
   if (FMPFeed)     fmpFeed     = new FMPFeed({ apiKey: process.env.FMP_API_KEY || '' });
 
-  // Always poll calendar: Forex Factory JSON is free (no key). Finnhub/FMP
-  // only add redundancy when their paid/plan endpoints work.
   {
     let ffCalendar = null;
     if (ForexFactoryCalendar) {
@@ -1980,8 +1580,6 @@ function buildSingletons() {
         try { raw.push(...await fmpFeed.economicCalendar()); }
         catch (err) { log.warn(`FMP economic calendar poll failed: ${err.message}`); }
       }
-      // Dedupe: same currency + same normalized name within a 30-minute
-      // window counts as one release reported by two providers, not two.
       const events = [];
       for (const e of raw) {
         const key = e.name.toLowerCase().replace(/[^a-z]/g, '');
@@ -1993,11 +1591,7 @@ function buildSingletons() {
       }
       try {
         if (sessionFilter?.addNewsEvents && events.length) {
-          // FIX: only use a provider's impact rating to PROMOTE an event that
-          // none of EconomicCalendarTierSystem._inferTier's own name-regexes
-          // would catch — never to override/downgrade a name that's already
-          // correctly recognized. Mirrors _inferTier's tier1/tier2/tier3
-          // patterns so a same-tier or higher inference always wins.
+          // FIX: only use a provider's impact rating to PROMOTE an event that none of EconomicCalendarTierSystem._inferTier's own name-regexes would catch — never to override/downgrade a name that's already...
           const TIER1_RE = /nfp|non.?farm|fomc|cpi|rate decision|interest rate/i;
           const TIER2_RE = /gdp|pmi|retail sales|unemployment/i;
           const TIER3_RE = /building permit|confidence|trade balance/i;
@@ -2006,7 +1600,7 @@ function buildSingletons() {
             currency: e.currency,
             time: e.time,
             tier: TIER1_RE.test(e.name) || TIER2_RE.test(e.name) || TIER3_RE.test(e.name)
-              ? undefined // let _inferTier's own regex classify it
+              ? undefined
               : e.tierHint
                 || (e.impact === 'high' || e.impact === 'High' ? 'TIER_1'
                 : e.impact === 'medium' || e.impact === 'Medium' ? 'TIER_2'
@@ -2025,41 +1619,28 @@ function buildSingletons() {
       }
     };
     pollEconomicCalendar();
-    // Retry after 2 min (boot race / cold start), then every hour
     setTimeout(pollEconomicCalendar, 2 * 60000);
     setInterval(pollEconomicCalendar, 1 * 3600000);
   }
   log.info(finnhubFeed?.enabled() ? 'FinnhubFeed created' : 'FinnhubFeed disabled - missing FINNHUB_API_KEY');
   log.info(fmpFeed?.enabled() ? 'FMPFeed created' : 'FMPFeed disabled - missing FMP_API_KEY');
 
-  // FIX: real COT (Commitment of Traders) data — CFTCCotFeed and
-  // COTReportParser were fully built but nothing anywhere fetched real CFTC
-  // data or fed it to them. Free public API, no key required, updates
-  // weekly (Fridays ~15:30 ET). See buildSentimentExternalData() below for
-  // how this gets bridged into SentimentAgent's expected shape.
+  // FIX: real COT (Commitment of Traders) data — CFTCCotFeed and COTReportParser were fully built but nothing anywhere fetched real CFTC data or fed it to them.
   if (CFTCCotFeed && COTReportParser) {
     cftcCotFeed = new CFTCCotFeed();
     cotParser = new COTReportParser();
     log.info(`CFTCCotFeed created — supports: ${cftcCotFeed.supportedSymbols().join(', ')}`);
   }
 
-  // FIX: publish the live singleton instances so api/server.js's /api/outcomes
-  // handler can record real trade outcomes into the SAME objects this pipeline
-  // actually consults during scoring — see api/realtime.js for the full story.
+  // FIX: publish the live singleton instances so api/server.js's /api/outcomes handler can record real trade outcomes into the SAME objects this pipeline actually consults during scoring — see...
   try {
     require('./api/realtime').setEngines({
       adaptiveLearning, bayesianEng, walkForward, institutionalGates,
       drawdownGuard, sessionFilter, riskEngine, institutionalRiskManager,
       opportunityRanker, relativeStrength, dataIntegrityMonitor, executionEngine,
       auditTrail, symbolManager, cotParser, memory,
-      // For GET /api/outlook (signal-pipeline/market-outlook.js)
       regimeEngine, candleStores, symbols: SYMBOLS,
-      // For POST /api/ea/prices (api/server.js): onLivePrice for the
-      // ticker/position-monitoring layer, onMT5Tick for the actual OHLC
-      // candle building — see onMT5Tick()'s own comment for why broker
-      // ticks now drive candleStores directly instead of only the ticker.
       onLivePrice, onMT5Tick,
-      // Live price authority map (source=mt5_ea when Exness EA is connected)
       lastPriceBySymbol,
     });
     log.info('Live engine singletons published for outcome-feedback wiring');
@@ -2068,22 +1649,12 @@ function buildSingletons() {
   }
 }
 
-// ── 8. Build feeds ─────────────────────────────────────────────────────────
-
 function buildFeeds() {
   const feeds = [];
 
-  // Separate crypto vs forex/commodity symbols
   const cryptoSymbols = SYMBOLS.filter(s => s.endsWith('USDT') || s.endsWith('USDC') || s.endsWith('BTC'));
   const fxSymbols     = SYMBOLS.filter(s => !cryptoSymbols.includes(s));
 
-
-
-
-  // Deriv — free live ticks over WebSocket (no MT5, no card).
-  // Prices are Deriv's feed, not Exness. Ranked below MT5 when EA is live.
-  // App ID: free at api.deriv.com — or leave blank to use public sample 1089.
-  // LIVE TICKS + OHLC: Deriv + MT5 only
   if (DerivFeed && SYMBOLS.length && process.env.DISABLE_DERIV !== '1') {
     const derivFeed = new DerivFeed({
       symbols: SYMBOLS,
@@ -2091,15 +1662,12 @@ function buildFeeds() {
     });
     derivFeed.on('price', ({ symbol, price, bid, ask, change }) => {
       const last = lastPriceBySymbol[symbol];
-      // Only block if MT5 tick is truly fresh (<12s). PC off => Deriv takes over.
       if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < 12000) {
         return;
       }
       onLivePrice(symbol, price, { source: 'deriv', change, bid, ask });
-      // Build/update forming M5 + H1 bars so chart works without waiting for history
       try {
         if (typeof onMT5Tick === 'function') {
-          // reuse candle builder path with deriv source identity via price only
         }
         for (const tf of ['M5', 'H1']) {
           if (!candleStores[symbol]) candleStores[symbol] = {};
@@ -2139,11 +1707,8 @@ function buildFeeds() {
     log.info(`DerivFeed (primary free live) for: ${SYMBOLS.join(', ')}`);
   }
 
-  // Yahoo OHLC — BOOTSTRAP ONLY when broker (Exness/MT5) is not feeding.
-  // Live prices and live candles come from OmniceeEA → POST /api/ea/prices.
   // Yahoo never overwrites a symbol that has a recent mt5_ea tick.
 
-  // Surface Finnhub in Monitor when a key is present (news + optional FX stream)
   if (dataIntegrityMonitor && finnhubFeed?.enabled?.()) {
     dataIntegrityMonitor.registerFeed('Finnhub', finnhubFeed, fxSymbols.length ? fxSymbols : SYMBOLS);
   }
@@ -2162,8 +1727,6 @@ function buildFeeds() {
 
   return feeds;
 }
-
-// ── 9. Graceful shutdown ───────────────────────────────────────────────────
 
 function setupShutdown(feeds) {
   async function shutdown(signal) {
@@ -2190,8 +1753,6 @@ function setupShutdown(feeds) {
   });
 }
 
-// ── 10. Main boot ──────────────────────────────────────────────────────────
-
 async function main() {
   log.info('╔══════════════════════════════════════╗');
   log.info('║  OMNICEE  — Institutional Grade v2   ║');
@@ -2201,35 +1762,28 @@ async function main() {
   log.info(`Timeframes: ${TIMEFRAMES_STR.join(', ')}`);
   log.info(`Min score:  ${MIN_SCORE} | Risk: ${RISK_PCT}% | Max DD: ${MAX_DRAWDOWN}%`);
 
-  // a. Build all singletons (scorer, dispatcher, risk, memory)
   buildSingletons();
 
-  // b. Init agents per symbol
   for (const sym of SYMBOLS) {
     initAgentsForSymbol(sym);
   }
 
-  // c. Init Telegram bot
   if (dispatcher) {
     try {
       await dispatcher.init();
       log.info('Telegram bot initialised');
       await dispatcher.sendMessage?.('🚀 *OMNICEE Online*\nSystem initialized. Monitoring markets...');
-      // Share dispatcher with API server for EA endpoints
       try { require('./api/realtime').setDispatcher(dispatcher); } catch (_) {}
     } catch (err) {
       log.error(`Telegram init failed: ${err.message}. Signals will still run — just no Telegram output.`);
     }
   }
 
-  // d. Init memory
   if (memory?.init) {
     try { await memory.init(); } catch (e) { log.warn(`Memory init: ${e.message}`); }
   }
 
-  // e. Build and connect feeds
   const feeds = buildFeeds();
-  // Best-effort self-ping (does not replace UptimeRobot, helps when URL is set)
   const keepUrl = process.env.KEEPALIVE_URL || process.env.RENDER_EXTERNAL_URL;
   if (keepUrl) {
     setInterval(() => {
@@ -2240,7 +1794,6 @@ async function main() {
     }, 4 * 60 * 1000);
     log.info(`Keepalive scheduled for ${keepUrl}`);
   }
-  // Re-publish so /api/market always sees live lastPriceBySymbol updates
   try {
     const rt = require('./api/realtime');
     const prev = rt.getEngines() || {};
@@ -2260,7 +1813,6 @@ async function main() {
     }
   }
 
-  // f. Connect external data feeds
   if (myfxbookFeed) {
     try {
       await myfxbookFeed.connect();
@@ -2270,8 +1822,6 @@ async function main() {
     }
   }
 
-
-  // g0. Connect OpenInsider (SEC Form 4)
   if (openInsiderFeed) {
     try {
       await openInsiderFeed.connect();
@@ -2282,7 +1832,6 @@ async function main() {
     }
   }
 
-  // g. Connect signal monitor
   if (signalMonitor) {
     try {
       await signalMonitor.connect();
@@ -2292,7 +1841,6 @@ async function main() {
     }
   }
 
-  // h. Connect institutional risk manager
   if (institutionalRiskManager) {
     try {
       await institutionalRiskManager.connect();
@@ -2311,20 +1859,7 @@ async function main() {
     log.info('Running in dry-run mode — use the test script to inject synthetic candles');
   }
 
-  // j. Data integrity watchdog — was previously nothing here at all: a feed
-  // that stopped pushing candles without firing an 'error' event (dropped
-  // WS connection, exchange outage) would silently keep the pipeline
-  // scoring against stale, non-moving candles with no log line and no
-  // alert. Checked every 2 minutes; first check delayed 90s to let feeds
-  // finish their initial connect/backfill.
-  //
-  // FIX: the check above only ever logged and reported via /api/health —
-  // it never actually stopped anything. runAnalysisCycle() already has a
-  // symbolManager.isAllowed() gate (built for a future admin blacklist
-  // action), so route staleness into that same gate instead of leaving
-  // this purely observational. Only symbols *this* watchdog blacklisted are
-  // auto-cleared once fresh data resumes — a manual/future blacklist for
-  // some other reason is left alone.
+  // FIX: the check above only ever logged and reported via /api/health — it never actually stopped anything.
   const staleAutoBlacklisted = new Set();
   if (dataIntegrityMonitor) {
     const runIntegrityCheck = () => {
@@ -2374,7 +1909,5 @@ if (require.main === module) {
     process.exit(1);
   });
 }
-
-// ── Exports for testing ────────────────────────────────────────────────────
 
 module.exports = { main, onCandle, runAnalysisCycle, candleStores, agentPool, lastVotes };

@@ -1,80 +1,29 @@
-/**
- * ============================================================
- *  SL/TP ENGINE — Structure-Based Stop Loss + ATR Trailing
- *  AI Trading Assistant · Layer 6 · Signal Pipeline
- * ============================================================
- *
- *  Responsibilities:
- *    - Structure-based SL placement (below OB low / above swing)
- *    - ATR-based SL as fallback + minimum buffer
- *    - Multi-target TP calculation (TP1 1.5R, TP2 3R, TP3 5R)
- *    - OTE / liquidity pool targeting (EQH/EQL)
- *    - Partial close management plan (50% at TP1, trail rest)
- *    - Trailing stop logic (ATR × multiplier, structure-based)
- *    - Breakeven trigger (move SL to entry after TP1)
- *    - R-multiple calculator
- *    - Position lifecycle tracker (entry → TP1 → trail → close)
- *
- *  Input:  signal from smc-agent + scorer + risk-engine position size
- *  Output: complete trade plan with all SL/TP levels + management rules
- *
- *  Usage:
- *    const { SLTPEngine } = require('./sl-tp-engine');
- *    const engine = new SLTPEngine();
- *    const plan = engine.calculate(signal, candles, positionSize);
- * ============================================================
- */
 
 'use strict';
 
 const EventEmitter = require('events');
 
-// ─────────────────────────────────────────────
-//  CONSTANTS
-// ─────────────────────────────────────────────
-
-// ATR period for volatility-based levels
 const ATR_PERIOD = 14;
 
-// Default RR targets
 const RR_TP1 = 1.5;
 const RR_TP2 = 3.0;
 const RR_TP3 = 5.0;
 
-// ATR multipliers
-const ATR_SL_MULT     = 1.5;   // SL = entry ± ATR × 1.5
-const ATR_TRAIL_MULT  = 2.0;   // Trailing stop = ATR × 2.0 behind price
-const ATR_MIN_BUFFER  = 0.5;   // Min buffer from structure = ATR × 0.5
+const ATR_SL_MULT     = 1.5;
+const ATR_TRAIL_MULT  = 2.0;
+const ATR_MIN_BUFFER  = 0.5;
 
-// Breakeven trigger: move SL to entry when this % in profit
-const BE_TRIGGER_PCT = 0.5;   // 50% of way to TP1
+const BE_TRIGGER_PCT = 0.5;
 
-// Partial close plan
 const PARTIAL_CLOSE_PLAN = [
   { atTP: 1, closePct: 0.50, moveSLTo: 'BREAKEVEN', note: 'Close 50% at TP1, move SL to breakeven' },
   { atTP: 2, closePct: 0.30, moveSLTo: 'TP1',       note: 'Close 30% at TP2, trail stop to TP1'   },
   { atTP: 3, closePct: 0.20, moveSLTo: 'TRAIL',     note: 'Close 20% at TP3, let remaining trail'  },
 ];
 
-// ─────────────────────────────────────────────
-//  ATR CALCULATOR
-// ─────────────────────────────────────────────
-
 class ATRCalculator {
-  /**
-   * Calculates Average True Range over N periods.
-   * True Range = max of:
-   *   - current high - current low
-   *   - |current high - previous close|
-   *   - |current low  - previous close|
-   *
-   * @param {Array}  candles  - OHLCV array oldest-first
-   * @param {number} period   - ATR period (default 14)
-   * @returns {number} ATR value
-   */
   static calculate(candles, period = ATR_PERIOD) {
     if (candles.length < period + 1) {
-      // Fallback: simple high-low average
       const recent = candles.slice(-10);
       if (recent.length === 0) return 0;
       return recent.reduce((s, c) => s + (c.high - c.low), 0) / recent.length;
@@ -94,7 +43,6 @@ class ATRCalculator {
       trValues.push(tr);
     }
 
-    // Wilder smoothed ATR
     const initial = trValues.slice(0, period).reduce((s, v) => s + v, 0) / period;
     let atr = initial;
 
@@ -105,10 +53,6 @@ class ATRCalculator {
     return atr;
   }
 
-  /**
-   * Returns ATR history (array of ATR values) for the last N candles.
-   * Useful for dynamic trailing stop calculations.
-   */
   static history(candles, period = ATR_PERIOD, lookback = 20) {
     const result = [];
     const start  = Math.max(period + 1, candles.length - lookback);
@@ -121,20 +65,7 @@ class ATRCalculator {
   }
 }
 
-// ─────────────────────────────────────────────
-//  STRUCTURE LEVEL FINDER
-// ─────────────────────────────────────────────
-
 class StructureLevelFinder {
-  /**
-   * Finds the most recent significant swing low (for long SL placement).
-   * Significant = a swing low that was not immediately violated.
-   *
-   * @param {Array}  candles
-   * @param {number} strength - pivot lookback (default 3)
-   * @param {number} lookback - how many candles back to scan
-   * @returns {number|null} structure low price
-   */
   static findSwingLow(candles, strength = 3, lookback = 30) {
     const scan = candles.slice(-lookback);
     const lows = [];
@@ -147,13 +78,9 @@ class StructureLevelFinder {
       }
     }
 
-    // Return the most recent swing low
     return lows.length > 0 ? lows[lows.length - 1].price : null;
   }
 
-  /**
-   * Finds the most recent significant swing high (for short SL placement).
-   */
   static findSwingHigh(candles, strength = 3, lookback = 30) {
     const scan  = candles.slice(-lookback);
     const highs = [];
@@ -169,20 +96,10 @@ class StructureLevelFinder {
     return highs.length > 0 ? highs[highs.length - 1].price : null;
   }
 
-  /**
-   * Find nearest liquidity pool above/below price.
-   * These become TP magnets (price tends to gravitate to liquidity).
-   *
-   * @param {Array}  candles
-   * @param {number} currentPrice
-   * @param {string} direction - 'LONG' or 'SHORT'
-   * @returns {{ pools: Array }}
-   */
   static findLiquidityPools(candles, currentPrice, direction) {
     const scan   = candles.slice(-100);
     const pools  = [];
 
-    // Equal highs / equal lows (within 0.05%)
     const tolerance = 0.0005;
     const isLong    = direction === 'LONG';
 
@@ -194,19 +111,16 @@ class StructureLevelFinder {
       const c      = scan[i];
 
       if (isLong) {
-        // Look for equal highs ABOVE current price (buy-side liquidity)
         if (c.high > currentPrice && window.every(x => x.high <= c.high)) {
           swingPoints.push(c.high);
         }
       } else {
-        // Look for equal lows BELOW current price (sell-side liquidity)
         if (c.low < currentPrice && window.every(x => x.low >= c.low)) {
           swingPoints.push(c.low);
         }
       }
     }
 
-    // Sort and find clusters
     swingPoints.sort((a, b) => isLong ? a - b : b - a);
 
     let clustered = [];
@@ -239,37 +153,15 @@ class StructureLevelFinder {
   }
 }
 
-// ─────────────────────────────────────────────
-//  STOP LOSS CALCULATOR
-// ─────────────────────────────────────────────
-
 class StopLossCalculator {
-  /**
-   * Calculates structure-based stop loss with ATR buffer.
-   *
-   * Priority:
-   *   1. Below OB low (if OB provided) — tightest, most precise
-   *   2. Below swing low (last significant structure)
-   *   3. ATR × 1.5 fallback
-   *
-   * @param {Object} params
-   * @param {string} params.direction   - 'LONG' or 'SHORT'
-   * @param {number} params.entryPrice
-   * @param {number} params.atr
-   * @param {Array}  params.candles
-   * @param {Object} [params.orderBlock] - OB from SMC agent
-   * @param {Object} [params.smcSignal]  - full signal from smc-agent
-   * @returns {Object} stopLoss
-   */
   static calculate({ direction, entryPrice, atr, candles, orderBlock, smcSignal }) {
     const isLong = direction === 'LONG';
-    const buffer = atr * ATR_MIN_BUFFER; // minimum clearance beyond structure
+    const buffer = atr * ATR_MIN_BUFFER;
 
     let slPrice   = null;
     let slMethod  = null;
     let slNote    = null;
 
-    // ── Method 1: OB-based (most precise) ──
     if (orderBlock) {
       if (isLong) {
         slPrice  = _round(orderBlock.obLow - buffer);
@@ -282,7 +174,6 @@ class StopLossCalculator {
       }
     }
 
-    // ── Method 2: Swing structure ──
     if (!slPrice || Math.abs(slPrice - entryPrice) / entryPrice < 0.002) {
       const structureLevel = isLong
         ? StructureLevelFinder.findSwingLow(candles, 3, 30)
@@ -293,7 +184,6 @@ class StopLossCalculator {
           ? _round(structureLevel - buffer)
           : _round(structureLevel + buffer);
 
-        // Only use if it gives meaningful distance from entry
         const dist = Math.abs(candidate - entryPrice) / entryPrice;
         if (dist >= 0.003) {
           slPrice  = candidate;
@@ -303,7 +193,6 @@ class StopLossCalculator {
       }
     }
 
-    // ── Method 3: ATR fallback ──
     if (!slPrice) {
       slPrice  = isLong
         ? _round(entryPrice - atr * ATR_SL_MULT)
@@ -312,7 +201,6 @@ class StopLossCalculator {
       slNote   = `ATR × ${ATR_SL_MULT} (${_round(atr * ATR_SL_MULT)} points)`;
     }
 
-    // ── Ensure SL is valid (not beyond entry) ──
     if (isLong  && slPrice >= entryPrice) slPrice = _round(entryPrice - atr * ATR_SL_MULT);
     if (!isLong && slPrice <= entryPrice) slPrice = _round(entryPrice + atr * ATR_SL_MULT);
 
@@ -329,18 +217,6 @@ class StopLossCalculator {
     };
   }
 
-  /**
-   * Trailing stop: moves SL up/down as price advances.
-   * Uses ATR × multiplier, recalculated each candle.
-   *
-   * @param {Object} params
-   * @param {string} params.direction
-   * @param {number} params.currentPrice
-   * @param {number} params.currentSL  - existing SL price
-   * @param {number} params.atr
-   * @param {number} [params.mult]     - ATR multiplier (default 2.0)
-   * @returns {{ newSL, moved, delta }}
-   */
   static updateTrailing({ direction, currentPrice, currentSL, atr, mult = ATR_TRAIL_MULT }) {
     const isLong = direction === 'LONG';
 
@@ -348,7 +224,6 @@ class StopLossCalculator {
       ? _round(currentPrice - atr * mult)
       : _round(currentPrice + atr * mult);
 
-    // Only move in the direction of profit
     const shouldMove = isLong
       ? trailLevel > currentSL
       : trailLevel < currentSL;
@@ -366,45 +241,21 @@ class StopLossCalculator {
   }
 }
 
-// ─────────────────────────────────────────────
-//  TAKE PROFIT CALCULATOR
-// ─────────────────────────────────────────────
-
 class TakeProfitCalculator {
-  /**
-   * Calculates TP levels using R-multiples + liquidity pool targeting.
-   *
-   * Logic:
-   *   - TP1 = 1.5R (minimum viable target)
-   *   - TP2 = 3.0R OR nearest strong liquidity pool
-   *   - TP3 = 5.0R OR second liquidity pool
-   *
-   * @param {Object} params
-   * @param {string} params.direction
-   * @param {number} params.entryPrice
-   * @param {number} params.slPrice
-   * @param {Array}  params.candles
-   * @param {Object} [params.smcAnalysis] - full smc-agent analysis
-   * @returns {Object} targets
-   */
   static calculate({ direction, entryPrice, slPrice, candles, smcAnalysis }) {
     const isLong    = direction === 'LONG';
     const riskPts   = Math.abs(entryPrice - slPrice);
 
-    // R-based targets
     const r15  = isLong ? entryPrice + riskPts * RR_TP1 : entryPrice - riskPts * RR_TP1;
     const r30  = isLong ? entryPrice + riskPts * RR_TP2 : entryPrice - riskPts * RR_TP2;
     const r50  = isLong ? entryPrice + riskPts * RR_TP3 : entryPrice - riskPts * RR_TP3;
 
-    // Liquidity pool targets (price magnets)
     const pools = StructureLevelFinder.findLiquidityPools(candles, entryPrice, direction);
 
-    // Match liquidity pools to R-targets (use pool if within 20% of R-target)
     const tp1 = _resolveTarget(r15, pools, direction, 1.5, 'TP1: First take profit — close 50% here');
     const tp2 = _resolveTarget(r30, pools, direction, 3.0, 'TP2: Move SL to TP1, let rest run');
     const tp3 = _resolveTarget(r50, pools, direction, 5.0, 'TP3: Extended target — trailing stop only');
 
-    // EQH / EQL from SMC analysis (highest probability targets)
     let smcTarget = null;
     if (smcAnalysis?.equalLevels) {
       const { eqh, eql } = smcAnalysis.equalLevels;
@@ -453,24 +304,7 @@ class TakeProfitCalculator {
   }
 }
 
-// ─────────────────────────────────────────────
-//  BREAKEVEN MANAGER
-// ─────────────────────────────────────────────
-
 class BreakevenManager {
-  /**
-   * Determines if SL should be moved to breakeven.
-   * Triggers when price has moved BE_TRIGGER_PCT toward TP1.
-   *
-   * @param {Object} params
-   * @param {string} params.direction
-   * @param {number} params.currentPrice
-   * @param {number} params.entryPrice
-   * @param {number} params.tp1Price
-   * @param {number} params.currentSL
-   * @param {boolean} params.beAlreadyMoved
-   * @returns {{ shouldMove, newSL, reason }}
-   */
   static check({ direction, currentPrice, entryPrice, tp1Price, currentSL, beAlreadyMoved }) {
     if (beAlreadyMoved) {
       return { shouldMove: false, newSL: currentSL, reason: 'BE already set' };
@@ -505,17 +339,7 @@ class BreakevenManager {
   }
 }
 
-// ─────────────────────────────────────────────
-//  POSITION LIFECYCLE TRACKER
-// ─────────────────────────────────────────────
-
 class PositionLifecycle {
-  /**
-   * Tracks the state of an open trade through its lifecycle.
-   * States: PENDING → ENTERED → TP1_HIT → TP2_HIT → TP3_HIT/CLOSED
-   *
-   * @param {Object} plan - full trade plan from SLTPEngine
-   */
   constructor(plan) {
     this.plan       = plan;
     this.state      = 'PENDING';
@@ -525,25 +349,13 @@ class PositionLifecycle {
     this.tp1Hit     = false;
     this.tp2Hit     = false;
     this.beSet      = false;
-    this.sizeRemaining = 1.0; // as fraction of original size (1.0 = 100%)
+    this.sizeRemaining = 1.0;
     this.log        = [];
     this.pnlR       = 0;
-    // FIX: riskPts used to be recomputed from entryPrice vs currentSL on every
-    // update() call. Once BreakevenManager/TP1 moves currentSL to entryPrice,
-    // that distance collapses to 0, turning every subsequent pnlR calculation
-    // (and the SL-hit R multiple) into NaN/Infinity for the rest of the trade.
-    // The R-multiple denominator must stay fixed at the ORIGINAL risk taken.
+    // FIX: riskPts used to be recomputed from entryPrice vs currentSL on every update() call.
     this.initialRiskPts = null;
   }
 
-  /**
-   * Update the lifecycle with current price action.
-   * Returns actions to execute.
-   *
-   * @param {number} currentPrice
-   * @param {number} atr - current ATR
-   * @returns {Array} actions
-   */
   update(currentPrice, atr) {
     const actions  = [];
     const isLong   = this.plan.direction === 'LONG';
@@ -568,7 +380,6 @@ class PositionLifecycle {
 
     const riskPts = this.initialRiskPts || Math.abs(this.entryPrice - this.currentSL);
 
-    // ── SL Hit ──
     const slHit = isLong ? currentPrice <= this.currentSL : currentPrice >= this.currentSL;
     if (slHit) {
       this.pnlR  = _round(isLong
@@ -585,7 +396,6 @@ class PositionLifecycle {
       return actions;
     }
 
-    // ── TP1 Hit ──
     if (!this.tp1Hit) {
       const tp1Hit = isLong
         ? currentPrice >= this.plan.targets.tp1.price
@@ -596,7 +406,6 @@ class PositionLifecycle {
         this.state  = 'TP1_HIT';
         this.sizeRemaining -= 0.50;
 
-        // Move SL to breakeven
         this.currentSL = this.entryPrice;
         this.beSet = true;
 
@@ -612,7 +421,6 @@ class PositionLifecycle {
       }
     }
 
-    // ── TP2 Hit ──
     if (this.tp1Hit && !this.tp2Hit) {
       const tp2Hit = isLong
         ? currentPrice >= this.plan.targets.tp2.price
@@ -636,7 +444,6 @@ class PositionLifecycle {
       }
     }
 
-    // ── TP3 Hit ──
     if (this.tp2Hit) {
       const tp3Hit = isLong
         ? currentPrice >= this.plan.targets.tp3.price
@@ -655,7 +462,6 @@ class PositionLifecycle {
         return actions;
       }
 
-      // Trail the remaining position
       if (atr) {
         const trail = StopLossCalculator.updateTrailing({
           direction:    this.plan.direction,
@@ -676,7 +482,6 @@ class PositionLifecycle {
       }
     }
 
-    // ── Breakeven check (before TP1 if not yet set) ──
     if (!this.beSet && this.tp1Hit === false) {
       const be = BreakevenManager.check({
         direction:     this.plan.direction,
@@ -698,7 +503,6 @@ class PositionLifecycle {
       }
     }
 
-    // Update PnL in R
     this.pnlR = _round(isLong
       ? (currentPrice - this.entryPrice) / riskPts
       : (this.entryPrice - currentPrice) / riskPts, 2);
@@ -725,19 +529,7 @@ class PositionLifecycle {
   }
 }
 
-// ─────────────────────────────────────────────
-//  MAIN SL/TP ENGINE
-// ─────────────────────────────────────────────
-
 class SLTPEngine extends EventEmitter {
-  /**
-   * @param {Object} config
-   * @param {number} config.atrPeriod      - ATR period (default 14)
-   * @param {number} config.atrSLMult      - ATR multiplier for SL (default 1.5)
-   * @param {number} config.atrTrailMult   - ATR multiplier for trail (default 2.0)
-   * @param {number} config.minRR          - minimum RR to accept trade (default 1.5)
-   * @param {boolean} config.useStructure  - use structure-based SL (default true)
-   */
   constructor(config = {}) {
     super();
     this.atrPeriod    = config.atrPeriod    || ATR_PERIOD;
@@ -746,26 +538,9 @@ class SLTPEngine extends EventEmitter {
     this.minRR        = config.minRR        || 1.5;
     this.useStructure = config.useStructure !== false;
 
-    // Active position trackers: signalId → PositionLifecycle
     this._positions   = new Map();
   }
 
-  // ─────────────────────────────────────────────
-  //  MAIN CALCULATE FUNCTION
-  // ─────────────────────────────────────────────
-
-  /**
-   * Takes a raw signal and candle data and returns a complete trade plan.
-   * This is the primary function called after signal-scorer fires a signal.
-   *
-   * @param {Object} signal   - from signal-scorer or smc-agent
-   * @param {Array}  candles  - OHLCV history
-   * @param {Object} [options]
-   * @param {number} [options.positionSize]   - units/contracts
-   * @param {number} [options.accountBalance] - for $ risk display
-   * @param {number} [options.riskPct]        - risk per trade %
-   * @returns {Object} completeTradePlan
-   */
   calculate(signal, candles, options = {}) {
     if (!signal || !candles || candles.length < 20) {
       return { error: 'Invalid input — need signal + candles', plan: null };
@@ -779,20 +554,17 @@ class SLTPEngine extends EventEmitter {
       return { error: 'Signal is WAIT — no trade plan needed', plan: null };
     }
 
-    // ── Calculate ATR ──
     const atr       = ATRCalculator.calculate(candles, this.atrPeriod);
     const atrPct    = _round((atr / candles[candles.length - 1].close) * 100, 4);
     const atrHistory = ATRCalculator.history(candles, this.atrPeriod, 20);
     const atrTrend  = this._classifyATRTrend(atrHistory);
 
-    // ── Determine Entry Price ──
     const entryZoneHigh = signal.entry?.zoneHigh || candles[candles.length - 1].close;
     const entryZoneLow  = signal.entry?.zoneLow  || candles[candles.length - 1].close;
     const entryPrice    = isLong
-      ? _round((entryZoneHigh + entryZoneLow) / 2) // mid of zone
+      ? _round((entryZoneHigh + entryZoneLow) / 2)
       : _round((entryZoneHigh + entryZoneLow) / 2);
 
-    // ── Calculate Stop Loss ──
     const orderBlock = isLong
       ? signal.analysis?.orderBlocks?.bullish?.[0] || signal.agentVotes?.smc?.analysis?.orderBlocks?.bullish?.[0]
       : signal.analysis?.orderBlocks?.bearish?.[0] || signal.agentVotes?.smc?.analysis?.orderBlocks?.bearish?.[0];
@@ -806,12 +578,10 @@ class SLTPEngine extends EventEmitter {
       smcSignal:  signal,
     });
 
-    // ── Override with SMC-provided SL if better ──
     if (signal.stopLoss?.price) {
       const smcSLDist  = Math.abs(signal.stopLoss.price - entryPrice);
       const calcSLDist = Math.abs(stopLoss.price - entryPrice);
 
-      // Use SMC SL if it's tighter and still valid
       if (smcSLDist < calcSLDist && smcSLDist >= atr * 0.5) {
         stopLoss.price   = signal.stopLoss.price;
         stopLoss.method  = 'SMC_PROVIDED';
@@ -819,7 +589,6 @@ class SLTPEngine extends EventEmitter {
       }
     }
 
-    // ── Calculate Take Profits ──
     const targets = TakeProfitCalculator.calculate({
       direction,
       entryPrice,
@@ -828,7 +597,6 @@ class SLTPEngine extends EventEmitter {
       smcAnalysis: signal.analysis || signal.agentVotes?.smc?.analysis,
     });
 
-    // ── Validate Minimum RR ──
     const actualRR = targets.tp1.rr;
     if (actualRR < this.minRR) {
       return {
@@ -839,24 +607,19 @@ class SLTPEngine extends EventEmitter {
       };
     }
 
-    // ── Build Management Rules ──
     const management = this._buildManagementRules(direction, entryPrice, stopLoss.price, targets, atr);
 
-    // ── Dollar Risk Calculation ──
     const dollarRisk = accountBalance && riskPct
       ? _round(accountBalance * (riskPct / 100), 2)
       : null;
 
-    // ── Assemble Complete Trade Plan ──
     const plan = {
-      // Identity
       signalId:   signal.id || signal.signalId || `SL_${Date.now()}`,
       symbol:     signal.symbol,
       timeframe:  signal.timeframe,
       direction,
       generatedAt: new Date().toISOString(),
 
-      // Entry
       entry: {
         zoneHigh:   _round(entryZoneHigh),
         zoneLow:    _round(entryZoneLow),
@@ -865,7 +628,6 @@ class SLTPEngine extends EventEmitter {
         note:       signal.entry?.note || 'Wait for price to enter zone before entering',
       },
 
-      // Stop Loss
       stopLoss: {
         price:      stopLoss.price,
         method:     stopLoss.method,
@@ -875,13 +637,10 @@ class SLTPEngine extends EventEmitter {
         note:       stopLoss.note,
       },
 
-      // Take Profit Targets
       targets,
 
-      // Trade Management
       management,
 
-      // Risk Parameters
       risk: {
         atr:          _round(atr, 5),
         atrPct,
@@ -893,7 +652,6 @@ class SLTPEngine extends EventEmitter {
         partialClose: PARTIAL_CLOSE_PLAN,
       },
 
-      // Market Context
       marketContext: {
         currentPrice:  candles[candles.length - 1].close,
         atr,
@@ -908,31 +666,12 @@ class SLTPEngine extends EventEmitter {
     return { plan, error: null };
   }
 
-  // ─────────────────────────────────────────────
-  //  POSITION LIFECYCLE
-  // ─────────────────────────────────────────────
-
-  /**
-   * Register a new open position for lifecycle tracking.
-   *
-   * @param {string} signalId
-   * @param {Object} plan  - from calculate()
-   * @returns {PositionLifecycle}
-   */
   openPosition(signalId, plan) {
     const lifecycle = new PositionLifecycle(plan);
     this._positions.set(signalId, lifecycle);
     return lifecycle;
   }
 
-  /**
-   * Update all open positions with current price.
-   * Emits actions (TP_HIT, TRAIL_UPDATED, etc.) for executor.
-   *
-   * @param {number} currentPrice
-   * @param {number} atr
-   * @returns {Map} signalId → actions
-   */
   updatePositions(currentPrice, atr) {
     const results = new Map();
 
@@ -943,7 +682,6 @@ class SLTPEngine extends EventEmitter {
         this.emit('position_actions', { signalId: id, actions, status: lifecycle.getStatus() });
       }
 
-      // Clean up closed positions
       if (lifecycle.state === 'CLOSED') {
         this.emit('position_closed', { signalId: id, status: lifecycle.getStatus() });
         this._positions.delete(id);
@@ -957,29 +695,22 @@ class SLTPEngine extends EventEmitter {
     return this._positions.get(signalId) || null;
   }
 
-  // ─────────────────────────────────────────────
-  //  HELPERS
-  // ─────────────────────────────────────────────
-
   _buildManagementRules(direction, entryPrice, slPrice, targets, atr) {
     const isLong = direction === 'LONG';
     const r      = Math.abs(entryPrice - slPrice);
 
     return {
-      // Entry rules
       entry: [
         `Set LIMIT order at entry zone (${isLong ? targets.tp1.price > entryPrice ? 'zone high' : 'zone low' : 'zone'}), do NOT market chase`,
         `Invalidate setup if price closes ${isLong ? 'below' : 'above'} the zone before filling`,
       ],
 
-      // After entry
       afterEntry: [
         `Initial SL: ${slPrice} — ${isLong ? 'below' : 'above'} structure`,
         `Do NOT move SL further against the trade`,
         `Set TP1 limit at ${targets.tp1.price} immediately after entry`,
       ],
 
-      // After TP1
       afterTP1: [
         `Close 50% of position at TP1 (${targets.tp1.price})`,
         `Move SL to breakeven (${entryPrice}) immediately`,
@@ -987,7 +718,6 @@ class SLTPEngine extends EventEmitter {
         `This trade is now risk-free on remaining size`,
       ],
 
-      // After TP2
       afterTP2: [
         `Close 30% more at TP2 (${targets.tp2.price})`,
         `Move SL to TP1 price (${targets.tp1.price}) to lock in profits`,
@@ -995,14 +725,12 @@ class SLTPEngine extends EventEmitter {
         `Set TP3 target at ${targets.tp3.price}`,
       ],
 
-      // Invalidation
       invalidation: [
         `Signal INVALID if price closes ${isLong ? 'below' : 'above'} ${slPrice}`,
         `Re-evaluate if new CHoCH forms against direction`,
         `Exit immediately if HTF bias flips against trade`,
       ],
 
-      // Quick summary
       summary: `Enter at zone → SL at ${slPrice} → Close 50% at ${targets.tp1.price} (${targets.tp1.rr}R) → trail rest`,
     };
   }
@@ -1017,15 +745,11 @@ class SLTPEngine extends EventEmitter {
       : recentAvg;
 
     const change = (recentAvg - olderAvg) / olderAvg;
-    if (change > 0.15) return 'EXPANDING'; // volatility increasing
-    if (change < -0.15) return 'CONTRACTING'; // volatility decreasing
+    if (change > 0.15) return 'EXPANDING';
+    if (change < -0.15) return 'CONTRACTING';
     return 'STABLE';
   }
 }
-
-// ─────────────────────────────────────────────
-//  UTILITIES
-// ─────────────────────────────────────────────
 
 function _round(n, decimals = 5) {
   return parseFloat(n.toFixed(decimals));
@@ -1034,7 +758,6 @@ function _round(n, decimals = 5) {
 function _resolveTarget(rTarget, pools, direction, rrLabel, defaultNote) {
   const isLong = direction === 'LONG';
 
-  // Find a liquidity pool within 20% of the R-target
   const nearby = pools.filter(p => {
     const dist = Math.abs(p.price - rTarget) / rTarget;
     return dist <= 0.20 && (isLong ? p.price > rTarget * 0.9 : p.price < rTarget * 1.1);
@@ -1056,10 +779,6 @@ function _resolveTarget(rTarget, pools, direction, rrLabel, defaultNote) {
   };
 }
 
-// ─────────────────────────────────────────────
-//  EXPORTS
-// ─────────────────────────────────────────────
-
 module.exports = {
   SLTPEngine,
   ATRCalculator,
@@ -1074,51 +793,4 @@ module.exports = {
   PARTIAL_CLOSE_PLAN,
 };
 
-/**
- * ─────────────────────────────────────────────
- *  USAGE EXAMPLE
- * ─────────────────────────────────────────────
- *
- *  const { SLTPEngine }  = require('./sl-tp-engine');
- *  const { SignalScorer } = require('./signal-scorer');
- *  const { BinanceFeed }  = require('../feeds/binance-ws');
- *
- *  const engine = new SLTPEngine({ minRR: 1.5, useStructure: true });
- *
- *  // After scorer fires a signal:
- *  scorer.on('signal', async (signal) => {
- *    const candles = feed.getCandles(signal.symbol, signal.timeframe);
- *    const { plan, error } = engine.calculate(signal, candles, {
- *      accountBalance: 10000,
- *      riskPct: 1.0,
- *    });
- *
- *    if (error) return console.warn('SL/TP rejected:', error);
- *
- *    console.log('Trade Plan:');
- *    console.log(`  Entry Zone: ${plan.entry.zoneLow} – ${plan.entry.zoneHigh}`);
- *    console.log(`  Stop Loss:  ${plan.stopLoss.price} (${plan.stopLoss.riskPct}%)`);
- *    console.log(`  TP1:        ${plan.targets.tp1.price} (${plan.targets.tp1.rr}R)`);
- *    console.log(`  TP2:        ${plan.targets.tp2.price} (${plan.targets.tp2.rr}R)`);
- *    console.log(`  TP3:        ${plan.targets.tp3.price} (${plan.targets.tp3.rr}R)`);
- *    console.log(plan.management.summary);
- *
- *    // Track the open position
- *    const position = engine.openPosition(signal.id, plan);
- *
- *    // On each new price update:
- *    feed.on('price', ({ symbol, price }) => {
- *      if (symbol !== signal.symbol) return;
- *      const atr = ATRCalculator.calculate(feed.getCandles(symbol, signal.timeframe));
- *      engine.updatePositions(price, atr);
- *    });
- *  });
- *
- *  engine.on('position_actions', ({ signalId, actions }) => {
- *    for (const action of actions) {
- *      console.log(`[${signalId}] ${action.type}: ${action.note}`);
- *      // → pass to alert-dispatcher.js or execution engine
- *    }
- *  });
- * ─────────────────────────────────────────────
- */
+// note}`); // → pass to alert-dispatcher.js or execution engine } });
