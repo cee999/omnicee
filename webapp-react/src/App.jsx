@@ -166,6 +166,23 @@ function ThemeStyle() {
 @keyframes omni-ticker { from { transform: translateX(0); } to { transform: translateX(-50%); } }
       .omni-cmd::placeholder { color: var(--textFaint); }
       .omni-row:hover { background: rgba(255,255,255,0.02); }
+      html, body, #root { width: 100%; max-width: 100vw; overflow-x: hidden; }
+      .omni-root {
+        width: 100%;
+        max-width: 100vw;
+        overflow-x: hidden;
+        min-height: 100dvh;
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+        padding-left: env(safe-area-inset-left, 0px);
+        padding-right: env(safe-area-inset-right, 0px);
+        box-sizing: border-box;
+      }
+      .omni-ticker-wrap { height: 28px; max-width: 100%; }
+      @media (max-width: 640px) {
+        .omni-root { font-size: 12px; }
+        .omni-panel { border-radius: 8px; }
+        .omni-cmd { font-size: 10px !important; }
+      }
     `}</style>
   );
 }
@@ -375,6 +392,11 @@ async function omniFetch(path, timeoutMs = 12000, options = {}) {
     if (res.status === 401) {
       const err = new Error('AUTH_REQUIRED');
       err.code = 'AUTH_REQUIRED';
+      throw err;
+    }
+    if (res.status === 409 || res.status === 429) {
+      const err = new Error(`HTTP ${res.status}`);
+      err.soft = true;
       throw err;
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -686,7 +708,14 @@ function useLiveFeed() {
   const [fetchErrors, setFetchErrors] = useState({});
   const recordFetch = (key, promise) => promise
     .then(r => { setFetchErrors(prev => (prev[key] ? { ...prev, [key]: null } : prev)); return r; })
-    .catch(err => { setFetchErrors(prev => ({ ...prev, [key]: err.message })); throw err; });
+    .catch(err => {
+      const msg = String(err?.message || err || '');
+      // Silent for cold-start / rate-limit / abort — friends should not see a wall of API errors
+      const silent = /409|429|Abort|timeout|AUTH_REQUIRED|Failed to fetch|NetworkError|503|502/i.test(msg);
+      if (!silent) setFetchErrors(prev => ({ ...prev, [key]: msg }));
+      else setFetchErrors(prev => (prev[key] ? { ...prev, [key]: null } : prev));
+      throw err;
+    });
 
   useEffect(() => {
     if (mode !== 'live') return;
@@ -985,7 +1014,7 @@ function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand 
     live: { label: 'Live', color: 'var(--emerald)', pulse: true },
   }[mode] || { label: 'Offline', color: 'var(--coral)', pulse: false };
   return (
-    <div className="flex items-center gap-4 px-4 py-2.5 border-b" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
+    <div className="flex items-center gap-2 sm:gap-4 px-2 sm:px-4 py-2 border-b" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
       <div className="flex items-center gap-2">
         <div className="w-6 h-6 rounded flex items-center justify-center font-display text-[11px] font-bold"
           style={{ background: 'var(--emerald)', color: '#05070a' }}>Ω</div>
@@ -1080,7 +1109,7 @@ function TickerTape({ prices, changes, flash, quotes }) {
 
 function NavBar({ active, onSelect }) {
   return (
-    <div className="flex border-t shrink-0 overflow-x-auto omni-scroll" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
+    <div className="flex border-t shrink-0 overflow-x-auto omni-scroll" style={{ borderColor: 'var(--border)', background: 'var(--panel)', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
       {TABS.map(t => (
         <button
           key={t.key}
@@ -1197,7 +1226,7 @@ function computeBollinger(closes, period = 20, mult = 2) {
   return { upper, lower };
 }
 
-function LiveChart({ symbol, quote, signals, levels }) {
+function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
   const [timeframe, setTimeframe] = useState('H1');
   const [status, setStatus] = useState('loading'); // loading | ok | empty | error
   const [ohlcReadout, setOhlcReadout] = useState(null);
@@ -1494,9 +1523,16 @@ function LiveChart({ symbol, quote, signals, levels }) {
   }, [expanded]);
 
   return (
-    <div className={expanded ? 'fixed inset-0 z-50 flex flex-col p-3' : ''} style={expanded ? { background: 'var(--void)' } : undefined}>
+    <div className={expanded ? 'fixed inset-0 z-50 flex flex-col p-2 sm:p-3' : ''} style={expanded ? { background: 'var(--void)', paddingTop: 'max(8px, env(safe-area-inset-top))', paddingBottom: 'max(8px, env(safe-area-inset-bottom))' } : undefined}>
       <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
-        <div className="flex gap-1 items-center">
+        <div className="flex gap-1 items-center flex-wrap">
+          {typeof onSymbolChange === 'function' && SYMBOLS.map(sym => (
+            <button key={sym} type="button" onClick={() => onSymbolChange(sym)}
+              className="font-mono text-[10px] px-1.5 py-0.5 rounded"
+              style={{ background: symbol === sym ? 'var(--emerald)' : 'var(--panel2)', color: symbol === sym ? '#05070a' : 'var(--textDim)' }}>
+              {symLabel(sym)}
+            </button>
+          ))}
           {TIMEFRAMES.map(tf => (
             <button key={tf} onClick={() => setTimeframe(tf)}
               className="font-mono text-[10px] px-2 py-0.5 rounded"
@@ -1539,7 +1575,7 @@ function LiveChart({ symbol, quote, signals, levels }) {
           </button>
         </div>
       </div>
-      <div className={expanded ? 'relative flex-1' : 'relative h-[200px] md:h-[280px]'}>
+      <div className={expanded ? 'relative flex-1 min-h-0' : 'relative h-[220px] sm:h-[260px] md:h-[300px]'}>
         {status === 'empty' && <div className="absolute inset-0 flex items-center justify-center"><WaitingForBackend height={180} label="No chart data yet — try H1 or wait a minute" /></div>}
         {status === 'error' && <div className="absolute inset-0 flex items-center justify-center"><WaitingForBackend height={180} label="Chart temporarily unavailable — retrying…" /></div>}
         {status === 'loading' && <div className="absolute inset-0 flex items-center justify-center"><WaitingForBackend height={180} label="Loading candles…" /></div>}
@@ -1583,6 +1619,25 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
           ))}
         </div>
       )}
+
+      <div className="omni-panel px-3 py-2">
+        <div className="font-mono text-[10px] uppercase mb-1.5" style={{ color: 'var(--gold)' }}>
+          AI agents · multi-agent score
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {AGENTS.map(name => (
+            <span key={name} className="font-mono text-[9px] px-2 py-1 rounded" style={{ background: 'var(--panel2)', color: 'var(--textDim)', border: '1px solid var(--border)' }}>
+              {name}
+            </span>
+          ))}
+        </div>
+        <div className="font-mono text-[10px] mt-1.5" style={{ color: 'var(--textFaint)' }}>
+          {analysisLive
+            ? `Last live scan: ${analysisLive.symbol || '—'} ${analysisLive.timeframe || ''} ${analysisLive.regime ? '· ' + analysisLive.regime : ''} — agents re-score while prices tick`
+            : 'Agents wait for MT5/Deriv candles, then score each pair (SMC, MTF, Momentum, Volume, Sentiment, Pattern, Fractal, Microstructure)'}
+        </div>
+      </div>
+
       {/* LIVE TICKS FIRST — no scroll required */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_260px] gap-2">
         <div className="omni-panel p-2 md:p-3 order-2 lg:order-1">
@@ -1603,7 +1658,7 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
               {q?.source === 'mt5_ea' && <Pill tone="up">MT5</Pill>}
             </div>
           </div>
-          <LiveChart symbol={chartSymbol} quote={q} signals={chartSignals} levels={levels} />
+          <LiveChart symbol={chartSymbol} quote={q} signals={chartSignals} levels={levels} onSymbolChange={setChartSymbol} />
         </div>
 
         <div className="omni-panel overflow-hidden order-1 lg:order-2 flex flex-col max-h-[320px] lg:max-h-[340px]">
@@ -2145,20 +2200,6 @@ function MonitorTab({ auditLog, feedHealth, uptimeSec, mode, fetchErrors, analys
 
   return (
     <div className="p-4 space-y-4">
-      {activeErrors.length > 0 && (
-        <div className="omni-panel p-4" style={{ borderColor: 'var(--coral)' }}>
-          <SectionHeader icon={ShieldAlert} title="Problems" sub={`${activeErrors.length} API issue(s)`} />
-          <div className="space-y-1.5">
-            {activeErrors.map(([endpoint, message]) => (
-              <div key={endpoint} className="flex items-center gap-2 font-mono text-[11px]">
-                <span className="w-28 shrink-0" style={{ color: 'var(--text)' }}>/api/{endpoint}</span>
-                <span style={{ color: 'var(--coral)' }}>{String(message)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       <div className="omni-panel p-4">
         <SectionHeader
           icon={Database}
