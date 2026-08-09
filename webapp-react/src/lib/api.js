@@ -2,16 +2,8 @@ import { io } from 'socket.io-client';
 
 const APP_TOKEN = import.meta.env.VITE_APP_TOKEN || '';
 
-// FIX: same gap as App.jsx's omniFetch — telegramAuthMiddleware checks for x-telegram-init-data (REST) / auth.initData (socket), but this module never read window.Telegram.WebApp.initData.
-function getTelegramInitData() {
-  try { return window.Telegram?.WebApp?.initData || ''; } catch (_) { return ''; }
-}
-
 function authHeaders() {
-  const h = APP_TOKEN ? { 'x-app-token': APP_TOKEN } : {};
-  const initData = getTelegramInitData();
-  if (initData) h['x-telegram-init-data'] = initData;
-  return h;
+  return APP_TOKEN ? { 'x-app-token': APP_TOKEN } : {};
 }
 
 async function get(path, params = {}) {
@@ -52,13 +44,12 @@ export const OmniceeAPI = {
 export function connectOmniceeSocket(handlers = {}) {
   const socket = io('/', {
     path: '/socket.io',
-    auth: { appToken: APP_TOKEN || undefined, initData: getTelegramInitData() || undefined },
+    auth: { appToken: APP_TOKEN || undefined },
     transports: ['websocket', 'polling'],
   });
 
-  // FIX: this doc comment already promised feed_health/balance/watchlist_ update/abnormal_market/liquidation_cascade (api/server.js does forward() all of them), but the actual subscription list below...
   const channels = [
-    'connected', 'signal', 'market', 'risk', 'stats', 'regime', 'telemetry',
+    'connected', 'signal', 'notification', 'market', 'risk', 'stats', 'regime', 'telemetry',
     'intel', 'feed_health', 'balance', 'watchlist_update', 'abnormal_market',
     'liquidation_cascade', 'outcome_saved', 'outcome_error',
   ];
