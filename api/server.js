@@ -17,6 +17,7 @@ const { createEmailAuthRouter, emailSessionMiddleware, requireEmailAuth, ensureA
 const { FinnhubFeed } = require('../feeds/finnhub-feed');
 const { YahooNewsFeed } = require('../feeds/yahoo-news-feed');
 const { ForexFactoryCalendar } = require('../feeds/forex-factory-calendar');
+const { FMPFeed } = require('../feeds/fmp-feed');
 const { FearGreedFeed } = require('../feeds/fear-greed-feed');
 const { CoinGeckoFeed } = require('../feeds/coingecko-feed');
 const { AdaptiveLearningEngine } = require('../signal-pipeline/adaptive-learning-engine');
@@ -34,6 +35,7 @@ if (!fs.existsSync(path.join(STATIC_ROOT, 'index.html'))) {
 const finnhub = new FinnhubFeed();
 const yahooNews = new YahooNewsFeed();
 const ffCalendar = new ForexFactoryCalendar();
+const fmpFeed = new FMPFeed();
 const fearGreed = new FearGreedFeed();
 const coinGecko = new CoinGeckoFeed();
 const learningEngine = new AdaptiveLearningEngine({ store: db });
@@ -294,56 +296,113 @@ function createApp() {
     res.json({ ok: true, outlook: { ...outlook, news } });
   });
 
-    app.get('/api/calendar', dashboardReadAuth, async (_req, res) => {
+      app.get('/api/calendar', dashboardReadAuth, async (_req, res) => {
     const now = Date.now();
     let events = [];
     let sources = [];
     let feedError = null;
 
-    try {
-      const ff = await ffCalendar.economicCalendar();
-      if (Array.isArray(ff) && ff.length) {
-        events.push(...ff);
-        sources.push('forex-factory');
-      }
-    } catch (err) {
-      feedError = err.message;
-      console.warn('[API] FF calendar:', err.message);
-    }
-
-    // Finnhub fallback / merge when key is set (health shows finnhub:true on Render)
-    try {
-      if (finnhub.enabled()) {
-        const from = new Date(now - 12 * 3600000).toISOString().slice(0, 10);
-        const to = new Date(now + 7 * 86400000).toISOString().slice(0, 10);
-        const fh = await finnhub.economicCalendar(from, to);
-        if (Array.isArray(fh) && fh.length) {
-          for (const e of fh) {
-            events.push({
-              name: e.name || e.event || 'Event',
-              currency: e.currency || e.country || 'USD',
-              time: e.time,
-              impact: e.impact || e.importance || null,
-              forecast: e.estimate ?? e.forecast ?? null,
-              previous: e.prev ?? e.previous ?? null,
-              source: 'finnhub',
-            });
-          }
-          sources.push('finnhub');
+    const pushFf = async () => {
+      try {
+        const ff = await ffCalendar.economicCalendar();
+        if (Array.isArray(ff) && ff.length) {
+          events.push(...ff);
+          sources.push('forex-factory');
         }
+      } catch (err) {
+        feedError = err.message;
+        console.warn('[API] FF calendar:', err.message);
       }
-    } catch (err) {
-      console.warn('[API] Finnhub calendar:', err.message);
-      if (!feedError) feedError = err.message;
+    };
+
+    const pushFinnhub = async () => {
+      try {
+        if (!finnhub.enabled()) return;
+        const from = new Date(now - 24 * 3600000).toISOString().slice(0, 10);
+        const to = new Date(now + 8 * 86400000).toISOString().slice(0, 10);
+        const fh = await finnhub.economicCalendar(from, to);
+        if (!Array.isArray(fh) || !fh.length) {
+          console.warn('[API] Finnhub calendar empty', from, to);
+          return;
+        }
+        const impactMap = (v) => {
+          if (v == null) return null;
+          if (typeof v === 'string') return v;
+          const n = Number(v);
+          if (n >= 3) return 'High';
+          if (n === 2) return 'Medium';
+          if (n === 1) return 'Low';
+          return String(v);
+        };
+        for (const e of fh) {
+          const rawTime = e.time || e.date || e.datetime;
+          let time = NaN;
+          if (typeof rawTime === 'number') time = rawTime < 1e12 ? rawTime * 1000 : rawTime;
+          else if (rawTime) time = new Date(rawTime).getTime();
+          if (!Number.isFinite(time)) continue;
+          events.push({
+            name: e.event || e.name || e.title || 'Economic Event',
+            currency: e.currency || e.country || 'USD',
+            time,
+            impact: impactMap(e.impact ?? e.importance),
+            forecast: e.estimate ?? e.forecast ?? null,
+            previous: e.prev ?? e.previous ?? null,
+            source: 'finnhub',
+          });
+        }
+        sources.push('finnhub');
+      } catch (err) {
+        console.warn('[API] Finnhub calendar:', err.message);
+        if (!feedError) feedError = err.message;
+      }
+    };
+
+    await pushFf();
+    if (events.length < 5) await pushFinnhub();
+
+    if (events.length < 5) {
+      try {
+        if (fmpFeed.enabled()) {
+          const from = new Date(now - 24 * 3600000).toISOString().slice(0, 10);
+          const to = new Date(now + 8 * 86400000).toISOString().slice(0, 10);
+          const rows = await fmpFeed.economicCalendar(from, to);
+          if (Array.isArray(rows) && rows.length) {
+            for (const e of rows) {
+              const time = e.date ? new Date(e.date).getTime() : NaN;
+              if (!Number.isFinite(time)) continue;
+              events.push({
+                name: e.event || e.title || 'Economic Event',
+                currency: e.currency || e.country || 'USD',
+                time,
+                impact: e.impact || null,
+                forecast: e.estimate ?? e.forecast ?? null,
+                previous: e.previous ?? e.prev ?? null,
+                source: 'fmp',
+              });
+            }
+            sources.push('fmp');
+          }
+        }
+      } catch (err) {
+        console.warn('[API] FMP calendar:', err.message);
+      }
     }
 
-    // De-dupe by name+day+currency
+    // Persist last good week in memory on the process (survives 429 for a while)
+    if (!global.__omniCalendarCache) global.__omniCalendarCache = { events: [], ts: 0 };
+    if (events.length) {
+      global.__omniCalendarCache = { events: [...events], ts: now };
+    } else if (global.__omniCalendarCache.events.length && now - global.__omniCalendarCache.ts < 7 * 86400000) {
+      events = global.__omniCalendarCache.events;
+      sources.push('memory-cache');
+    }
+
     const seen = new Set();
     const unique = [];
     for (const e of events) {
       if (!Number.isFinite(e.time)) continue;
       const day = new Date(e.time).toISOString().slice(0, 10);
-      const k = `${(e.name || '').toLowerCase()}|${e.currency}|${day}`;
+      const k = `${String(e.name || '').toLowerCase()}|${e.currency}|${day}`;
       if (seen.has(k)) continue;
       seen.add(k);
       unique.push(e);
@@ -351,15 +410,14 @@ function createApp() {
 
     let upcoming = unique.filter(e => e.time >= now - 12 * 3600000);
     if (!upcoming.length && unique.length) {
-      upcoming = [...unique].sort((a, b) => a.time - b.time).slice(0, 40);
+      upcoming = [...unique].sort((a, b) => a.time - b.time).slice(0, 50);
     }
 
     const rank = (imp) => {
       const i = String(imp || '').toLowerCase();
       if (i === 'high' || i === '3') return 0;
       if (i === 'medium' || i === '2') return 1;
-      if (i === 'low' || i === '1') return 2;
-      return 3;
+      return 2;
     };
     upcoming.sort((a, b) => rank(a.impact) - rank(b.impact) || a.time - b.time);
 

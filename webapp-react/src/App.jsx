@@ -317,6 +317,51 @@ function authHeaders() {
   return h;
 }
 
+
+/** Browser fetch for Forex Factory — Render's IP is often rate-limited (429). */
+async function fetchCalendarFromBrowser() {
+  const url = 'https://nfs.faireconomy.media/ff_calendar_thisweek.json';
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
+    if (!res.ok) throw new Error(`FF HTTP ${res.status}`);
+    const rows = await res.json();
+    if (!Array.isArray(rows)) return [];
+    const now = Date.now();
+    const COUNTRY = {
+      USD: 'USD', US: 'USD', EUR: 'EUR', EU: 'EUR', GBP: 'GBP', UK: 'GBP',
+      JPY: 'JPY', JP: 'JPY', AUD: 'AUD', CAD: 'CAD', NZD: 'NZD', CHF: 'CHF', CNY: 'CNY',
+    };
+    return rows.map((e) => {
+      const time = e.date ? new Date(e.date).getTime() : NaN;
+      const country = e.country || '';
+      return {
+        name: e.title || 'Event',
+        currency: COUNTRY[country] || COUNTRY[String(country).toUpperCase()] || (country.length === 3 ? country : 'USD'),
+        time,
+        impact: e.impact || null,
+        forecast: e.forecast || null,
+        previous: e.previous || null,
+        source: 'forex-factory-browser',
+        hoursAway: Number.isFinite(time) ? Math.round((time - now) / 3600000 * 10) / 10 : null,
+      };
+    }).filter((e) => e.name && Number.isFinite(e.time) && e.time >= now - 12 * 3600000)
+      .sort((a, b) => {
+        const rank = (i) => {
+          const x = String(i || '').toLowerCase();
+          if (x === 'high') return 0;
+          if (x === 'medium') return 1;
+          return 2;
+        };
+        return rank(a.impact) - rank(b.impact) || a.time - b.time;
+      })
+      .slice(0, 80);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function omniFetch(path, timeoutMs = 12000, options = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -703,7 +748,20 @@ function useLiveFeed() {
     };
     const pullSlow = async () => {
       try { const r = await recordFetch('outlook', omniFetch('/api/outlook')); if (!cancelled && r.ok) setOutlook(r.outlook); } catch (_) {}
-      try { const r = await recordFetch('calendar', omniFetch('/api/calendar')); if (!cancelled && r && Array.isArray(r.events)) setCalendar(r.events); else if (!cancelled && r && r.ok === false) setCalendar([]); } catch (_) {}
+      try {
+        let events = [];
+        try {
+          const r = await recordFetch('calendar', omniFetch('/api/calendar'));
+          if (r && Array.isArray(r.events) && r.events.length) events = r.events;
+        } catch (_) {}
+        // If API empty (Render often 429 on Forex Factory), load from the browser IP
+        if (!events.length) {
+          try {
+            events = await fetchCalendarFromBrowser();
+          } catch (_) {}
+        }
+        if (!cancelled) setCalendar(events);
+      } catch (_) {}
       try { const r = await recordFetch('levels', omniFetch('/api/levels')); if (!cancelled && r.ok && r.levels) setLevels(r.levels); } catch (_) {}
       try { const r = await recordFetch('heatmap', omniFetch('/api/heatmap')); if (!cancelled && r.ok) setHeatmapTiles(r.tiles); } catch (_) {}
       try { const r = await recordFetch('audit-trail', omniFetch('/api/audit-trail?limit=50')); if (!cancelled && r.ok) setAuditLog([...(r.nearMisses||[]), ...(r.entries||[])].slice(0, 50)); } catch (_) {}
@@ -1624,37 +1682,7 @@ function SignalsTab({ signals, prices, quotes, auditLog, analysisLive }) {
 
   return (
     <div className="p-4 space-y-3">
-      <div className="omni-panel p-3 font-mono text-[11px]" style={{ color: 'var(--textDim)' }}>
-      </div>
-
-      <div className="omni-panel p-3">
-        <SectionHeader icon={ScrollText} title="Gate checks" sub={`${nearMiss.length} near miss · ${fired.length} fired recently`} />
-        {checks.length === 0 ? (
-          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
-            No checks logged yet. Wait for analysis (needs candles from Deriv or MT5).
-          </div>
-        ) : (
-          <div className="space-y-1 max-h-56 overflow-y-auto omni-scroll">
-            {checks.map((e, i) => (
-              <div key={e.id || i} className="flex flex-wrap items-start gap-2 font-mono text-[10px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
-                <span style={{ color: 'var(--textFaint)' }} className="w-10 shrink-0">{timeAgo(e.timestamp || Date.now())}</span>
-                <span style={{ color: 'var(--text)' }} className="w-16 shrink-0">{e.symbol}</span>
-                {e.fired
-                  ? <span style={{ color: 'var(--emerald)' }}>FIRED</span>
-                  : <span style={{ color: e.nearMiss || Number(e.score) >= 50 ? 'var(--gold)' : 'var(--textFaint)' }}>{e.nearMiss || Number(e.score) >= 50 ? 'NEAR' : 'block'}</span>}
-                {e.score != null && <span style={{ color: 'var(--textDim)' }}>score {e.score}</span>}
-                <span style={{ color: 'var(--textDim)' }} className="min-w-0 break-words flex-1">
-                  {(Array.isArray(e.gatesFailed) && e.gatesFailed.length) ? `failed: ${e.gatesFailed.join(', ')}` : ''}
-                  {(Array.isArray(e.gatesPassed) && e.gatesPassed.length) ? ` · passed: ${e.gatesPassed.join(', ')}` : ''}
-                  {' · '}{(Array.isArray(e.reasons) ? e.reasons : []).join(', ') || 'checked'}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="flex items-center gap-2 flex-wrap">
+<div className="flex items-center gap-2 flex-wrap">
         <SectionHeader icon={Radio} title="Signal Desks" sub={`${filtered.length} signal(s) · MT5 or Deriv prices`} />
         <div className="ml-auto flex gap-1 flex-wrap">
           {Object.keys(DESKS).map(d => (
@@ -1790,11 +1818,39 @@ function SignalsTab({ signals, prices, quotes, auditLog, analysisLive }) {
           ))}
         </div>
       </div>
+
+<div className="omni-panel p-3">
+        <SectionHeader icon={ScrollText} title="Gate checks" sub={`${nearMiss.length} near miss · ${fired.length} fired recently`} />
+        {checks.length === 0 ? (
+          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
+            No checks logged yet. Wait for analysis (needs candles from Deriv or MT5).
+          </div>
+        ) : (
+          <div className="space-y-1 max-h-56 overflow-y-auto omni-scroll">
+            {checks.map((e, i) => (
+              <div key={e.id || i} className="flex flex-wrap items-start gap-2 font-mono text-[10px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
+                <span style={{ color: 'var(--textFaint)' }} className="w-10 shrink-0">{timeAgo(e.timestamp || Date.now())}</span>
+                <span style={{ color: 'var(--text)' }} className="w-16 shrink-0">{e.symbol}</span>
+                {e.fired
+                  ? <span style={{ color: 'var(--emerald)' }}>FIRED</span>
+                  : <span style={{ color: e.nearMiss || Number(e.score) >= 50 ? 'var(--gold)' : 'var(--textFaint)' }}>{e.nearMiss || Number(e.score) >= 50 ? 'NEAR' : 'block'}</span>}
+                {e.score != null && <span style={{ color: 'var(--textDim)' }}>score {e.score}</span>}
+                <span style={{ color: 'var(--textDim)' }} className="min-w-0 break-words flex-1">
+                  {(Array.isArray(e.gatesFailed) && e.gatesFailed.length) ? `failed: ${e.gatesFailed.join(', ')}` : ''}
+                  {(Array.isArray(e.gatesPassed) && e.gatesPassed.length) ? ` · passed: ${e.gatesPassed.join(', ')}` : ''}
+                  {' · '}{(Array.isArray(e.reasons) ? e.reasons : []).join(', ') || 'checked'}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      
     </div>
   );
 }
 
-/* ── INTEL ──────────────────────────────────────────────────────────── */
 function IntelTab({ now, outlook, mode, calendar }) {
   const live = mode === 'live' && outlook;
 
