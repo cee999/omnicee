@@ -2197,7 +2197,7 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
           <LiveChart symbol={chartSymbol} quote={q} signals={chartSignals} levels={levels} onSymbolChange={setChartSymbol} />
         </div>
 
-        <div className="omni-panel overflow-hidden order-2 xl:order-2 flex flex-col max-h-[min(28vh,220px)] sm:max-h-[min(36vh,280px)] xl:max-h-[min(52vh,640px)] min-h-[120px]">
+        <div className="omni-panel overflow-hidden order-2 xl:order-2 flex flex-col max-h-[min(55vh,480px)] sm:max-h-[min(50vh,520px)] xl:max-h-[min(60vh,720px)] min-h-[280px]">
           <div className="px-3 py-2 border-b" style={{ borderColor: 'var(--border)' }}>
             <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>Market Watch · live</span>
           </div>
