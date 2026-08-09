@@ -2201,33 +2201,47 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
           <div className="px-3 py-2 border-b" style={{ borderColor: 'var(--border)' }}>
             <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>Market Watch · live</span>
           </div>
-          <div className="overflow-y-auto omni-scroll flex-1">
-            <div className="grid grid-cols-[1fr_72px_72px] gap-1 px-3 py-1.5 font-mono text-[10px] uppercase sticky top-0" style={{ color: 'var(--textFaint)', background: 'var(--panel)' }}>
-              <span>Symbol</span><span className="text-right">Bid</span><span className="text-right">Ask</span>
+          <div className="overflow-y-auto omni-scroll flex-1 min-w-0">
+            <div
+              className="grid gap-1 px-2 sm:px-3 py-1.5 font-mono text-[9px] sm:text-[10px] uppercase sticky top-0"
+              style={{
+                color: 'var(--textFaint)',
+                background: 'var(--panel)',
+                gridTemplateColumns: 'minmax(0,1.15fr) minmax(0,1fr) minmax(0,1fr)',
+              }}
+            >
+              <span className="min-w-0">Symbol</span>
+              <span className="text-right min-w-0">Bid · buy</span>
+              <span className="text-right min-w-0">Ask · sell</span>
             </div>
             {SYMBOLS.map(sym => {
               const qq = quotes?.[sym];
               const ch = changes?.[sym];
               const up = ch == null ? null : ch >= 0;
+              const bid = qq?.bid ?? qq?.price ?? prices?.[sym];
+              const ask = qq?.ask ?? qq?.price ?? prices?.[sym];
               return (
                 <button
                   key={sym}
                   type="button"
                   onClick={() => setChartSymbol(sym)}
-                  className="omni-row w-full grid grid-cols-[1fr_72px_72px] gap-1 px-3 py-2.5 font-mono text-[12px] text-left border-b"
+                  className="omni-row w-full grid gap-1 px-2 sm:px-3 py-2.5 font-mono text-[11px] sm:text-[12px] text-left border-b min-w-0"
                   style={{
                     borderColor: 'var(--border)',
                     background: chartSymbol === sym ? 'var(--panel2)' : 'transparent',
                     minHeight: 44,
+                    gridTemplateColumns: 'minmax(0,1.15fr) minmax(0,1fr) minmax(0,1fr)',
                   }}
                 >
-                  <span>
-                    <span style={{ color: 'var(--text)' }}>{symLabel(sym)}</span>
-                    {qq?.source === 'mt5_ea' && <span className="ml-1 text-[9px]" style={{ color: 'var(--gold)' }}>L</span>}
-                    {ch != null && <div className="text-[10px]" style={{ color: up ? 'var(--emerald)' : 'var(--coral)' }}>{fmtPct(ch)}</div>}
+                  <span className="min-w-0 overflow-hidden">
+                    <span className="block truncate" style={{ color: 'var(--text)' }}>
+                      {symLabel(sym)}
+                      {qq?.source === 'mt5_ea' && <span className="ml-1 text-[9px]" style={{ color: 'var(--gold)' }}>L</span>}
+                    </span>
+                    {ch != null && <span className="text-[10px]" style={{ color: up ? 'var(--emerald)' : 'var(--coral)' }}>{fmtPct(ch)}</span>}
                   </span>
-                  <span className="text-right self-center" style={{ color: 'var(--coral)' }}>{fmtPrice(sym, qq?.bid ?? qq?.price ?? prices?.[sym])}</span>
-                  <span className="text-right self-center" style={{ color: 'var(--emerald)' }}>{fmtPrice(sym, qq?.ask ?? qq?.price ?? prices?.[sym])}</span>
+                  <span className="text-right self-center min-w-0 tabular-nums truncate" style={{ color: 'var(--coral)' }}>{fmtPrice(sym, bid)}</span>
+                  <span className="text-right self-center min-w-0 tabular-nums truncate" style={{ color: 'var(--emerald)' }}>{fmtPrice(sym, ask)}</span>
                 </button>
               );
             })}
