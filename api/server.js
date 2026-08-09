@@ -234,11 +234,20 @@ function createApp() {
     if (!candles || !candles.length) {
       return res.json({ ok: true, symbol, timeframe, candles: [], note: 'No candle history yet — wait for Deriv/MT5.' });
     }
+    // FIX: prefer bid-based OHLC (bidOpen/bidHigh/bidLow/bidClose, only
+    // present on mt5_ea-sourced bars — see onMT5Tick in index.js) over
+    // the mid-based open/high/low/close every candle already carries.
+    // Mid is what the agents/signal pipeline correctly use and this does
+    // not change that — a chart built from mid can never visually match
+    // the bid/ask the ticker shows above it, on every symbol, always, by
+    // definition of what "mid" means. Falls back to mid for non-EA
+    // sources (Deriv/crypto) which don't carry a separate bid/ask.
     const out = candles.slice(-limit).map(c => {
       const raw = Number(c.timestamp ?? c.time);
       if (!Number.isFinite(raw)) return null;
       const time = Math.floor(raw > 1e12 ? raw / 1000 : raw);
-      const open = Number(c.open), high = Number(c.high), low = Number(c.low), close = Number(c.close);
+      const open = Number(c.bidOpen ?? c.open), high = Number(c.bidHigh ?? c.high),
+            low = Number(c.bidLow ?? c.low), close = Number(c.bidClose ?? c.close);
       if (![time, open, high, low, close].every(Number.isFinite)) return null;
       if (time < 1e8) return null;
       return { time, open, high, low, close, volume: Number(c.volume) || 0 };

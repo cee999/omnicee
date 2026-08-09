@@ -1170,6 +1170,21 @@ function onMT5Tick(symbol, price, { bid, ask, timestamp } = {}) {
       mt5CandleBuilders[key] = {
         timestamp: bucketStart, open: price, high: price, low: price, close: price,
         volume: 0, bid, ask, source: 'mt5_ea',
+        // FIX: chart-vs-ticker mismatch — candleStores' OHLC here is built
+        // from `price`, which api/server.js's /api/ea/prices computes as
+        // (bid+ask)/2 (mid), a deliberate choice for technical analysis
+        // (keeps indicators clean of spread noise) that stays correct and
+        // unchanged for the agents. But the ticker/header display bid and
+        // ask as two separate numbers, and mid sits between them by
+        // definition — so the chart's close could never equal either
+        // number the user is actually looking at above it, on every
+        // symbol, all the time, not just occasionally. MT5 terminals plot
+        // bid for exactly this reason. Track bid's own O/H/L/C alongside
+        // the existing mid-based fields (additive, nothing here changes
+        // what candleStores' open/high/low/close mean or what the agents
+        // read) so /api/candles can serve bid-accurate bars without
+        // touching signal generation's price basis at all.
+        bidOpen: bid, bidHigh: bid, bidLow: bid, bidClose: bid,
       };
     } else {
       prev.high = Math.max(prev.high, price);
@@ -1177,6 +1192,12 @@ function onMT5Tick(symbol, price, { bid, ask, timestamp } = {}) {
       prev.close = price;
       prev.bid = bid;
       prev.ask = ask;
+      if (Number.isFinite(bid)) {
+        if (prev.bidOpen == null) prev.bidOpen = bid;
+        prev.bidHigh = prev.bidHigh != null ? Math.max(prev.bidHigh, bid) : bid;
+        prev.bidLow = prev.bidLow != null ? Math.min(prev.bidLow, bid) : bid;
+        prev.bidClose = bid;
+      }
     }
 
     try { onCandle({ symbol, timeframe: tf, candle: { ...mt5CandleBuilders[key] }, isClosed: false }); }

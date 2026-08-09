@@ -1249,15 +1249,20 @@ function LiveChart({ symbol, quote, signals, levels }) {
   // the header bid/ask readout already uses. Bucketing mirrors index.js's
   // TIMEFRAME_MS math exactly so this bar and the server's eventual
   // closed bar for the same window never disagree on boundaries.
+  // FIX: was using quote.price (mid) here while historical bars now come
+  // bid-based from /api/candles — would've put a visibly different-
+  // looking bar right at the point where the eye compares it to the
+  // ticker most. Use bid (matching the ticker/header's own coral figure)
+  // whenever it exists, same fallback order the ticker itself uses.
   useEffect(() => {
-    const price = Number(quote?.price);
-    if (!candleSeriesRef.current || !Number.isFinite(price)) return;
+    const tickPrice = Number(quote?.bid ?? quote?.price);
+    if (!candleSeriesRef.current || !Number.isFinite(tickPrice)) return;
     const durationMs = TIMEFRAME_MS_CLIENT[timeframe];
     const bucketTime = Math.floor((quote.ts || Date.now()) / durationMs) * (durationMs / 1000);
     const prev = lastBarRef.current;
     const bar = (!prev || prev.time !== bucketTime)
-      ? { time: bucketTime, open: prev ? prev.close : price, high: price, low: price, close: price }
-      : { ...prev, high: Math.max(prev.high, price), low: Math.min(prev.low, price), close: price };
+      ? { time: bucketTime, open: prev ? prev.close : tickPrice, high: tickPrice, low: tickPrice, close: tickPrice }
+      : { ...prev, high: Math.max(prev.high, tickPrice), low: Math.min(prev.low, tickPrice), close: tickPrice };
     lastBarRef.current = bar;
     candleSeriesRef.current.update(bar);
     volumeSeriesRef.current?.update({ time: bar.time, value: lastVolRef.current, color: bar.close >= bar.open ? 'rgba(31,227,168,0.35)' : 'rgba(255,84,112,0.35)' });
@@ -1265,7 +1270,7 @@ function LiveChart({ symbol, quote, signals, levels }) {
     if (cs.length && cs[cs.length - 1].time === bar.time) cs[cs.length - 1] = bar;
     else cs.push(bar);
     applyIndicators(cs);
-  }, [quote?.price, quote?.ts, timeframe]);
+  }, [quote?.bid, quote?.price, quote?.ts, timeframe]);
 
   // Signal overlay: arrows for every signal on this symbol, entry/SL/TP1
   // price lines for only the most recent one (all of them would just be
