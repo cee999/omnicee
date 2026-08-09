@@ -1,0 +1,53 @@
+name: Security hotfix
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply security hardening
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('mt5/OmniceeEA.mq5')
+          s = p.read_text()
+          s2 = re.sub(r'(input string InpEASecret\s*=\s*)"[^"]*";', r'\1"";', s, count=1)
+          if s2 == s:
+              raise SystemExit('Expected InpEASecret declaration not found')
+          p.write_text(s2)
+
+          p = Path('api/server.js')
+          s = p.read_text()
+          old = """  const EA_SECRET = process.env.EA_SECRET || '';\n  // FIX: EA_SECRET was undocumented in .env.example and, when unset, silently left /api/ea/signals — the endpoint that hands out live trading signals to the MT5 EA — open to anyone who finds the URL,...\n  if (!EA_SECRET) {\n    console.warn('[API] EA_SECRET not set — /api/ea/signals is open access (no auth required)');\n  }\n  function eaAuth(req, res, next) {\n    const token = req.headers['x-ea-secret'] || req.query.secret;\n    if (!EA_SECRET) return next();\n    if (token === EA_SECRET) return next();\n    return res.status(401).json({ ok: false, error: 'Invalid EA secret' });\n  }\n"""
+          new = """  const EA_SECRET = String(process.env.EA_SECRET || '').trim();\n  const EA_SECRET_REQUIRED = process.env.NODE_ENV === 'production';\n  function eaAuth(req, res, next) {\n    if (!EA_SECRET) {\n      if (EA_SECRET_REQUIRED) {\n        return res.status(503).json({ ok: false, error: 'EA authentication is not configured' });\n      }\n      return next();\n    }\n    const token = String(req.headers['x-ea-secret'] || '').trim();\n    const crypto = require('crypto');\n    const expected = Buffer.from(EA_SECRET);\n    const supplied = Buffer.from(token);\n    if (supplied.length === expected.length && supplied.length > 0 && crypto.timingSafeEqual(supplied, expected)) {\n      return next();\n    }\n    return res.status(401).json({ ok: false, error: 'Invalid EA secret' });\n  }\n"""
+          if old not in s:
+              raise SystemExit('Expected EA auth block not found')
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path('.env.example')
+          s = p.read_text()
+          s = s.replace('EA_SECRET=\n', 'EA_SECRET=generate-a-long-random-secret\n', 1)
+          p.write_text(s)
+          PY
+
+      - name: Commit hardening and remove temporary workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/security-hotfix.yml
+          git add api/server.js mt5/OmniceeEA.mq5 .env.example
+          git commit -m 'Harden EA authentication and remove exposed secret' || exit 0
+          git push origin main
