@@ -2598,10 +2598,16 @@ function SignalsTab({ signals, prices, quotes, auditLog, analysisLive }) {
   );
 }
 
-function IntelTab({ now, outlook, mode, calendar }) {
+function IntelTab({ now, outlook, mode, calendar, levels }) {
   const live = mode === 'live' && outlook;
 
-  const narrative = live ? (outlook.narrative || 'No narrative generated yet.') : null;
+  const session = live ? (outlook.session || null) : null;
+  const narrativeLines = live
+    ? (Array.isArray(outlook.narrativeLines) && outlook.narrativeLines.length
+        ? outlook.narrativeLines
+        : String(outlook.narrative || '').split(/(?<=\.)\s+/).filter(Boolean))
+    : null;
+
   const regimeRows = live ? (outlook.symbols || []).map(s => ({
     symbol: s.symbol,
     regime: s.regime || '—',
@@ -2612,6 +2618,7 @@ function IntelTab({ now, outlook, mode, calendar }) {
     candleCount: s.candleCount,
     regimeTimeframe: s.regimeTimeframe,
   })) : null;
+
   const cotRows = live
     ? (outlook.symbols || []).filter(s => s.institutionalPositioning).map(s => ({
         currency: s.symbol,
@@ -2620,111 +2627,107 @@ function IntelTab({ now, outlook, mode, calendar }) {
         note: s.institutionalPositioning.note,
       }))
     : null;
-  // Prefer Tier-1, fall back to Tier-2 so the panel is not blank on quiet weeks
-  const calendarRows = live
-    ? (() => {
-        const pool = [
-          ...(outlook.today?.tier1Events || []),
-          ...(outlook.week?.allEvents || []),
-          ...(outlook.week?.tier1Events || []),
-          ...(outlook.week?.tier2Events || []),
-          ...(outlook.week?.tier3Events || []),
-        ];
-        // de-dupe by name+currency
-        const seen = new Set();
-        const unique = [];
-        for (const e of pool) {
-          const k = `${e.name}|${e.currency}|${e.hoursAway}`;
-          if (seen.has(k)) continue;
-          seen.add(k);
-          unique.push(e);
-        }
-        return unique.slice(0, 10).map(e => ({
-          event: `${e.name} (${e.currency})`,
-          impact: e.tier === 'TIER_1' ? 'high' : e.tier === 'TIER_2' ? 'medium' : 'low',
-          mins: Math.max(0, Math.round((e.hoursAway || 0) * 60)),
-          tier: e.tier || 'TIER_3',
-        }));
-      })()
-    : null;
+
+  const calendarRows = Array.isArray(calendar) && calendar.length
+    ? calendar.slice(0, 60).map(e => ({
+        name: e.name,
+        currency: e.currency,
+        impact: e.impact || '—',
+        hoursAway: e.hoursAway,
+      }))
+    : [];
+
+  const highSoon = calendarRows.filter(e =>
+    String(e.impact).toLowerCase() === 'high' && e.hoursAway != null && e.hoursAway >= 0 && e.hoursAway <= 48
+  ).slice(0, 6);
 
   return (
     <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
       <div className="omni-panel p-4">
-        <SectionHeader icon={Globe2} title="Market Outlook" sub={live ? 'live briefing · regime + session + calendar' : undefined} />
-        {narrative ? (
-          <ul className="space-y-1.5 list-none p-0 m-0">
-            {String(narrative).split(/(?<=\.)\s+/).filter(Boolean).map((line, i) => (
-              <li key={i} className="text-[12px] leading-relaxed flex gap-2" style={{ color: 'var(--textDim)' }}>
-                <span style={{ color: 'var(--emerald)', flexShrink: 0 }}>▸</span>
-                <span>{line}</span>
-              </li>
-            ))}
-          </ul>
-        ) : <WaitingForBackend height={60} />}
+        <SectionHeader icon={Globe2} title="What to expect" sub={session ? session.label : (live ? 'live' : undefined)} />
+        {!live ? (
+          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>Waiting for outlook…</div>
+        ) : (
+          <div className="space-y-3">
+            {session && (
+              <div className="font-mono text-[12px] leading-relaxed" style={{ color: 'var(--text)' }}>
+                <span style={{ color: 'var(--emerald)' }}>{session.name}</span>
+                <span style={{ color: 'var(--textFaint)' }}> · {String(session.utcHour).padStart(2, '0')}:00 UTC — </span>
+                <span style={{ color: 'var(--textDim)' }}>{session.note}</span>
+              </div>
+            )}
+            {narrativeLines && narrativeLines.length > 0 ? (
+              <ul className="space-y-1.5 list-none p-0 m-0">
+                {narrativeLines.map((line, i) => (
+                  <li key={i} className="text-[12px] leading-relaxed flex gap-2" style={{ color: i === 0 ? 'var(--text)' : 'var(--textDim)' }}>
+                    <span style={{ color: 'var(--emerald)', flexShrink: 0 }}>▸</span>
+                    <span>{line}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No briefing yet.</div>
+            )}
+            {highSoon.length > 0 && (
+              <div className="pt-2 border-t" style={{ borderColor: 'var(--border)' }}>
+                <div className="font-mono text-[9px] uppercase mb-1.5" style={{ color: 'var(--textFaint)' }}>High impact within 48h</div>
+                {highSoon.map((e, i) => (
+                  <div key={i} className="flex items-center gap-2 font-mono text-[11px] py-0.5">
+                    <Pill tone="down">high</Pill>
+                    <span className="flex-1 min-w-0 truncate" style={{ color: 'var(--textDim)' }}>{e.name}</span>
+                    <span style={{ color: 'var(--textFaint)' }}>{e.currency}</span>
+                    <span style={{ color: 'var(--textFaint)' }}>{e.hoursAway}h</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="omni-panel p-4">
-          <SectionHeader icon={Activity} title="Regime & Tradeability" sub={live ? 'per symbol · needs OHLC candles' : undefined} />
-          {regimeRows === null ? <WaitingForBackend /> : regimeRows.length === 0 ? (
-            <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No symbol data yet.</div>
-          ) : (
-            <div className="space-y-2">
-              {regimeRows.map(r => {
-                const tb = r.tradeability;
-                const tbNum = Number(tb);
-                const tbLabel = Number.isFinite(tbNum) ? String(Math.round(tbNum))
-                  : (tb === 'high' || tb === 'low' || tb === 'medium' ? tb : (r.regime === '—' ? '—' : '—'));
-                const tone = Number.isFinite(tbNum)
-                  ? (tbNum >= 65 ? 'up' : tbNum <= 35 ? 'down' : 'neutral')
-                  : (tb === 'high' ? 'up' : tb === 'low' ? 'down' : 'neutral');
-                return (
-                  <div key={r.symbol} className="py-1.5 border-b" style={{ borderColor: 'var(--border)' }}>
-                    <div className="flex items-center justify-between font-mono text-[11px]">
-                      <span style={{ color: 'var(--text)' }}>{r.symbol}</span>
-                      <span style={{ color: 'var(--textDim)' }}>{r.regime}{r.regimeTimeframe ? ` · ${r.regimeTimeframe}` : ''}</span>
-                      <Pill tone={tone}>{tbLabel}</Pill>
-                    </div>
-                    {r.regime === '—' && r.dataNote ? (
-                      <div className="font-mono text-[9px] mt-0.5" style={{ color: 'var(--gold)' }}>{r.dataNote}</div>
-                    ) : null}
-                    {r.sessionStatus && r.sessionStatus !== 'CLEAR' ? (
-                      <div className="font-mono text-[9px] mt-0.5" style={{ color: 'var(--textFaint)' }}>Session: {r.sessionReason || r.sessionStatus}</div>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
+      <div className="omni-panel p-4">
+        <SectionHeader icon={Activity} title="Regime / Tradeability" sub="per symbol" />
+        {!regimeRows ? (
+          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>Waiting…</div>
+        ) : (
+          <div className="space-y-1 max-h-64 overflow-y-auto omni-scroll">
+            {regimeRows.map(s => (
+              <div key={s.symbol} className="flex items-center gap-2 font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
+                <span className="w-16" style={{ color: 'var(--text)' }}>{s.symbol}</span>
+                <span className="flex-1" style={{ color: 'var(--textDim)' }}>{s.regime}</span>
+                <span style={{ color: 'var(--textFaint)' }}>{s.tradeability != null ? Math.round(Number(s.tradeability)) : '—'}</span>
+                <Pill tone={s.sessionStatus === 'CLEAR' ? 'up' : s.sessionStatus ? 'warn' : 'neutral'}>{s.sessionStatus || '—'}</Pill>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
-        <div className="omni-panel p-4">
-          <SectionHeader icon={ShieldAlert} title="CFTC COT Positioning" sub={live ? 'large-spec net · FX futures only' : undefined} />
-          {cotRows === null ? <WaitingForBackend /> : cotRows.length === 0 ? (
-            <div className="font-mono text-[11px] leading-relaxed" style={{ color: 'var(--textFaint)' }}>
-              No COT rows for current symbols. COT covers CME FX/commodity futures (e.g. EUR, GBP, gold contracts) when the CFTC feed has ingested a weekly report — not crypto spot pairs.
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {cotRows.map(c => (
-                <div key={c.currency} className="flex items-center justify-between font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
-                  <span style={{ color: 'var(--text)' }}>{c.currency}</span>
-                  <span style={{ color: 'var(--textDim)' }}>{c.nonComm}</span>
-                  <Pill tone={String(c.signal || '').toLowerCase().includes('long') ? 'up' : String(c.signal || '').toLowerCase().includes('short') ? 'down' : 'neutral'}>{c.signal || '—'}</Pill>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+      <div className="omni-panel p-4">
+        <SectionHeader icon={Target} title="COT / Positioning" sub="when available" />
+        {!cotRows ? (
+          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>Waiting…</div>
+        ) : cotRows.length === 0 ? (
+          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No COT rows yet.</div>
+        ) : (
+          <div className="space-y-1">
+            {cotRows.map(c => (
+              <div key={c.currency} className="flex items-center justify-between font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
+                <span style={{ color: 'var(--text)' }}>{c.currency}</span>
+                <span style={{ color: 'var(--textDim)' }}>{c.nonComm}</span>
+                <Pill tone={String(c.signal || '').toLowerCase().includes('long') ? 'up' : String(c.signal || '').toLowerCase().includes('short') ? 'down' : 'neutral'}>{c.signal || '—'}</Pill>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="omni-panel p-4">
         <SectionHeader icon={Clock} title="Economic Calendar" sub="Forex Factory · this week · High first" />
-        {Array.isArray(calendar) && calendar.length > 0 ? (
+        {calendarRows.length > 0 ? (
           <div className="space-y-1.5 max-h-80 overflow-y-auto omni-scroll">
-            {calendar.slice(0, 60).map((e, i) => (
-              <div key={`${e.name}-${e.time}-${i}`} className="flex items-center gap-2 font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
+            {calendarRows.map((e, i) => (
+              <div key={`${e.name}-${i}`} className="flex items-center gap-2 font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
                 <Pill tone={String(e.impact).toLowerCase() === 'high' ? 'down' : String(e.impact).toLowerCase() === 'medium' ? 'warn' : 'neutral'}>{e.impact || '—'}</Pill>
                 <span className="flex-1 min-w-0 truncate" style={{ color: 'var(--textDim)' }}>{e.name}</span>
                 <span style={{ color: 'var(--textFaint)' }}>{e.currency}</span>
@@ -2737,7 +2740,7 @@ function IntelTab({ now, outlook, mode, calendar }) {
         ) : (
           <div className="font-mono text-[11px] leading-relaxed space-y-1" style={{ color: 'var(--textFaint)' }}>
             <div>No calendar rows yet.</div>
-            <div>Source: Forex Factory free feed. Opens after deploy + one successful /api/calendar.</div>
+            <div>Source: Forex Factory via /api/calendar after deploy.</div>
           </div>
         )}
       </div>

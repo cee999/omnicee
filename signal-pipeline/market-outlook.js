@@ -1,6 +1,26 @@
 'use strict';
 
 class MarketOutlookBuilder {
+  static sessionInfo(now = Date.now()) {
+    const utcHour = new Date(now).getUTCHours();
+    let name = 'Off-peak';
+    let note = 'Lower volume — fewer high-quality setups expected.';
+    if (utcHour >= 0 && utcHour < 8) {
+      name = 'Asia';
+      note = 'Typically thinner liquidity — wait for clearer structure.';
+    } else if (utcHour >= 8 && utcHour < 13) {
+      name = 'London';
+      note = 'Strong session for FX and gold — look for continuation after London open.';
+    } else if (utcHour >= 13 && utcHour < 16) {
+      name = 'London/NY overlap';
+      note = 'Highest activity window — best liquidity for most pairs.';
+    } else if (utcHour >= 16 && utcHour < 21) {
+      name = 'New York';
+      note = 'US session — watch USD drivers and gold reaction.';
+    }
+    return { name, note, utcHour, label: `${name} (${String(utcHour).padStart(2, '0')}:00 UTC)` };
+  }
+
   static build({ symbols = [], candleStores = {}, regimeEngine, sessionFilter, timeframe = 'H1', fundingSnapshots = null, cotParser = null }) {
     const now = Date.now();
 
@@ -78,11 +98,18 @@ class MarketOutlookBuilder {
       perSymbol.push(entry);
     }
 
+    const session = MarketOutlookBuilder.sessionInfo(now);
+    const narrativeLines = MarketOutlookBuilder._narrative({
+      tier1Today: [], tier1Week: [], tier2Week: [], tier1NextWeek: [], tier2NextWeek: [],
+      perSymbol, session,
+    });
     return {
       generatedAt: now,
+      session,
       symbols: perSymbol,
-      narrative: MarketOutlookBuilder._narrative({ tier1Today: [], tier1Week: [], tier2Week: [], tier1NextWeek: [], tier2NextWeek: [], perSymbol }),
-      note: 'Outlook = regime + session stance per symbol. Calendar is on the Calendar API / News desk only.',
+      narrativeLines,
+      narrative: Array.isArray(narrativeLines) ? narrativeLines.join(' ') : String(narrativeLines || ''),
+      note: 'Outlook = regime + session stance per symbol. Calendar is on /api/calendar / Intel only.',
     };
   }
 
@@ -96,15 +123,10 @@ class MarketOutlookBuilder {
     };
   }
 
-  static _narrative({ tier1Today, tier1Week, tier2Week, tier1NextWeek, tier2NextWeek, perSymbol }) {
+  static _narrative({ tier1Today, tier1Week, tier2Week, tier1NextWeek, tier2NextWeek, perSymbol, session }) {
     const lines = [];
-    const utcHour = new Date().getUTCHours();
-    let sessionName = 'Off-hours';
-    if (utcHour >= 0 && utcHour < 8) sessionName = 'Asia';
-    else if (utcHour >= 8 && utcHour < 13) sessionName = 'London';
-    else if (utcHour >= 13 && utcHour < 21) sessionName = 'New York / London overlap→NY';
-    else sessionName = 'Late NY / thin liquidity';
-    lines.push(`Session context: ${sessionName} (${String(utcHour).padStart(2, '0')}:00 UTC).`);
+    const sess = session || MarketOutlookBuilder.sessionInfo();
+    lines.push(`Session: ${sess.label}. ${sess.note}`);
 
     if (tier1Today.length > 0) {
       const names = tier1Today.map(e => `${e.name} (${e.currency}, ${e.hoursAway.toFixed(1)}h)`).join(', ');
@@ -156,7 +178,7 @@ class MarketOutlookBuilder {
       lines.push('Bottom line: no regime scores yet — system is in price-ticker mode only. Attach MT5 EA or enable Twelve Data for analysis-grade candles.');
     }
 
-    return lines.join(' ');
+    return lines;
   }
 }
 

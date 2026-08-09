@@ -34,7 +34,10 @@ function isValidFromAddress(from) {
 async function sendEmail({ to, subject, text }) {
   const resendKey = process.env.RESEND_API_KEY;
   const DEFAULT_FROM = 'OMNICEE <onboarding@resend.dev>';
-  let from = (process.env.EMAIL_FROM || '').trim() || DEFAULT_FROM;
+  let from = (process.env.EMAIL_FROM || '').trim().replace(/^["']|["']$/g, '') || DEFAULT_FROM;
+  if (from && !from.includes('<') && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(from)) {
+    from = `OMNICEE <${from}>`;
+  }
   if (!isValidFromAddress(from)) {
     console.warn(`[AUTH] Invalid EMAIL_FROM="${from}" — falling back to ${DEFAULT_FROM}`);
     from = DEFAULT_FROM;
