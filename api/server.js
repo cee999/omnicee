@@ -715,6 +715,52 @@ app.get('/api/levels', dashboardReadAuth, (req, res) => {
     }
   });
 
+  // Standalone advanced analysis (Hurst + DFA + FRAMA + Lyapunov) — not wired to signals
+  app.get('/api/analysis', dashboardReadAuth, async (req, res) => {
+    try {
+      const live = getEngines() || {};
+      const { buildAdvancedBoard, analyzeSeries } = require('../signal-pipeline/advanced-analysis');
+      const tfParam = String(req.query.timeframes || 'H1,H4');
+      const timeframes = tfParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+      const symbolQ = String(req.query.symbol || '').toUpperCase().trim();
+
+      if (symbolQ && live.candleStores?.[symbolQ]) {
+        const byTf = live.candleStores[symbolQ];
+        const tfs = {};
+        for (const tf of timeframes) {
+          if (byTf[tf]?.length) tfs[tf] = analyzeSeries(byTf[tf], { symbol: symbolQ, timeframe: tf });
+        }
+        const primary = tfs[timeframes[0]] || Object.values(tfs)[0] || null;
+        return res.json({
+          ok: true,
+          layer: 'advanced_analysis',
+          standalone: true,
+          symbol: symbolQ,
+          result: primary,
+          multi: tfs,
+          note: 'Standalone advanced analysis — independent of signal pipeline',
+        });
+      }
+
+      let symbols = Object.keys(live.candleStores || {});
+      if (req.query.symbols) {
+        symbols = String(req.query.symbols).split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+      }
+      const board = live.candleStores
+        ? buildAdvancedBoard(live.candleStores, symbols, timeframes.length ? timeframes : ['H1', 'H4'])
+        : [];
+      res.json({
+        ok: true,
+        layer: 'advanced_analysis',
+        standalone: true,
+        board,
+        note: 'Standalone advanced analysis — independent of signal pipeline / Hurst engine',
+      });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
   app.get('/api/sentiment', dashboardReadAuth, async (_req, res) => {
     const out = { ok: true, fearGreed: null, crypto: null };
     try { out.fearGreed = await fearGreed.getLatest(); } catch (e) { out.fearGreedError = e.message; }

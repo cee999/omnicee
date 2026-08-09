@@ -1206,9 +1206,9 @@ function useLiveFeed() {
 const TABS = [
   { key: 'DASH', label: 'Home', fkey: 'F1', icon: LayoutDashboard },
   { key: 'SIGNALS', label: 'Signals', fkey: 'F2', icon: Radio },
-  { key: 'NEWS', label: 'News', fkey: 'F3', icon: Newspaper },
-  { key: 'VALID', label: 'Valid', fkey: 'F4', icon: FlaskConical },
-  { key: 'ANALYSIS', label: 'Analysis', fkey: 'F5', icon: Layers },
+  { key: 'ANALYSIS', label: 'Analysis', fkey: 'F3', icon: Layers },
+  { key: 'NEWS', label: 'News', fkey: 'F4', icon: Newspaper },
+  { key: 'VALID', label: 'Valid', fkey: 'F5', icon: FlaskConical },
   { key: 'MONITOR', label: 'System', fkey: 'F6', icon: Activity },
 ];
 
@@ -3029,23 +3029,50 @@ function HeatTab({ heatmapTiles, mode, sentiment }) {
   );
 }
 
-/* ── ANALYSIS (Hurst + hardened DFA) ─────────────────────────────────── */
-function AnalysisTab({ hurstBoard, mode }) {
+/* ── ANALYSIS (standalone advanced fractal layer) ───────────────────── */
+function AnalysisTab({ mode }) {
   const live = mode === 'live';
+  const [board, setBoard] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+  const [ts, setTs] = useState(null);
+  const [selected, setSelected] = useState(null);
+
+  const load = useCallback(async () => {
+    if (!live) return;
+    setLoading(true);
+    setErr(null);
+    try {
+      const r = await omniFetch('/api/analysis?timeframes=H1,H4');
+      if (!r?.ok) throw new Error(r?.error || 'analysis failed');
+      setBoard(Array.isArray(r.board) ? r.board : []);
+      setTs(Date.now());
+    } catch (e) {
+      setErr(e.message || 'fetch error');
+    } finally {
+      setLoading(false);
+    }
+  }, [live]);
+
+  useEffect(() => {
+    load();
+    if (!live) return undefined;
+    const id = setInterval(load, 45000);
+    return () => clearInterval(id);
+  }, [load, live]);
 
   if (!live) {
     return (
       <div className="p-2 sm:p-3 w-full max-w-[100vw]">
         <div className="omni-panel p-4">
-          <SectionHeader icon={Layers} title="Fractal Analysis" />
-          <WaitingForBackend height={240} />
+          <SectionHeader icon={Layers} title="Advanced Analysis" />
+          <WaitingForBackend height={240} label="Standalone analysis needs a live backend + candle history" />
         </div>
       </div>
     );
   }
 
-  const board = Array.isArray(hurstBoard) ? hurstBoard : [];
-  const hurstTone = (pb) => {
+  const playTone = (pb) => {
     if (pb === 'TREND_FOLLOW') return 'up';
     if (pb === 'MEAN_REVERT') return 'warn';
     return 'neutral';
@@ -3056,61 +3083,78 @@ function AnalysisTab({ hurstBoard, mode }) {
     if (a <= 0.42) return 'warn';
     return 'neutral';
   };
-  const tierTone = (t) => {
-    if (t === 'HIGH') return 'up';
-    if (t === 'MEDIUM') return 'warn';
-    return 'neutral';
-  };
 
   return (
     <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
       <div className="omni-panel p-4">
-        <SectionHeader
-          icon={Layers}
-          title="Hurst + DFA Analysis"
-          sub="path-dependence regime · analysis only (does not fire trades)"
-        />
-        <div className="font-mono text-[10px] mb-3" style={{ color: 'var(--textFaint)' }}>
-          R/S Hurst (H) + hardened DFA (α, R²). HIGH confidence required for playbook bias.
-          H / α ≥ 0.58 → persistent / trend-follow · ≤ 0.42 → anti-persistent / mean-revert.
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+          <SectionHeader
+            icon={Layers}
+            title="Advanced Analysis"
+            sub="standalone · Hurst · DFA · FRAMA · Lyapunov — not wired to signals"
+          />
+          <button
+            type="button"
+            onClick={load}
+            disabled={loading}
+            className="omni-chip font-mono text-[11px] px-3 py-1.5 rounded"
+            style={{ background: 'var(--panel2)', color: loading ? 'var(--textFaint)' : 'var(--gold)', border: '1px solid var(--border)' }}
+          >
+            {loading ? 'Scanning…' : 'Refresh'}
+          </button>
         </div>
-        {board.length === 0 ? (
+        <div className="font-mono text-[10px] mb-3" style={{ color: 'var(--textFaint)' }}>
+          Independent path-dependence engine. Does not score signals or size risk.
+          {ts ? ` · last update ${new Date(ts).toISOString().slice(11, 19)} UTC` : ''}
+        </div>
+        {err && (
+          <div className="font-mono text-[11px] mb-2" style={{ color: 'var(--coral)' }}>Error: {err}</div>
+        )}
+        {board.length === 0 && !loading ? (
           <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
-            No Hurst board yet — waiting for enough candles on H1/H4.
+            No analysis yet — need enough H1/H4 candles per symbol.
           </div>
         ) : (
           <div className="space-y-2">
             {board.map((row) => {
-              const dfa = row.dfa || null;
-              const multi = row.multi || {};
+              const H = row.hurst?.H;
+              const dfa = row.dfa;
+              const frama = row.frama;
+              const lyap = row.lyapunov;
+              const open = selected === row.symbol;
               return (
                 <div
-                  key={`${row.symbol}-${row.timeframe}`}
-                  className="omni-row rounded-lg p-3 border"
+                  key={row.symbol}
+                  className="omni-row rounded-lg border"
                   style={{ borderColor: 'var(--border)', background: 'var(--panel2)' }}
                 >
-                  <div className="flex flex-wrap items-center gap-2 mb-2">
+                  <button
+                    type="button"
+                    className="w-full text-left p-3 flex flex-wrap items-center gap-2"
+                    onClick={() => setSelected(open ? null : row.symbol)}
+                  >
                     <span className="font-display text-sm font-semibold tracking-wide" style={{ color: 'var(--text)' }}>
                       {symLabel(row.symbol)}
                     </span>
                     <span className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>
-                      {row.timeframe || 'H1'} · {row.bars ?? '—'} bars
+                      {row.timeframe} · {row.bars ?? '—'} bars
                     </span>
-                    <Pill tone={hurstTone(row.playbook)}>{(row.playbook || 'STAND_ASIDE').replace(/_/g, ' ')}</Pill>
-                    <Pill tone={tierTone(row.confidenceTier)}>{row.confidenceTier || 'LOW'}</Pill>
+                    <Pill tone={playTone(row.playbook)}>{(row.playbook || 'STAND_ASIDE').replace(/_/g, ' ')}</Pill>
                     {row.bias && row.bias !== 'NONE' && (
-                      <Pill tone={row.bias === 'LONG' ? 'up' : 'down'}>{row.bias}</Pill>
+                      <Pill tone={row.bias === 'DIRECTIONAL' ? 'up' : 'warn'}>{row.bias}</Pill>
                     )}
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] font-mono">
+                    <span className="ml-auto font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>
+                      {open ? '▲' : '▼'}
+                    </span>
+                  </button>
+                  <div className="px-3 pb-3 grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] font-mono">
                     <div>
                       <div style={{ color: 'var(--textFaint)' }}>Hurst H</div>
                       <div className="text-[13px] font-semibold" style={{ color: 'var(--gold)' }}>
-                        {row.H != null ? Number(row.H).toFixed(3) : '—'}
+                        {H != null ? Number(H).toFixed(3) : '—'}
                       </div>
                       <div style={{ color: 'var(--textFaint)' }}>
-                        conf {row.confidence != null ? `${Number(row.confidence).toFixed(0)}%` : '—'}
-                        {row.rSquared != null ? ` · R² ${Number(row.rSquared).toFixed(2)}` : ''}
+                        conf {row.hurst?.confidence != null ? `${Number(row.hurst.confidence).toFixed(0)}%` : '—'}
                       </div>
                     </div>
                     <div>
@@ -3119,45 +3163,57 @@ function AnalysisTab({ hurstBoard, mode }) {
                         {dfa?.alpha != null ? Number(dfa.alpha).toFixed(3) : '—'}
                       </div>
                       <div style={{ color: 'var(--textFaint)' }}>
-                        {dfa ? (
-                          <>
-                            conf {Number(dfa.confidence).toFixed(0)}%
-                            {dfa.rSquared != null ? ` · R² ${Number(dfa.rSquared).toFixed(2)}` : ''}
-                          </>
-                        ) : 'need ≥50 returns'}
+                        {dfa ? `R² ${Number(dfa.rSquared ?? 0).toFixed(2)} · conf ${Number(dfa.confidence).toFixed(0)}%` : '—'}
                       </div>
                     </div>
                     <div>
-                      <div style={{ color: 'var(--textFaint)' }}>R/S regime</div>
-                      <div>{row.regime || '—'}</div>
+                      <div style={{ color: 'var(--textFaint)' }}>FRAMA D</div>
+                      <div className="text-[13px] font-semibold">
+                        {frama?.fractalDimension != null ? Number(frama.fractalDimension).toFixed(3) : '—'}
+                      </div>
+                      <div style={{ color: 'var(--textFaint)' }}>{frama?.speed || '—'}</div>
                     </div>
                     <div>
-                      <div style={{ color: 'var(--textFaint)' }}>DFA regime</div>
-                      <div>
-                        {dfa?.regime ? (
-                          <Pill tone={alphaTone(dfa.alpha)}>{String(dfa.regime).replace(/_/g, ' ')}</Pill>
-                        ) : '—'}
+                      <div style={{ color: 'var(--textFaint)' }}>Lyapunov λ</div>
+                      <div className="text-[13px] font-semibold" style={{ color: lyap?.chaotic ? 'var(--coral)' : 'var(--text)' }}>
+                        {lyap?.exponent != null ? Number(lyap.exponent).toFixed(4) : '—'}
                       </div>
+                      <div style={{ color: 'var(--textFaint)' }}>{lyap?.chaotic ? 'CHAOTIC' : 'stable'}</div>
                     </div>
                   </div>
-                  {(row.detail || dfa?.note) && (
-                    <div className="mt-2 font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>
-                      {row.detail || dfa?.note}
-                    </div>
-                  )}
-                  {Object.keys(multi).length > 1 && (
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {Object.entries(multi).map(([tf, m]) => (
-                        <span
-                          key={tf}
-                          className="font-mono text-[10px] px-2 py-1 rounded"
-                          style={{ background: 'var(--panel)', color: 'var(--textFaint)', border: '1px solid var(--border)' }}
-                        >
-                          {tf}: H={m.H != null ? Number(m.H).toFixed(2) : '—'}
-                          {m.dfa?.alpha != null ? ` · α=${Number(m.dfa.alpha).toFixed(2)}` : ''}
-                          {' · '}{(m.playbook || '').replace(/_/g, ' ')}
-                        </span>
-                      ))}
+                  {open && (
+                    <div className="px-3 pb-3 space-y-2 border-t" style={{ borderColor: 'var(--border)' }}>
+                      <div className="font-mono text-[10px] pt-2" style={{ color: 'var(--textFaint)' }}>
+                        {row.detail || row.label}
+                      </div>
+                      {dfa?.note && (
+                        <div className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>{dfa.note}</div>
+                      )}
+                      {frama?.note && (
+                        <div className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>{frama.note}</div>
+                      )}
+                      {lyap?.note && (
+                        <div className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>{lyap.note}</div>
+                      )}
+                      {row.multi && Object.keys(row.multi).length > 1 && (
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          {Object.entries(row.multi).map(([tf, m]) => (
+                            <span
+                              key={tf}
+                              className="font-mono text-[10px] px-2 py-1 rounded"
+                              style={{ background: 'var(--panel)', color: 'var(--textFaint)', border: '1px solid var(--border)' }}
+                            >
+                              {tf}: H={m.hurst?.H != null ? Number(m.hurst.H).toFixed(2) : '—'}
+                              {m.dfa?.alpha != null ? ` · α=${Number(m.dfa.alpha).toFixed(2)}` : ''}
+                              {' · '}{(m.playbook || '').replace(/_/g, ' ')}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        <Pill tone={alphaTone(dfa?.alpha)}>{dfa?.regime ? String(dfa.regime).replace(/_/g, ' ') : 'DFA —'}</Pill>
+                        <Pill tone="neutral">{row.hurst?.regime || 'R/S —'}</Pill>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -3168,12 +3224,12 @@ function AnalysisTab({ hurstBoard, mode }) {
       </div>
 
       <div className="omni-panel p-4">
-        <SectionHeader icon={FlaskConical} title="Method notes" sub="hardened DFA + R/S" />
+        <SectionHeader icon={FlaskConical} title="About this layer" sub="fully decoupled from signal pipeline" />
         <ul className="font-mono text-[10px] space-y-1" style={{ color: 'var(--textFaint)' }}>
-          <li>• R/S Hurst estimated on log-returns with block-size sweep and R² confidence.</li>
-          <li>• DFA uses log-spaced scales, linear (default) local detrend, R² + scale-count confidence.</li>
-          <li>• Confidence tiers (LOW / MEDIUM / HIGH) gate playbook and directional bias.</li>
-          <li>• This layer never opens or sizes trades; signal agents remain independent.</li>
+          <li>• Own endpoint <span style={{ color: 'var(--gold)' }}>/api/analysis</span> + module <span style={{ color: 'var(--gold)' }}>advanced-analysis.js</span></li>
+          <li>• R/S Hurst, hardened DFA (α + R²), FRAMA dimension/speed, Lyapunov λ</li>
+          <li>• Does not write to journals, risk engine, or signal scorer</li>
+          <li>• Refresh pulls a fresh board from candle stores only</li>
         </ul>
       </div>
     </div>
@@ -3882,7 +3938,7 @@ export default function OmniceeDashboard() {
             <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} hurstBoard={feed.hurstBoard} />
           )}
           {activeTab === 'ANALYSIS' && (
-            <AnalysisTab hurstBoard={feed.hurstBoard} mode={feed.mode} />
+            <AnalysisTab mode={feed.mode} />
           )}
           {activeTab === 'MONITOR' && (
             <div className="space-y-2">
