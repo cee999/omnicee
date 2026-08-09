@@ -172,9 +172,10 @@ function ThemeStyle() {
       .omni-flash-up { animation: omni-flash-up 0.7s ease-out; }
       .omni-flash-down { animation: omni-flash-down 0.7s ease-out; }
       .omni-tab-active { box-shadow: inset 0 2px 0 var(--emerald); background: var(--panel2); }
-      .omni-ticker-wrap { height: 28px; max-width: 100%; overflow: hidden; flex-shrink: 0; }
-      .omni-ticker-track { animation: omni-ticker 22s linear infinite; width: max-content; }
-      .omni-ticker-wrap:hover .omni-ticker-track { animation-play-state: paused; }
+      .omni-ticker-wrap { height: 30px; max-width: 100%; overflow: hidden; flex-shrink: 0; }
+      .omni-ticker-track { animation: omni-ticker 28s linear infinite; width: max-content; }
+      .omni-ticker-wrap:hover .omni-ticker-track,
+      .omni-ticker-wrap:active .omni-ticker-track { animation-play-state: paused; }
       @keyframes omni-ticker { from { transform: translateX(0); } to { transform: translateX(-50%); } }
       .omni-cmd::placeholder { color: var(--textFaint); }
       .omni-row:hover { background: rgba(255,255,255,0.02); }
@@ -185,15 +186,29 @@ function ThemeStyle() {
         border-top: 1px solid var(--border);
         background: var(--panel);
         padding-bottom: env(safe-area-inset-bottom, 0px);
+        /* App-like bottom bar: tall enough for thumbs */
+        min-height: 56px;
       }
       .omni-nav button {
         flex: 1 1 0;
         min-width: 0;
-        padding: 8px 2px;
+        min-height: 52px;
+        padding: 6px 2px 8px;
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
       }
-      @media (max-width: 480px) {
-        .omni-hide-xs { display: none !important; }
-        .omni-panel { border-radius: 8px; }
+      .omni-nav button:active {
+        background: var(--panel2) !important;
+      }
+      /* Press feedback for rows / chips (mobile has no hover) */
+      .omni-row:active,
+      .omni-chip:active {
+        background: rgba(255,255,255,0.06) !important;
+      }
+      .omni-chip {
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+        user-select: none;
       }
       /* Fluid chart: fills parent, scales with viewport */
       .omni-chart-shell {
@@ -208,8 +223,22 @@ function ThemeStyle() {
         width: 100%;
         min-width: 0;
         flex: 1 1 auto;
-        min-height: clamp(200px, 42vh, 520px);
-        height: clamp(200px, 42vh, 520px);
+        min-height: clamp(180px, 36vh, 480px);
+        height: clamp(180px, 36vh, 480px);
+      }
+      @media (max-width: 480px) {
+        .omni-hide-xs { display: none !important; }
+        .omni-panel { border-radius: 8px; }
+        /* Prefer slightly larger interactive type on phones */
+        .omni-nav span { font-size: 10px !important; letter-spacing: 0.04em; }
+        .omni-chip { font-size: 11px !important; padding: 6px 10px !important; min-height: 34px; }
+        .omni-chart-canvas-wrap {
+          min-height: clamp(170px, 32vh, 360px);
+          height: clamp(170px, 32vh, 360px);
+        }
+      }
+      @media (max-width: 380px) {
+        .omni-nav span { font-size: 9px !important; }
       }
       .omni-chart-shell.is-expanded {
         display: flex;
@@ -1081,11 +1110,11 @@ function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand 
     live: { label: 'Live', color: 'var(--emerald)', pulse: true },
   }[mode] || { label: 'Offline', color: 'var(--coral)', pulse: false };
   return (
-    <div className="flex items-center gap-2 sm:gap-4 px-2 sm:px-4 py-2 border-b" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
-      <div className="flex items-center gap-2">
-        <div className="w-6 h-6 rounded flex items-center justify-center font-display text-[11px] font-bold"
+    <div className="flex items-center gap-2 sm:gap-4 px-2 sm:px-4 py-2.5 border-b shrink-0" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
+      <div className="flex items-center gap-2 shrink-0">
+        <div className="w-7 h-7 rounded flex items-center justify-center font-display text-[12px] font-bold"
           style={{ background: 'var(--emerald)', color: '#05070a' }}>Ω</div>
-        <span className="font-display text-sm tracking-[0.15em]" style={{ color: 'var(--text)' }}>OMNICEE</span>
+        <span className="font-display text-sm tracking-[0.12em] hidden xs:inline sm:inline" style={{ color: 'var(--text)' }}>OMNICEE</span>
       </div>
       <div className="flex-1 flex items-center gap-2 min-w-0 max-w-full sm:max-w-md omni-hide-xs">
         <Terminal size={13} style={{ color: 'var(--gold)' }} />
@@ -1098,8 +1127,8 @@ function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand 
           style={{ color: 'var(--gold)', borderBottom: '1px solid var(--border)' }}
         />
       </div>
-      <div className="flex items-center gap-3 ml-auto">
-        <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase" style={{ color: status.color }}>
+      <div className="flex items-center gap-2 sm:gap-3 ml-auto shrink-0">
+        <span className="flex items-center gap-1.5 font-mono text-[10px] sm:text-[11px] uppercase" style={{ color: status.color }}>
           <Circle size={7} fill="currentColor" className={status.pulse ? 'omni-pulse' : ''} />
           {status.label}
         </span>
@@ -1112,7 +1141,7 @@ function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand 
             >
               {socketLive ? 'push' : 'poll'}
             </span>
-            <span className="font-mono text-[9px] px-1.5 py-0.5 rounded uppercase tracking-wider"
+            <span className="font-mono text-[9px] px-1.5 py-0.5 rounded uppercase tracking-wider hidden xs:inline"
               style={{ color: analysisLive ? 'var(--gold)' : 'var(--textFaint)', border: `1px solid ${analysisLive ? 'var(--gold)' : 'var(--border)'}` }}
               title={analysisLive ? `Last scan ${analysisLive.symbol || ''} ${analysisLive.timeframe || ''}` : 'Waiting for live analysis'}>
               {analysisLive ? `scan ${analysisLive.symbol || ''}`.trim() : 'scan —'}
@@ -1120,7 +1149,7 @@ function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand 
           </>
         )}
         <span className="font-mono text-[11px] hidden md:inline" style={{ color: 'var(--textDim)' }}>{date}</span>
-        <span className="font-mono text-[12px] font-semibold" style={{ color: 'var(--text)' }}>{time} UTC</span>
+        <span className="font-mono text-[11px] sm:text-[12px] font-semibold" style={{ color: 'var(--text)' }}>{time}</span>
       </div>
     </div>
   );
@@ -1177,16 +1206,17 @@ function NavBar({ active, onSelect }) {
       {TABS.map(t => (
         <button
           key={t.key}
+          type="button"
           onClick={() => onSelect(t.key)}
-          className="flex flex-col items-center gap-0.5 transition-colors"
+          className="flex flex-col items-center justify-center gap-0.5 transition-colors"
           style={{
             color: active === t.key ? 'var(--emerald)' : 'var(--textDim)',
             background: active === t.key ? 'var(--panel2)' : 'transparent',
             borderTop: active === t.key ? '2px solid var(--emerald)' : '2px solid transparent',
           }}
         >
-          <t.icon size={16} />
-          <span className="font-mono text-[8px] uppercase tracking-wider">{t.label}</span>
+          <t.icon size={20} strokeWidth={active === t.key ? 2.25 : 1.75} />
+          <span className="font-mono text-[9px] uppercase tracking-wider leading-none">{t.label}</span>
         </button>
       ))}
     </div>
@@ -1637,13 +1667,13 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
         className={`flex items-center justify-between gap-2 mb-1 flex-wrap shrink-0 ${expanded ? 'pb-2 border-b' : ''}`}
         style={expanded ? { borderColor: 'var(--border)' } : undefined}
       >
-        <div className="flex gap-1 items-center flex-wrap">
+        <div className="flex gap-1.5 items-center flex-wrap">
           {typeof onSymbolChange === 'function' && SYMBOLS.map(sym => (
             <button
               key={sym}
               type="button"
               onClick={() => onSymbolChange(sym)}
-              className={`font-mono rounded transition-colors ${expanded ? 'text-[11px] px-2.5 py-1.5' : 'text-[10px] px-1.5 py-0.5'}`}
+              className={`omni-chip font-mono rounded transition-colors ${expanded ? 'text-[12px] px-3 py-2' : 'text-[11px] px-2.5 py-1.5'}`}
               style={{
                 background: symbol === sym ? 'var(--emerald)' : 'var(--panel2)',
                 color: symbol === sym ? '#05070a' : 'var(--textDim)',
@@ -1658,7 +1688,7 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
               key={tf}
               type="button"
               onClick={() => setTimeframe(tf)}
-              className={`font-mono rounded ${expanded ? 'text-[11px] px-2.5 py-1.5' : 'text-[10px] px-2 py-0.5'}`}
+              className={`omni-chip font-mono rounded ${expanded ? 'text-[12px] px-3 py-2' : 'text-[11px] px-2.5 py-1.5'}`}
               style={{
                 background: timeframe === tf ? 'var(--panel2)' : 'transparent',
                 color: timeframe === tf ? 'var(--emerald)' : 'var(--textFaint)',
@@ -1672,14 +1702,14 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
             <button
               type="button"
               onClick={() => setShowIndicatorMenu(v => !v)}
-              className={`font-mono rounded flex items-center gap-1 ${expanded ? 'text-[11px] px-2.5 py-1.5' : 'text-[10px] px-2 py-0.5'}`}
+              className={`omni-chip font-mono rounded flex items-center gap-1 ${expanded ? 'text-[12px] px-3 py-2' : 'text-[11px] px-2.5 py-1.5'}`}
               style={{
                 background: showIndicatorMenu ? 'var(--panel2)' : 'transparent',
                 color: 'var(--textFaint)',
                 border: '1px solid var(--border)',
               }}
             >
-              <SlidersHorizontal size={11} /> Indicators
+              <SlidersHorizontal size={12} /> Indicators
             </button>
             {showIndicatorMenu && (
               <div
@@ -1757,15 +1787,15 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
 
   return (
     <div className="p-2 sm:p-3 space-y-2 w-full">
-      {/* Real-time status */}
-      <div className="omni-panel px-3 py-2 flex flex-wrap items-center gap-3 font-mono text-[10px]" style={{ color: 'var(--textDim)' }}>
-        <span style={{ color: socketLive ? 'var(--emerald)' : 'var(--textFaint)' }}>{socketLive ? '● PRICE PUSH' : '○ PRICE POLL'}</span>
+      {/* Real-time status — compact on phone */}
+      <div className="omni-panel px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px] sm:text-[11px]" style={{ color: 'var(--textDim)' }}>
+        <span style={{ color: socketLive ? 'var(--emerald)' : 'var(--textFaint)' }}>{socketLive ? '● PUSH' : '○ POLL'}</span>
         <span style={{ color: analysisLive ? 'var(--gold)' : 'var(--textFaint)' }}>
           {analysisLive
-            ? `● LIVE SCAN ${analysisLive.symbol || ''} ${analysisLive.timeframe || ''} ${analysisLive.regime ? '· ' + analysisLive.regime : ''}`
-            : '○ SCAN WAITING'}
+            ? `● SCAN ${analysisLive.symbol || ''} ${analysisLive.timeframe || ''}${analysisLive.regime ? ' · ' + analysisLive.regime : ''}`
+            : '○ SCAN —'}
         </span>
-        <span style={{ color: 'var(--textFaint)' }}>MT5 + Deriv only · analysis always on</span>
+        <span className="hidden sm:inline" style={{ color: 'var(--textFaint)' }}>MT5 + Deriv · always on</span>
       </div>
       {Array.isArray(cryptoVolAlerts) && cryptoVolAlerts.length > 0 && (
         <div className="omni-panel px-3 py-2 space-y-1">
@@ -1784,17 +1814,24 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
       {/* LIVE TICKS FIRST — no scroll required */}
       <div className="omni-home-grid">
         <div className="omni-panel p-2 md:p-3 order-2 lg:order-1">
-          <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
-            <div className="flex gap-1 flex-wrap">
+          <div className="flex items-center justify-between gap-2 mb-1.5 flex-wrap">
+            <div className="flex gap-1.5 flex-wrap">
               {SYMBOLS.map(sym => (
-                <button key={sym} onClick={() => setChartSymbol(sym)}
-                  className="font-mono text-[10px] px-2 py-1 rounded"
-                  style={{ background: chartSymbol === sym ? 'var(--emerald)' : 'var(--panel2)', color: chartSymbol === sym ? '#05070a' : 'var(--textDim)' }}>
+                <button
+                  key={sym}
+                  type="button"
+                  onClick={() => setChartSymbol(sym)}
+                  className="omni-chip font-mono text-[11px] px-2.5 py-1.5 rounded"
+                  style={{
+                    background: chartSymbol === sym ? 'var(--emerald)' : 'var(--panel2)',
+                    color: chartSymbol === sym ? '#05070a' : 'var(--textDim)',
+                  }}
+                >
                   {symLabel(sym)}
                 </button>
               ))}
             </div>
-            <div className="font-mono text-[11px] flex gap-3 items-center">
+            <div className="font-mono text-[12px] flex gap-3 items-center shrink-0">
               {q?.bid != null && <span style={{ color: 'var(--coral)' }}>B {fmtPrice(chartSymbol, q.bid)}</span>}
               {q?.ask != null && <span style={{ color: 'var(--emerald)' }}>A {fmtPrice(chartSymbol, q.ask)}</span>}
               {q?.bid == null && <span style={{ color: 'var(--text)' }}>{fmtPrice(chartSymbol, q?.price ?? prices?.[chartSymbol])}</span>}
@@ -1804,12 +1841,12 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
           <LiveChart symbol={chartSymbol} quote={q} signals={chartSignals} levels={levels} onSymbolChange={setChartSymbol} />
         </div>
 
-        <div className="omni-panel overflow-hidden order-1 xl:order-2 flex flex-col max-h-[min(40vh,320px)] xl:max-h-[min(52vh,640px)] min-h-[180px]">
-          <div className="px-3 py-1.5 border-b" style={{ borderColor: 'var(--border)' }}>
+        <div className="omni-panel overflow-hidden order-1 xl:order-2 flex flex-col max-h-[min(38vh,300px)] sm:max-h-[min(42vh,340px)] xl:max-h-[min(52vh,640px)] min-h-[160px]">
+          <div className="px-3 py-2 border-b" style={{ borderColor: 'var(--border)' }}>
             <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>Market Watch · live</span>
           </div>
           <div className="overflow-y-auto omni-scroll flex-1">
-            <div className="grid grid-cols-[1fr_64px_64px] gap-1 px-2 py-1 font-mono text-[9px] uppercase" style={{ color: 'var(--textFaint)' }}>
+            <div className="grid grid-cols-[1fr_72px_72px] gap-1 px-3 py-1.5 font-mono text-[10px] uppercase sticky top-0" style={{ color: 'var(--textFaint)', background: 'var(--panel)' }}>
               <span>Symbol</span><span className="text-right">Bid</span><span className="text-right">Ask</span>
             </div>
             {SYMBOLS.map(sym => {
@@ -1817,16 +1854,24 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
               const ch = changes?.[sym];
               const up = ch == null ? null : ch >= 0;
               return (
-                <button key={sym} type="button" onClick={() => setChartSymbol(sym)}
-                  className="omni-row w-full grid grid-cols-[1fr_64px_64px] gap-1 px-2 py-1.5 font-mono text-[11px] text-left border-b"
-                  style={{ borderColor: 'var(--border)', background: chartSymbol === sym ? 'var(--panel2)' : 'transparent' }}>
+                <button
+                  key={sym}
+                  type="button"
+                  onClick={() => setChartSymbol(sym)}
+                  className="omni-row w-full grid grid-cols-[1fr_72px_72px] gap-1 px-3 py-2.5 font-mono text-[12px] text-left border-b"
+                  style={{
+                    borderColor: 'var(--border)',
+                    background: chartSymbol === sym ? 'var(--panel2)' : 'transparent',
+                    minHeight: 44,
+                  }}
+                >
                   <span>
                     <span style={{ color: 'var(--text)' }}>{symLabel(sym)}</span>
-                    {qq?.source === 'mt5_ea' && <span className="ml-1 text-[8px]" style={{ color: 'var(--gold)' }}>L</span>}
-                    {ch != null && <div className="text-[9px]" style={{ color: up ? 'var(--emerald)' : 'var(--coral)' }}>{fmtPct(ch)}</div>}
+                    {qq?.source === 'mt5_ea' && <span className="ml-1 text-[9px]" style={{ color: 'var(--gold)' }}>L</span>}
+                    {ch != null && <div className="text-[10px]" style={{ color: up ? 'var(--emerald)' : 'var(--coral)' }}>{fmtPct(ch)}</div>}
                   </span>
-                  <span className="text-right" style={{ color: 'var(--coral)' }}>{fmtPrice(sym, qq?.bid ?? qq?.price ?? prices?.[sym])}</span>
-                  <span className="text-right" style={{ color: 'var(--emerald)' }}>{fmtPrice(sym, qq?.ask ?? qq?.price ?? prices?.[sym])}</span>
+                  <span className="text-right self-center" style={{ color: 'var(--coral)' }}>{fmtPrice(sym, qq?.bid ?? qq?.price ?? prices?.[sym])}</span>
+                  <span className="text-right self-center" style={{ color: 'var(--emerald)' }}>{fmtPrice(sym, qq?.ask ?? qq?.price ?? prices?.[sym])}</span>
                 </button>
               );
             })}
@@ -1844,9 +1889,9 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
             No signals yet. Live prices keep running — signals fire only when score, agents, and gates clear.
           </div>
         ) : (
-          <div className="divide-y max-h-[220px] overflow-y-auto omni-scroll" style={{ borderColor: 'var(--border)' }}>
+          <div className="divide-y max-h-[240px] overflow-y-auto omni-scroll" style={{ borderColor: 'var(--border)' }}>
             {recent.map(s => (
-              <div key={s.id} className="px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px]">
+              <div key={s.id} className="px-3 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[12px]">
                 <span className="font-semibold" style={{ color: 'var(--text)' }}>{symLabel(s.symbol)}</span>
                 <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
                 <span style={{ color: (s.action === 'BUY' || s.action === 'LONG') ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
