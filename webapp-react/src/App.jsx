@@ -2100,7 +2100,23 @@ function SignalsTab({ signals, prices, quotes, auditLog, analysisLive }) {
                     </span>
                   </div>
               {expanded === s.id && (
-                <div className="px-4 py-3 border-b grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4" style={{ borderColor: 'var(--border)', background: '#080a0d' }}>
+                <div className="border-b" style={{ borderColor: 'var(--border)', background: '#080a0d' }}>
+                  {/* Identity strip always visible on expand — fixes mobile where table columns scroll away */}
+                  <div className="px-3 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b" style={{ borderColor: 'var(--border)', background: 'var(--panel2)' }}>
+                    <span className="font-mono text-[13px] font-semibold tracking-wide" style={{ color: 'var(--text)' }}>{s.symbol}</span>
+                    <span className="font-mono text-[11px] px-1.5 py-0.5 rounded" style={{ color: 'var(--textDim)', background: 'var(--panel)' }}>{s.timeframe}</span>
+                    <span className="font-mono text-[12px] font-semibold" style={{ color: (s.action === 'BUY' || s.action === 'LONG') ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
+                    <span className="font-mono text-[12px]" style={{ color: 'var(--gold)' }}>{gradeFor(s.score)} · {signalScore(s)}</span>
+                    <Pill tone={s.gate?.status === 'approved' ? 'up' : s.gate?.status === 'gated' ? 'warn' : 'down'}>{s.gate?.status || '—'}</Pill>
+                    <span className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>{timeAgo(s.timestamp)}</span>
+                    <div className="w-full flex flex-wrap gap-x-4 gap-y-0.5 font-mono text-[11px]">
+                      <span style={{ color: 'var(--textDim)' }}>Entry <b style={{ color: 'var(--text)' }}>{fmtPrice(s.symbol, s.entry)}</b></span>
+                      <span style={{ color: 'var(--textDim)' }}>SL <b style={{ color: 'var(--coral)' }}>{fmtPrice(s.symbol, s.stopLoss)}</b></span>
+                      <span style={{ color: 'var(--textDim)' }}>TP1 <b style={{ color: 'var(--emerald)' }}>{fmtPrice(s.symbol, s.targets?.[0])}</b></span>
+                      <span style={{ color: 'var(--textDim)' }}>TP2 <b style={{ color: 'var(--emerald)' }}>{fmtPrice(s.symbol, s.targets?.[1])}</b></span>
+                    </div>
+                  </div>
+                  <div className="px-4 py-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
                   <div>
                     <div className="font-mono text-[9px] uppercase mb-2" style={{ color: 'var(--textFaint)' }}>Agent Breakdown ({s.agreeCount}/8 aligned)</div>
                     <div className="space-y-1">
@@ -2163,6 +2179,7 @@ function SignalsTab({ signals, prices, quotes, auditLog, analysisLive }) {
                         </li>
                       ))}
                     </ul>
+                  </div>
                   </div>
                 </div>
               )}
