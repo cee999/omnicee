@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis,
   Tooltip, ResponsiveContainer, CartesianGrid, Cell,
@@ -100,7 +100,11 @@ function fmtPrice(symbol, v) {
   const d = DECIMALS[symbol] ?? 2;
   return Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 }
-function fmtPct(v, digits = 2) { return `${v >= 0 ? '+' : ''}${v.toFixed(digits)}%`; }
+function fmtPct(v, digits = 2) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '—';
+  return `${n >= 0 ? '+' : ''}${n.toFixed(digits)}%`;
+}
 function timeAgo(ts) {
   const s = Math.floor((Date.now() - ts) / 1000);
   if (s < 60) return `${s}s`;
@@ -967,10 +971,10 @@ function TickerTape({ prices, changes, flash, quotes }) {
       <div className="omni-ticker-track flex items-center gap-6 px-3 py-1.5 font-mono text-[11px] whitespace-nowrap">
         {syms.map((sym, i) => {
           const q = quotes?.[sym];
-          const mid = q?.price ?? prices[sym];
+          const mid = q?.price ?? prices?.[sym];
           const bid = q?.bid;
           const ask = q?.ask;
-          const ch = changes[sym];
+          const ch = changes?.[sym];
           const up = ch == null ? null : ch >= 0;
           const fl = flash[sym];
           return (
@@ -1173,7 +1177,9 @@ function LiveChart({ symbol, quote, signals, levels }) {
   // a demo and then jitters/flickers the moment it's live 24/7.
   useEffect(() => {
     if (!containerRef.current) return;
-    const chart = createChart(containerRef.current, {
+    let chart;
+    try {
+    chart = createChart(containerRef.current, {
       autoSize: true,
       layout: { background: { color: 'transparent' }, textColor: CHART_COLORS.text, fontFamily: 'JetBrains Mono, monospace', fontSize: 10 },
       grid: { vertLines: { color: CHART_COLORS.grid }, horzLines: { color: CHART_COLORS.grid } },
@@ -1202,7 +1208,8 @@ function LiveChart({ symbol, quote, signals, levels }) {
     });
     volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
 
-    const markers = createSeriesMarkers(candleSeries, []);
+    let markers = null;
+    try { markers = createSeriesMarkers(candleSeries, []); } catch (e) { console.warn('markers', e); }
 
     // Overlay indicators — created hidden, toggled visible from the menu.
     // Kept as separate series (rather than baked into candle data) so
@@ -1233,10 +1240,18 @@ function LiveChart({ symbol, quote, signals, levels }) {
         chart.timeScale().fitContent();
       } catch (_) {}
     });
+    } catch (err) {
+      console.error('[OMNICEE] chart mount failed', err);
+      return;
+    }
 
     return () => {
-      chart.unsubscribeCrosshairMove(onCrosshairMove);
-      chart.remove();
+      try {
+        if (chart) {
+          try { chart.unsubscribeCrosshairMove(onCrosshairMove); } catch (_) {}
+          try { chart.remove(); } catch (_) {}
+        }
+      } catch (_) {}
       chartRef.current = null;
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
@@ -2178,7 +2193,7 @@ function HeatTab({ heatmapTiles, mode, sentiment }) {
           <p className="text-[11px] mb-3" style={{ color: 'var(--textFaint)' }}>
             Higher score = more interesting setup or stronger move. Needs live candles to fill in.
           </p>
-          {heatmapTiles.length === 0 ? (
+          {!heatmapTiles || heatmapTiles.length === 0 ? (
             <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
               Nothing to show yet. Heat fills in after the system has candle data and ranks each symbol.
             </div>
@@ -2726,6 +2741,41 @@ function InstallBanner({ installEvt, onInstalled, loggedIn }) {
   );
 }
 
+
+class AppErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    try { console.error('[OMNICEE] UI crash after login:', error, info); } catch (_) {}
+  }
+  render() {
+    if (this.state.error) {
+      const msg = this.state.error?.message || String(this.state.error);
+      return (
+        <div style={{ minHeight: '100vh', background: '#05070a', color: '#eef2f7', padding: 24, fontFamily: 'monospace' }}>
+          <div style={{ maxWidth: 520, margin: '40px auto', border: '1px solid #1c232d', borderRadius: 12, padding: 20, background: '#0b0f14' }}>
+            <div style={{ color: '#f0b429', marginBottom: 8, fontWeight: 700 }}>OMNICEE hit a display error</div>
+            <div style={{ color: '#8b9bb0', fontSize: 12, marginBottom: 12 }}>{msg}</div>
+            <button
+              type="button"
+              onClick={() => { this.setState({ error: null }); try { window.location.reload(); } catch (_) {} }}
+              style={{ background: '#1fe3a8', color: '#05070a', border: 0, padding: '8px 14px', borderRadius: 8, fontWeight: 700, cursor: 'pointer' }}
+            >
+              Reload dashboard
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 /* ── App shell ──────────────────────────────────────────────────────── */
 export default function OmniceeDashboard() {
   const [activeTab, setActiveTab] = useState(() => {
@@ -2780,11 +2830,12 @@ export default function OmniceeDashboard() {
   }, []);
 
   return (
-    <div className="omni-root flex flex-col h-full min-h-[640px] w-full text-sm">
+    <AppErrorBoundary>
+    <div className="omni-root flex flex-col h-full min-h-[100dvh] min-h-[640px] w-full text-sm" style={{ background: 'var(--void, #05070a)', color: 'var(--text, #eef2f7)' }}>
       <ThemeStyle />
-      <TopBar now={feed.now} mode={feed.mode} socketLive={feed.socketLive} analysisLive={feed.analysisLive} wakingBackend={feed.wakingBackend} onCommand={handleCommand} />
+      <TopBar now={feed.now || Date.now()} mode={feed.mode || 'checking'} socketLive={!!feed.socketLive} analysisLive={feed.analysisLive} wakingBackend={!!feed.wakingBackend} onCommand={handleCommand} />
       <InstallBanner installEvt={installEvt} loggedIn={!!user} onInstalled={() => setInstallEvt(null)} />
-      <TickerTape prices={feed.prices} changes={feed.changes} flash={feed.flash} quotes={feed.quotes} />
+      <TickerTape prices={feed.prices || {}} changes={feed.changes || {}} flash={feed.flash || {}} quotes={feed.quotes || {}} />
       <div className="flex flex-col flex-1 min-h-0">
         <div className="flex-1 overflow-y-auto omni-scroll">
           {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} analysisLive={feed.analysisLive} socketLive={feed.socketLive} cryptoVolAlerts={feed.cryptoVolAlerts} />}
@@ -2809,5 +2860,6 @@ export default function OmniceeDashboard() {
         <NavBar active={activeTab} onSelect={setActiveTab} />
       </div>
     </div>
+    </AppErrorBoundary>
   );
 }
