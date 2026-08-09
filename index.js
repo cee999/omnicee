@@ -142,25 +142,107 @@ const agentPool = {};
 const lastVotes = {};
 
 const inFlight = new Set();
-/** Live analysis throttle: symbol:tf → last run ms */
-const lastAnalysisAt = new Map();
-const LIVE_ANALYSIS_MIN_MS = Number(process.env.LIVE_ANALYSIS_MIN_MS || 20000); // 20s per symbol/tf
-const LIVE_ANALYSIS_INTERVAL_MS = Number(process.env.ANALYSIS_INTERVAL_MS || 45000); // always-on loop
+/** Live analysis throttle state */
+const lastAnalysisAt = new Map();   // key → last run ms
+const lastAnalysisScore = new Map(); // key → last final score (0–100)
+const lastTickAt = new Map();        // symbol → last accepted tick ms
+const LIVE_ANALYSIS_INTERVAL_MS = Number(process.env.ANALYSIS_INTERVAL_MS || 45000);
+const ADAPTIVE_THROTTLE = process.env.ADAPTIVE_THROTTLE !== 'false'; // default ON
 
 /**
- * Schedule analysis the same way the chart stays live: on ticks + timer.
- * Throttled so agents do not thrash CPU, but always-on while prices move.
+ * Adaptive throttle interval (ms) per symbol:timeframe.
+ * Fast when: high volatility, killzone session, near minScore, active ticks.
+ * Slow when: quiet range, off-hours, cold start with thin data, system busy.
+ */
+function getAdaptiveAnalysisIntervalMs(symbol, timeframe) {
+  const key = `${symbol}:${timeframe}`;
+  // Floor / ceiling (env overrides)
+  const floorMs = Number(process.env.LIVE_ANALYSIS_MIN_MS || 8000);   // never faster than 8s
+  const ceilMs  = Number(process.env.LIVE_ANALYSIS_MAX_MS || 120000); // never slower than 2m
+
+  if (!ADAPTIVE_THROTTLE) {
+    return Number(process.env.LIVE_ANALYSIS_MIN_MS || 20000);
+  }
+
+  let ms = 30000; // baseline 30s
+
+  // 1) Session quality (UTC)
+  const utcHour = new Date().getUTCHours();
+  const utcDay = new Date().getUTCDay();
+  const isWeekend = utcDay === 0 || utcDay === 6;
+  const isCrypto = /USDT|USDC|BTC$|ETH$/.test(symbol);
+  if (utcHour >= 13 && utcHour < 16) ms *= 0.55;       // London/NY overlap — hottest
+  else if (utcHour >= 8 && utcHour < 13) ms *= 0.7;    // London
+  else if (utcHour >= 16 && utcHour < 21) ms *= 0.75;  // NY
+  else if (utcHour >= 0 && utcHour < 8) ms *= 1.25;    // Asia
+  else ms *= 1.5;                                       // thin / rollover
+  if (isWeekend && !isCrypto) ms *= 1.6;              // FX weekend dead
+
+  // 2) Realized volatility from last ~20 bars (range/close)
+  const candles = candleStores[symbol]?.[timeframe];
+  if (candles && candles.length >= 10) {
+    const slice = candles.slice(-20);
+    let sum = 0;
+    for (const c of slice) {
+      const mid = (Number(c.high) + Number(c.low)) / 2 || Number(c.close) || 0;
+      if (mid > 0) sum += (Number(c.high) - Number(c.low)) / mid;
+    }
+    const avgRange = sum / slice.length;
+    if (avgRange > 0.004) ms *= 0.5;       // very active
+    else if (avgRange > 0.002) ms *= 0.7;  // active
+    else if (avgRange < 0.0006) ms *= 1.5; // quiet
+  }
+
+  // 3) Near-miss: last score close to fire threshold → check more often
+  const score = lastAnalysisScore.get(key);
+  if (score != null) {
+    const gap = MIN_SCORE - score;
+    if (score >= MIN_SCORE) ms *= 0.6;          // already firing zone — stay tight
+    else if (gap <= 8) ms *= 0.55;              // very near miss
+    else if (gap <= 15) ms *= 0.75;             // near miss
+    else if (score < 30) ms *= 1.2;             // cold / no setup
+  }
+
+  // 4) Tick velocity: fresh ticks → slightly faster
+  const tickAge = Date.now() - (lastTickAt.get(symbol) || 0);
+  if (tickAge < 3000) ms *= 0.85;
+  else if (tickAge > 60000) ms *= 1.3; // stale feed
+
+  // 5) System load: many in-flight analyses → back off
+  if (inFlight.size >= 4) ms *= 1.5;
+  else if (inFlight.size >= 2) ms *= 1.15;
+
+  // 6) Reason boost applied by caller via multiplier on return — clamp here
+  ms = Math.max(floorMs, Math.min(ceilMs, Math.round(ms)));
+  return ms;
+}
+
+/**
+ * Schedule analysis like a live chart: on ticks + heartbeat, with adaptive gaps.
  */
 function scheduleLiveAnalysis(symbol, reason = 'tick') {
   if (!SYMBOLS.includes(symbol)) return;
+  if (reason === 'tick' || reason === 'mt5_ea' || reason === 'deriv') {
+    lastTickAt.set(symbol, Date.now());
+  }
   for (const tf of TIMEFRAMES_STR) {
     const key = `${symbol}:${tf}`;
     const n = candleStores[symbol]?.[tf]?.length || 0;
     const minBars = SIGNAL_SOFT_GATES ? 40 : 50;
     if (n < minBars) continue;
-    const last = lastAnalysisAt.get(key) || 0;
-    if (Date.now() - last < LIVE_ANALYSIS_MIN_MS) continue;
     if (inFlight.has(key)) continue;
+
+    let needMs = getAdaptiveAnalysisIntervalMs(symbol, tf);
+    // Event urgency
+    if (reason === 'boot' || reason === 'seed') needMs = Math.min(needMs, 5000);
+    if (reason === 'close' || reason === 'bar_close') needMs = Math.min(needMs, 8000);
+    if (reason === 'heartbeat') {
+      // heartbeat only runs if overdue relative to adaptive interval
+    }
+
+    const last = lastAnalysisAt.get(key) || 0;
+    if (Date.now() - last < needMs) continue;
+
     lastAnalysisAt.set(key, Date.now());
     setImmediate(() => {
       runAnalysisCycle(symbol, tf).catch(e =>
@@ -404,6 +486,12 @@ async function runAnalysisCycle(symbol, timeframe) {
       currentPrice,
       timestamp: Date.now(),
     });
+
+    // Feed adaptive throttle: near-miss scores → shorter intervals next time
+    try {
+      const sc = signal?.score?.final ?? (typeof signal?.score === 'number' ? signal.score : 0);
+      lastAnalysisScore.set(key, Number(sc) || 0);
+    } catch (_) {}
 
     if (opportunityRanker) {
       opportunityRanker.update(symbol, {
@@ -1128,7 +1216,7 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
   });
 
   if (isClosed) {
-    setImmediate(() => runAnalysisCycle(symbol, timeframe));
+    setImmediate(() => { lastAnalysisAt.delete(`${symbol}:${timeframe}`); scheduleLiveAnalysis(symbol, 'bar_close'); });
   }
 }
 
@@ -1776,7 +1864,7 @@ function buildFeeds() {
         log.info(`Deriv candles: ${symbol} ${timeframe} ${candles.length} bars`);
         // CRITICAL: history seed must run analysis — isClosed path only fires on live bar close
         if (TIMEFRAMES_STR.includes(timeframe) && candles.length >= (SIGNAL_SOFT_GATES ? 40 : 50)) {
-          setImmediate(() => runAnalysisCycle(symbol, timeframe));
+          setImmediate(() => { lastAnalysisAt.delete(`${symbol}:${timeframe}`); scheduleLiveAnalysis(symbol, 'bar_close'); });
         }
       }
     });
@@ -1876,7 +1964,7 @@ async function main() {
   setTimeout(() => {
     for (const symbol of SYMBOLS) scheduleLiveAnalysis(symbol, 'boot');
   }, 15000);
-  log.info(`Live analysis: min ${LIVE_ANALYSIS_MIN_MS/1000}s/symbol · heartbeat ${LIVE_ANALYSIS_INTERVAL_MS/1000}s · symbols ${SYMBOLS.join(',')}`);
+  log.info(`Live analysis: adaptive throttle ${ADAPTIVE_THROTTLE ? 'ON' : 'OFF'} · heartbeat ${LIVE_ANALYSIS_INTERVAL_MS/1000}s · symbols ${SYMBOLS.join(',')}`);
 
   const keepUrl = process.env.KEEPALIVE_URL || process.env.RENDER_EXTERNAL_URL;
   if (keepUrl) {
