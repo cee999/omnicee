@@ -2096,19 +2096,20 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
               type="button"
               onClick={() => setExpanded(false)}
               title="Close full chart"
-              className="font-mono px-3 py-2.5 rounded flex items-center gap-1.5 min-h-[44px] text-[12px]"
+              className="font-mono px-3 py-2.5 rounded flex items-center gap-1.5 min-h-[44px] min-w-[44px] text-[12px] shrink-0"
               style={{ color: 'var(--text)', border: '1px solid var(--border)', background: 'var(--panel2)' }}
             >
-              <Minimize2 size={16} /> Close
+              <Minimize2 size={18} /> Close
             </button>
           ) : (
             <button
               type="button"
               onClick={() => setExpanded(true)}
-              className="omni-chip font-mono rounded flex items-center gap-1.5 text-[12px] px-3 py-1.5 min-h-[34px] shrink-0"
-              style={{ color: '#05070a', background: 'var(--emerald)', border: 'none', fontWeight: 600 }}
+              className="font-mono rounded flex items-center gap-1.5 text-[12px] px-3 py-2 min-h-[40px] min-w-[40px] shrink-0"
+              style={{ color: '#05070a', background: 'var(--emerald)', border: 'none', fontWeight: 700, boxShadow: '0 0 0 1px rgba(31,227,168,0.35)' }}
+              title="Expand chart full screen"
             >
-              <Maximize2 size={14} /> Full
+              <Maximize2 size={18} strokeWidth={2.5} /> Full
             </button>
           )}
         </div>
@@ -2202,18 +2203,6 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
             <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>Market Watch · live</span>
           </div>
           <div className="overflow-y-auto omni-scroll flex-1 min-w-0">
-            <div
-              className="grid gap-1 px-2 sm:px-3 py-1.5 font-mono text-[9px] sm:text-[10px] uppercase sticky top-0"
-              style={{
-                color: 'var(--textFaint)',
-                background: 'var(--panel)',
-                gridTemplateColumns: 'minmax(0,1.15fr) minmax(0,1fr) minmax(0,1fr)',
-              }}
-            >
-              <span className="min-w-0">Symbol</span>
-              <span className="text-right min-w-0">Bid · buy</span>
-              <span className="text-right min-w-0">Ask · sell</span>
-            </div>
             {SYMBOLS.map(sym => {
               const qq = quotes?.[sym];
               const ch = changes?.[sym];
@@ -2225,23 +2214,38 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
                   key={sym}
                   type="button"
                   onClick={() => setChartSymbol(sym)}
-                  className="omni-row w-full grid gap-1 px-2 sm:px-3 py-2.5 font-mono text-[11px] sm:text-[12px] text-left border-b min-w-0"
+                  className="omni-row w-full px-3 py-2.5 font-mono text-left border-b min-w-0"
                   style={{
                     borderColor: 'var(--border)',
                     background: chartSymbol === sym ? 'var(--panel2)' : 'transparent',
-                    minHeight: 44,
-                    gridTemplateColumns: 'minmax(0,1.15fr) minmax(0,1fr) minmax(0,1fr)',
+                    minHeight: 52,
                   }}
                 >
-                  <span className="min-w-0 overflow-hidden">
-                    <span className="block truncate" style={{ color: 'var(--text)' }}>
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <span className="text-[13px] font-semibold truncate" style={{ color: 'var(--text)' }}>
                       {symLabel(sym)}
-                      {qq?.source === 'mt5_ea' && <span className="ml-1 text-[9px]" style={{ color: 'var(--gold)' }}>L</span>}
+                      {qq?.source === 'mt5_ea' && <span className="ml-1 text-[9px] font-normal" style={{ color: 'var(--gold)' }}>MT5</span>}
                     </span>
-                    {ch != null && <span className="text-[10px]" style={{ color: up ? 'var(--emerald)' : 'var(--coral)' }}>{fmtPct(ch)}</span>}
-                  </span>
-                  <span className="text-right self-center min-w-0 tabular-nums truncate" style={{ color: 'var(--coral)' }}>{fmtPrice(sym, bid)}</span>
-                  <span className="text-right self-center min-w-0 tabular-nums truncate" style={{ color: 'var(--emerald)' }}>{fmtPrice(sym, ask)}</span>
+                    {ch != null && (
+                      <span className="text-[11px] shrink-0 tabular-nums" style={{ color: up ? 'var(--emerald)' : 'var(--coral)' }}>
+                        {fmtPct(ch)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="rounded px-2 py-1.5 min-w-0" style={{ background: 'rgba(255,84,112,0.08)' }}>
+                      <div className="text-[9px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>Buy · Bid</div>
+                      <div className="text-[12px] sm:text-[13px] tabular-nums font-semibold truncate" style={{ color: 'var(--coral)' }}>
+                        {fmtPrice(sym, bid)}
+                      </div>
+                    </div>
+                    <div className="rounded px-2 py-1.5 min-w-0" style={{ background: 'rgba(31,227,168,0.08)' }}>
+                      <div className="text-[9px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>Sell · Ask</div>
+                      <div className="text-[12px] sm:text-[13px] tabular-nums font-semibold truncate" style={{ color: 'var(--emerald)' }}>
+                        {fmtPrice(sym, ask)}
+                      </div>
+                    </div>
+                  </div>
                 </button>
               );
             })}
