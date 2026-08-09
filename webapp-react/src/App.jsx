@@ -4,7 +4,7 @@ import {
   Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from 'recharts';
 import {
-  createChart, CandlestickSeries, HistogramSeries, createSeriesMarkers,
+  createChart, CandlestickSeries, HistogramSeries, LineSeries, createSeriesMarkers,
   CrosshairMode, LineStyle,
 } from 'lightweight-charts';
 import {
@@ -13,7 +13,7 @@ import {
   TrendingUp, CheckCircle2, XCircle,
   Circle, Clock, Zap, Database,
   Terminal, Newspaper, Gauge as GaugeIcon,
-  Layers, Target, DollarSign,
+  Layers, Target, DollarSign, SlidersHorizontal, Maximize2, Minimize2,
 } from 'lucide-react';
 
 const SYMBOLS = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'USOIL', 'UUP', 'BTCUSDT', 'ETHUSDT'];
@@ -1029,12 +1029,53 @@ const TIMEFRAME_MS_CLIENT = { M15: 15 * 60e3, H1: 3600e3, H4: 4 * 3600e3, D1: 86
 const CHART_COLORS = {
   up: '#1fe3a8', down: '#ff5470', grid: '#1c232d', border: '#1c232d',
   text: '#526078', crosshair: '#8b9bb0', panel2: '#10151c',
+  ema20: '#5ea8ff', ema50: '#a78bfa', band: '#526078',
 };
+
+const INDICATOR_DEFS = [
+  { key: 'ema20', label: 'EMA 20', color: CHART_COLORS.ema20 },
+  { key: 'ema50', label: 'EMA 50', color: CHART_COLORS.ema50 },
+  { key: 'bb', label: 'Bollinger 20/2', color: CHART_COLORS.band },
+];
+
+// Standard EMA — first value is a plain SMA seed, everything after that
+// is the recursive weighted average. Returns a sparse array (undefined
+// until enough candles exist to seed it).
+function computeEMA(closes, period) {
+  if (closes.length < period) return [];
+  const k = 2 / (period + 1);
+  const out = [];
+  let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  out[period - 1] = ema;
+  for (let i = period; i < closes.length; i++) {
+    ema = closes[i] * k + ema * (1 - k);
+    out[i] = ema;
+  }
+  return out;
+}
+
+// Bollinger Bands — rolling mean ± (mult × rolling stddev). O(n·period),
+// trivial for the ~300 candles this chart ever holds.
+function computeBollinger(closes, period = 20, mult = 2) {
+  const upper = [], lower = [];
+  for (let i = period - 1; i < closes.length; i++) {
+    const slice = closes.slice(i - period + 1, i + 1);
+    const mean = slice.reduce((a, b) => a + b, 0) / period;
+    const variance = slice.reduce((a, b) => a + (b - mean) ** 2, 0) / period;
+    const sd = Math.sqrt(variance);
+    upper[i] = mean + mult * sd;
+    lower[i] = mean - mult * sd;
+  }
+  return { upper, lower };
+}
 
 function LiveChart({ symbol, quote, signals, levels }) {
   const [timeframe, setTimeframe] = useState('H1');
   const [status, setStatus] = useState('loading'); // loading | ok | empty | error
   const [ohlcReadout, setOhlcReadout] = useState(null);
+  const [indicators, setIndicators] = useState({ ema20: false, ema50: false, bb: false });
+  const [showIndicatorMenu, setShowIndicatorMenu] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   const containerRef = useRef(null);
   const chartRef = useRef(null);
@@ -1043,8 +1084,34 @@ function LiveChart({ symbol, quote, signals, levels }) {
   const markersRef = useRef(null);
   const priceLinesRef = useRef([]);
   const srLinesRef = useRef([]);
+  const ema20SeriesRef = useRef(null);
+  const ema50SeriesRef = useRef(null);
+  const bbUpperSeriesRef = useRef(null);
+  const bbLowerSeriesRef = useRef(null);
+  const candlesRef = useRef([]);
+  const indicatorMenuRef = useRef(null);
   const lastBarRef = useRef(null);
   const lastVolRef = useRef(0);
+
+  // Recompute whichever overlays are currently toggled on from the full
+  // candle set. Cheap even at 300 candles (worst case ~6k ops for
+  // Bollinger), so no need to special-case the live-tick path — every
+  // update just recomputes in full rather than maintaining incremental
+  // running state that could drift from a page-load recompute.
+  const applyIndicators = useCallback((candles) => {
+    if (!candles?.length) return;
+    const closes = candles.map(c => c.close);
+    const times = candles.map(c => c.time);
+    const toPoints = (arr) => times.map((t, i) => (arr[i] != null ? { time: t, value: arr[i] } : null)).filter(Boolean);
+
+    if (indicators.ema20 && ema20SeriesRef.current) ema20SeriesRef.current.setData(toPoints(computeEMA(closes, 20)));
+    if (indicators.ema50 && ema50SeriesRef.current) ema50SeriesRef.current.setData(toPoints(computeEMA(closes, 50)));
+    if (indicators.bb && bbUpperSeriesRef.current) {
+      const { upper, lower } = computeBollinger(closes, 20, 2);
+      bbUpperSeriesRef.current.setData(toPoints(upper));
+      bbLowerSeriesRef.current.setData(toPoints(lower));
+    }
+  }, [indicators]);
 
   // Mount the chart instance once. Symbol/timeframe switches below reuse
   // it via setData() rather than tearing it down — recreating a canvas
@@ -1083,6 +1150,14 @@ function LiveChart({ symbol, quote, signals, levels }) {
 
     const markers = createSeriesMarkers(candleSeries, []);
 
+    // Overlay indicators — created hidden, toggled visible from the menu.
+    // Kept as separate series (rather than baked into candle data) so
+    // switching them on/off is a plain visibility flip, no refetch.
+    const ema20Series = chart.addSeries(LineSeries, { color: CHART_COLORS.ema20, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, visible: false });
+    const ema50Series = chart.addSeries(LineSeries, { color: CHART_COLORS.ema50, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, visible: false });
+    const bbUpperSeries = chart.addSeries(LineSeries, { color: CHART_COLORS.band, lineWidth: 1, lineStyle: LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false, visible: false });
+    const bbLowerSeries = chart.addSeries(LineSeries, { color: CHART_COLORS.band, lineWidth: 1, lineStyle: LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false, visible: false });
+
     const onCrosshairMove = (param) => {
       const bar = param.seriesData?.get(candleSeries);
       setOhlcReadout(bar ? { o: bar.open, h: bar.high, l: bar.low, c: bar.close } : null);
@@ -1093,6 +1168,10 @@ function LiveChart({ symbol, quote, signals, levels }) {
     candleSeriesRef.current = candleSeries;
     volumeSeriesRef.current = volumeSeries;
     markersRef.current = markers;
+    ema20SeriesRef.current = ema20Series;
+    ema50SeriesRef.current = ema50Series;
+    bbUpperSeriesRef.current = bbUpperSeries;
+    bbLowerSeriesRef.current = bbLowerSeries;
     // Force layout after mount — hidden/0-size parents blank the canvas
     requestAnimationFrame(() => {
       try {
@@ -1108,6 +1187,10 @@ function LiveChart({ symbol, quote, signals, levels }) {
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
       markersRef.current = null;
+      ema20SeriesRef.current = null;
+      ema50SeriesRef.current = null;
+      bbUpperSeriesRef.current = null;
+      bbLowerSeriesRef.current = null;
     };
   }, []);
 
@@ -1145,6 +1228,8 @@ function LiveChart({ symbol, quote, signals, levels }) {
           value: c.volume || 0,
           color: c.close >= c.open ? 'rgba(31,227,168,0.35)' : 'rgba(255,84,112,0.35)',
         })));
+        candlesRef.current = candles.map(({ time, open, high, low, close }) => ({ time, open, high, low, close }));
+        applyIndicators(candlesRef.current);
         const last = candles[candles.length - 1];
         lastBarRef.current = { time: last.time, open: last.open, high: last.high, low: last.low, close: last.close };
         lastVolRef.current = last.volume || 0;
@@ -1176,6 +1261,10 @@ function LiveChart({ symbol, quote, signals, levels }) {
     lastBarRef.current = bar;
     candleSeriesRef.current.update(bar);
     volumeSeriesRef.current?.update({ time: bar.time, value: lastVolRef.current, color: bar.close >= bar.open ? 'rgba(31,227,168,0.35)' : 'rgba(255,84,112,0.35)' });
+    const cs = candlesRef.current;
+    if (cs.length && cs[cs.length - 1].time === bar.time) cs[cs.length - 1] = bar;
+    else cs.push(bar);
+    applyIndicators(cs);
   }, [quote?.price, quote?.ts, timeframe]);
 
   // Signal overlay: arrows for every signal on this symbol, entry/SL/TP1
@@ -1221,10 +1310,49 @@ function LiveChart({ symbol, quote, signals, levels }) {
     srLinesRef.current = lines.map(opts => candleSeriesRef.current.createPriceLine({ ...opts, lineWidth: 1, axisLabelVisible: true }));
   }, [levels, symbol]);
 
+  // Flip visibility + recompute whenever the indicator toggles change.
+  useEffect(() => {
+    ema20SeriesRef.current?.applyOptions({ visible: indicators.ema20 });
+    ema50SeriesRef.current?.applyOptions({ visible: indicators.ema50 });
+    bbUpperSeriesRef.current?.applyOptions({ visible: indicators.bb });
+    bbLowerSeriesRef.current?.applyOptions({ visible: indicators.bb });
+    applyIndicators(candlesRef.current);
+  }, [indicators, applyIndicators]);
+
+  // Close the indicator picker on an outside click.
+  useEffect(() => {
+    if (!showIndicatorMenu) return;
+    const onClick = (e) => { if (indicatorMenuRef.current && !indicatorMenuRef.current.contains(e.target)) setShowIndicatorMenu(false); };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [showIndicatorMenu]);
+
+  // Esc exits full-screen mode.
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (e) => { if (e.key === 'Escape') setExpanded(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [expanded]);
+
+  // The container itself never unmounts on expand/collapse (just its
+  // wrapping classes change), so autoSize's own ResizeObserver should
+  // catch it — but force a resize + refit too, same defensive pattern
+  // used at mount, in case the observer lags a frame behind the CSS.
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      try {
+        if (!chartRef.current || !containerRef.current) return;
+        chartRef.current.applyOptions({ width: containerRef.current.clientWidth, height: containerRef.current.clientHeight });
+        chartRef.current.timeScale().fitContent();
+      } catch (_) {}
+    });
+  }, [expanded]);
+
   return (
-    <div>
+    <div className={expanded ? 'fixed inset-0 z-50 flex flex-col p-3' : ''} style={expanded ? { background: 'var(--void)' } : undefined}>
       <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
-        <div className="flex gap-1">
+        <div className="flex gap-1 items-center">
           {TIMEFRAMES.map(tf => (
             <button key={tf} onClick={() => setTimeframe(tf)}
               className="font-mono text-[10px] px-2 py-0.5 rounded"
@@ -1232,17 +1360,42 @@ function LiveChart({ symbol, quote, signals, levels }) {
               {tf}
             </button>
           ))}
-        </div>
-        {ohlcReadout && (
-          <div className="font-mono text-[10px] flex gap-2" style={{ color: 'var(--textDim)' }}>
-            <span>O <span style={{ color: 'var(--text)' }}>{fmtPrice(symbol, ohlcReadout.o)}</span></span>
-            <span>H <span style={{ color: 'var(--emerald)' }}>{fmtPrice(symbol, ohlcReadout.h)}</span></span>
-            <span>L <span style={{ color: 'var(--coral)' }}>{fmtPrice(symbol, ohlcReadout.l)}</span></span>
-            <span>C <span style={{ color: 'var(--text)' }}>{fmtPrice(symbol, ohlcReadout.c)}</span></span>
+          <div className="relative" ref={indicatorMenuRef}>
+            <button onClick={() => setShowIndicatorMenu(v => !v)}
+              className="font-mono text-[10px] px-2 py-0.5 rounded flex items-center gap-1"
+              style={{ background: showIndicatorMenu ? 'var(--panel2)' : 'transparent', color: 'var(--textFaint)', border: '1px solid var(--border)' }}>
+              <SlidersHorizontal size={11} /> Indicators
+            </button>
+            {showIndicatorMenu && (
+              <div className="absolute z-20 mt-1 rounded p-2 space-y-1.5" style={{ background: 'var(--panel2)', border: '1px solid var(--border)', minWidth: 150 }}>
+                {INDICATOR_DEFS.map(ind => (
+                  <label key={ind.key} className="flex items-center gap-2 font-mono text-[10px] cursor-pointer whitespace-nowrap" style={{ color: 'var(--textDim)' }}>
+                    <input type="checkbox" checked={indicators[ind.key]} onChange={() => setIndicators(s => ({ ...s, [ind.key]: !s[ind.key] }))} />
+                    <span className="w-2 h-2 rounded-full shrink-0" style={{ background: ind.color }} />
+                    {ind.label}
+                  </label>
+                ))}
+              </div>
+            )}
           </div>
-        )}
+        </div>
+        <div className="flex items-center gap-2">
+          {ohlcReadout && (
+            <div className="font-mono text-[10px] flex gap-2" style={{ color: 'var(--textDim)' }}>
+              <span>O <span style={{ color: 'var(--text)' }}>{fmtPrice(symbol, ohlcReadout.o)}</span></span>
+              <span>H <span style={{ color: 'var(--emerald)' }}>{fmtPrice(symbol, ohlcReadout.h)}</span></span>
+              <span>L <span style={{ color: 'var(--coral)' }}>{fmtPrice(symbol, ohlcReadout.l)}</span></span>
+              <span>C <span style={{ color: 'var(--text)' }}>{fmtPrice(symbol, ohlcReadout.c)}</span></span>
+            </div>
+          )}
+          <button onClick={() => setExpanded(v => !v)} title={expanded ? 'Collapse' : 'Expand to full screen'}
+            className="font-mono text-[10px] p-1 rounded flex items-center"
+            style={{ color: 'var(--textFaint)', border: '1px solid var(--border)' }}>
+            {expanded ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+          </button>
+        </div>
       </div>
-      <div className="relative h-[200px] md:h-[280px]">
+      <div className={expanded ? 'relative flex-1' : 'relative h-[200px] md:h-[280px]'}>
         {status === 'empty' && <div className="absolute inset-0 flex items-center justify-center"><WaitingForBackend height={180} label="No chart data yet — try H1 or wait a minute" /></div>}
         {status === 'error' && <div className="absolute inset-0 flex items-center justify-center"><WaitingForBackend height={180} label="Chart temporarily unavailable — retrying…" /></div>}
         {status === 'loading' && <div className="absolute inset-0 flex items-center justify-center"><WaitingForBackend height={180} label="Loading candles…" /></div>}
