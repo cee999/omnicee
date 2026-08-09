@@ -836,7 +836,7 @@ function useLiveFeed() {
             ts: payload.timestamp || Date.now(),
           });
         }
-        if (payload.type === 'crypto_volatility_alert') {
+        if (payload.type === 'crypto_volatility_alert' || payload.type === 'crypto_volatility' || payload.type === 'gold_volatility') {
           setCryptoVolAlerts(prev => [payload, ...prev].slice(0, 20));
         }
       });
@@ -1486,10 +1486,11 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
       </div>
       {Array.isArray(cryptoVolAlerts) && cryptoVolAlerts.length > 0 && (
         <div className="omni-panel px-3 py-2 space-y-1">
-          <div className="font-mono text-[10px] uppercase" style={{ color: 'var(--gold)' }}>Crypto volatility alerts</div>
+          <div className="font-mono text-[10px] uppercase" style={{ color: 'var(--gold)' }}>Volatility alerts · gold + crypto</div>
           {cryptoVolAlerts.slice(0, 5).map((a, i) => (
             <div key={i} className="font-mono text-[11px] flex flex-wrap gap-2" style={{ color: a.direction === 'UP' ? 'var(--emerald)' : 'var(--coral)' }}>
               <span>{a.symbol}</span>
+              <span>{a.assetClass === 'gold' ? 'GOLD' : 'CRYPTO'}</span>
               <span>{a.direction}</span>
               <span>{a.absPct}% / {a.window}</span>
               <span style={{ color: 'var(--textFaint)' }}>{a.severity}</span>

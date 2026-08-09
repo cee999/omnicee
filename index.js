@@ -122,7 +122,9 @@ const compressionDetector = CompressionDetector ? new CompressionDetector() : nu
 const abnormalMarketDetector = AbnormalMarketDetector ? new AbnormalMarketDetector() : null;
 const cryptoVolAlert = CryptoVolatilityAlert
   ? new CryptoVolatilityAlert({
-      symbols: (SYMBOLS || []).filter(s => /USDT$|USDC$|BTC|ETH/.test(s)),
+      symbols: (SYMBOLS || []).filter(s =>
+        /USDT$|USDC$|BTC|ETH|XAUUSD|^GOLD$/i.test(s)
+      ),
     })
   : null;
 const timeCycleEngine     = TimeCycleEngine     ? new TimeCycleEngine()     : null;
@@ -1266,26 +1268,29 @@ function onLivePrice(symbol, price, { change = null, bias = null, source = 'cand
   try { scheduleLiveAnalysis(symbol, source); } catch (_) {}
 
   // Crypto volatility alerts (BTC/ETH short-window % moves)
-  if (cryptoVolAlert && cryptoVolAlert.isCrypto(symbol)) {
+  if (cryptoVolAlert && cryptoVolAlert.watches(symbol)) {
     try {
       const alert = cryptoVolAlert.onPrice(symbol, price, now);
       if (alert && wsBus) {
-        wsBus.emit('crypto_volatility_alert', alert);
-        wsBus.emit('telemetry_update', { type: 'crypto_volatility_alert', ...alert });
-        log.warn(`[CryptoVol] ${alert.message}`);
-        if (dispatcher?.sendMessage && alert.severity !== 'elevated') {
+        const channel = alert.assetClass === 'gold' ? 'gold_volatility_alert' : 'crypto_volatility_alert';
+        wsBus.emit('crypto_volatility_alert', alert); // UI listens on one channel
+        wsBus.emit(channel, alert);
+        wsBus.emit('telemetry_update', { type: alert.type, ...alert });
+        log.warn(`[VolAlert] ${alert.message}`);
+        if (dispatcher?.sendMessage && (alert.severity === 'high' || alert.severity === 'severe')) {
+          const title = alert.assetClass === 'gold' ? 'Gold volatility' : 'Crypto volatility';
           dispatcher.sendMessage(
-            `⚡ *Crypto volatility*\n${alert.symbol} ${alert.direction} ${alert.absPct}% / ${alert.window}\nPrice ${alert.price}`
+            `⚡ *${title}*\n${alert.symbol} ${alert.direction} ${alert.absPct}% / ${alert.window}\nPrice ${alert.price}`
           ).catch(() => {});
         }
         try {
           auditTrail?.record?.({
             symbol, timeframe: alert.window, signalFired: false,
-            blockedReason: `crypto_vol_${alert.direction}_${alert.absPct}pct`,
+            blockedReason: `vol_${alert.assetClass}_${alert.direction}_${alert.absPct}pct`,
             score: alert.absPct,
             reasons: [alert.message],
             gatesFailed: [],
-            gatesPassed: ['crypto_volatility_watch'],
+            gatesPassed: ['volatility_watch'],
           });
         } catch (_) {}
       }

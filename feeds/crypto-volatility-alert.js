@@ -1,57 +1,84 @@
 /**
- * Crypto volatility alerts — short-window % moves on BTC/ETH (Deriv/MT5 ticks).
+ * Volatility alerts — short-window % moves for crypto (BTC/ETH) and gold (XAUUSD).
  * Emits 'alert' events; index.js relays to wsBus + optional Telegram.
  */
 'use strict';
 
 const EventEmitter = require('events');
 
-const DEFAULT_CRYPTO = ['BTCUSDT', 'ETHUSDT'];
+const DEFAULT_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'XAUUSD'];
 
-/** Windows in ms → threshold percent move to alert */
-const DEFAULT_WINDOWS = [
-  { id: '1m', ms: 60 * 1000, pct: 1.0 },
-  { id: '5m', ms: 5 * 60 * 1000, pct: 2.0 },
-  { id: '15m', ms: 15 * 60 * 1000, pct: 3.5 },
-];
+/** Crypto: larger swings. Gold: tighter % moves still matter. */
+const WINDOWS_BY_ASSET = {
+  crypto: [
+    { id: '1m', ms: 60 * 1000, pct: 1.0 },
+    { id: '5m', ms: 5 * 60 * 1000, pct: 2.0 },
+    { id: '15m', ms: 15 * 60 * 1000, pct: 3.5 },
+  ],
+  gold: [
+    { id: '1m', ms: 60 * 1000, pct: 0.25 },
+    { id: '5m', ms: 5 * 60 * 1000, pct: 0.45 },
+    { id: '15m', ms: 15 * 60 * 1000, pct: 0.8 },
+  ],
+};
+
+function assetClass(symbol) {
+  const s = String(symbol || '').toUpperCase();
+  if (s === 'XAUUSD' || s === 'GOLD' || s === 'XAU') return 'gold';
+  if (/USDT$|USDC$/.test(s) || s.includes('BTC') || s.includes('ETH')) return 'crypto';
+  return null;
+}
 
 class CryptoVolatilityAlert extends EventEmitter {
   constructor(config = {}) {
     super();
-    this.symbols = new Set(config.symbols || DEFAULT_CRYPTO);
-    this.windows = config.windows || DEFAULT_WINDOWS;
-    this.cooldownMs = Number(config.cooldownMs || process.env.CRYPTO_ALERT_COOLDOWN_MS || 5 * 60 * 1000);
-    this._ticks = new Map(); // symbol -> [{ t, price }]
-    this._lastAlert = new Map(); // symbol:windowId -> ts
+    this.symbols = new Set(config.symbols || DEFAULT_SYMBOLS);
+    this.windowsByAsset = config.windowsByAsset || WINDOWS_BY_ASSET;
+    this.cooldownMs = Number(
+      config.cooldownMs
+      || process.env.VOL_ALERT_COOLDOWN_MS
+      || process.env.CRYPTO_ALERT_COOLDOWN_MS
+      || 5 * 60 * 1000
+    );
+    this._ticks = new Map();
+    this._lastAlert = new Map();
     this.maxTicks = 500;
   }
 
   enabled() { return this.symbols.size > 0; }
   isConnected() { return true; }
 
+  /** True if this symbol is watched (crypto or gold). */
   isCrypto(symbol) {
-    return this.symbols.has(symbol) || /USDT$|USDC$/.test(symbol);
+    return this.watches(symbol);
   }
 
-  /**
-   * Call on every live crypto tick.
-   * @returns {object|null} alert payload if fired
-   */
+  watches(symbol) {
+    const s = String(symbol || '').toUpperCase();
+    if (this.symbols.has(s) || this.symbols.has(symbol)) return true;
+    if (s === 'XAUUSD' || s === 'GOLD') return true;
+    if (/USDT$|USDC$/.test(s)) return true;
+    return false;
+  }
+
   onPrice(symbol, price, ts = Date.now()) {
-    if (!this.isCrypto(symbol) || !Number.isFinite(price) || price <= 0) return null;
+    if (!this.watches(symbol) || !Number.isFinite(price) || price <= 0) return null;
+
+    const cls = assetClass(symbol);
+    if (!cls) return null;
+    const windows = this.windowsByAsset[cls] || WINDOWS_BY_ASSET.crypto;
 
     if (!this._ticks.has(symbol)) this._ticks.set(symbol, []);
     const arr = this._ticks.get(symbol);
     arr.push({ t: ts, price });
     if (arr.length > this.maxTicks) arr.splice(0, arr.length - this.maxTicks);
 
-    // Drop older than longest window
-    const maxMs = Math.max(...this.windows.map(w => w.ms));
+    const maxMs = Math.max(...windows.map(w => w.ms));
     const cutoff = ts - maxMs * 1.2;
     while (arr.length && arr[0].t < cutoff) arr.shift();
 
     let fired = null;
-    for (const w of this.windows) {
+    for (const w of windows) {
       const ref = this._priceAtOrBefore(arr, ts - w.ms);
       if (ref == null || ref <= 0) continue;
       const pct = ((price - ref) / ref) * 100;
@@ -65,8 +92,10 @@ class CryptoVolatilityAlert extends EventEmitter {
       this._lastAlert.set(key, ts);
       const direction = pct > 0 ? 'UP' : 'DOWN';
       const severity = abs >= w.pct * 1.75 ? 'severe' : abs >= w.pct * 1.25 ? 'high' : 'elevated';
+      const kind = cls === 'gold' ? 'gold_volatility' : 'crypto_volatility';
       fired = {
-        type: 'crypto_volatility',
+        type: kind,
+        assetClass: cls,
         symbol,
         direction,
         severity,
@@ -80,21 +109,18 @@ class CryptoVolatilityAlert extends EventEmitter {
         timestamp: ts,
       };
       this.emit('alert', fired);
-      // one alert per tick max (most severe window already sorted? emit all windows with cooldown)
     }
     return fired;
   }
 
   _priceAtOrBefore(arr, targetT) {
-    // arr sorted by time ascending
     let best = null;
     for (let i = 0; i < arr.length; i++) {
       if (arr[i].t <= targetT) best = arr[i].price;
       else break;
     }
-    // if no tick old enough, use oldest
     if (best == null && arr.length) {
-      if (arr[0].t <= targetT + 15000) best = arr[0].price; // allow slight skew
+      if (arr[0].t <= targetT + 15000) best = arr[0].price;
     }
     return best;
   }
@@ -108,4 +134,10 @@ class CryptoVolatilityAlert extends EventEmitter {
   }
 }
 
-module.exports = { CryptoVolatilityAlert, DEFAULT_WINDOWS, DEFAULT_CRYPTO };
+module.exports = {
+  CryptoVolatilityAlert,
+  VolatilityAlert: CryptoVolatilityAlert,
+  DEFAULT_SYMBOLS,
+  WINDOWS_BY_ASSET,
+  assetClass,
+};
