@@ -1206,7 +1206,26 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
   const isBroker = src === 'mt5_ea';
   if (!isBroker) {
     const last = lastPriceBySymbol[symbol];
-    if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < BROKER_PRICE_HOLD_MS) {
+    // FIX: PC-off / MT5-offline fallback was inconsistent across three
+    // separate guards. onLivePrice() (the ticker/quotes path) and the
+    // derivFeed.on('price', ...) handler that calls this function on bar
+    // close both already use a reduced 12s hold specifically so Deriv
+    // takes over quickly once the broker goes quiet ("MT5 only blocks
+    // Deriv for 12s after last broker tick (PC off = Deriv wins)" per the
+    // commit that added that reduced hold). But THIS guard — the one that
+    // actually gates whether a Deriv bar-close reaches candleStores *and*
+    // triggers scheduleLiveAnalysis() below — still used the full 60s
+    // BROKER_PRICE_HOLD_MS. So for roughly 12-60s after turning the PC
+    // off, the ticker would already show live Deriv prices while the
+    // chart stayed frozen on the last MT5 bar, and worse: any Deriv bar
+    // that closed in that window had its analysis trigger silently
+    // dropped here even though the bar itself still landed in
+    // candleStores via the caller's own array mutation — a live
+    // signal-generation gap, not just a display lag. Only Deriv reaches
+    // this branch now (Yahoo/TwelveData/Binance/Bybit are gone), so this
+    // just matches the hold everywhere else already uses.
+    const holdMs = src === 'deriv' ? Math.min(BROKER_PRICE_HOLD_MS, 12000) : BROKER_PRICE_HOLD_MS;
+    if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < holdMs) {
       return;
     }
   }
