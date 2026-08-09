@@ -125,6 +125,31 @@ async function runTests() {
       const result = resolver.resolve(votes, { symbol: 'TEST', timeframe: 'H1', currentPrice: 2000 });
       if (!result?.direction) throw new Error('No direction in result');
       pass(`ConflictResolver.resolve() → direction=${result.direction} conflicts=${result.conflicts?.length || 0}`);
+
+      // FIX: the only case above is full agreement, which never touches
+      // any conflict path — it wouldn't have caught a real bug that lived
+      // here: MICROSTRUCTURE_OPPOSES_SMC was tagged severity 'HIGH', the
+      // same tier as the two conflicts that deliberately set resolution =
+      // 'WAIT' to block a signal — but this block never sets resolution,
+      // its own intent is a 30% score penalty (see the note+penalty code
+      // right there in conflict-resolver.js), matching how
+      // MOMENTUM_OPPOSES_SMC (severity 'MEDIUM') is treated. `resolved`
+      // filters on severity alone, no resolution check, so this hard-
+      // blocked every signal where order flow disagreed with SMC,
+      // unconditionally — the penalty it computed could never take effect
+      // since the signal never reached the scorer. Retagged to MEDIUM;
+      // this asserts it stays a penalty, not a block.
+      const microOpposed = {
+        smc:            { direction: 'LONG', score: 80, reasons: ['Order block'] },
+        mtf:            { direction: 'LONG', score: 75, reasons: ['HTF aligned'] },
+        momentum:       { direction: 'LONG', score: 70, reasons: ['RSI bullish'] },
+        microstructure: { direction: 'SHORT', score: 60, reasons: ['Sell-side sweep'] },
+      };
+      const microResult = resolver.resolve(microOpposed, { symbol: 'TEST', timeframe: 'H1', currentPrice: 2000 });
+      if (!microResult.resolved) throw new Error(`microstructure-vs-SMC disagreement hard-blocked the signal (resolved=false) — should only penalize SMC's score, not block`);
+      const penalized = microResult.votes.smc?.score;
+      if (penalized !== 56) throw new Error(`expected SMC score penalized 80→56 (30% off), got ${penalized}`);
+      pass(`ConflictResolver.resolve() → microstructure-vs-SMC conflict penalizes (${penalized}) without blocking (resolved=${microResult.resolved})`);
     } catch (e) { fail('ConflictResolver.resolve()', e); }
   }
 

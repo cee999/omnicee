@@ -85,8 +85,20 @@ class ConflictResolver {
 
       if (smcDir && microDir && smcDir !== 'WAIT' && microDir !== 'WAIT' && smcDir !== microDir) {
         conflicts.push({
+          // FIX: was severity 'HIGH', same tier as the two conflicts above
+          // that explicitly set resolution = 'WAIT' to intentionally block
+          // the signal. This block never sets resolution — its own intent,
+          // right there in the note and the 30%-penalty three lines below,
+          // is "dock the score and continue," matching MOMENTUM_OPPOSES_SMC
+          // right above it (tagged MEDIUM). But `resolved` below filters on
+          // severity === 'HIGH' alone, with no resolution check — so this
+          // hard-blocked the signal anyway, unconditionally, every time
+          // order flow disagreed with SMC. The penalty this block computes
+          // a few lines down (score * 0.70) could never take effect: the
+          // signal never reached the scorer to use it. Retagged to match
+          // its actual, already-coded intent — a penalty, not a block.
           type:     'MICROSTRUCTURE_OPPOSES_SMC',
-          severity: 'HIGH',
+          severity: 'MEDIUM',
           note:     `Order flow (${microDir}) opposes SMC (${smcDir}) — adverse selection risk`,
         });
         if (resVotes.smc && votes.smc) {
