@@ -211,6 +211,13 @@ function ThemeStyle() {
         min-height: clamp(200px, 42vh, 520px);
         height: clamp(200px, 42vh, 520px);
       }
+      .omni-chart-shell.is-expanded {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        height: 100%;
+        max-height: 100dvh;
+      }
       .omni-chart-shell.is-expanded .omni-chart-canvas-wrap {
         flex: 1 1 auto;
         min-height: 0;
@@ -1557,12 +1564,18 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
     return () => document.removeEventListener('mousedown', onClick);
   }, [showIndicatorMenu]);
 
-  // Esc exits full-screen mode.
+  // Esc exits full-screen mode; lock body scroll while expanded so the
+  // underlying page cannot scroll under the portal overlay.
   useEffect(() => {
     if (!expanded) return;
     const onKey = (e) => { if (e.key === 'Escape') setExpanded(false); };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+    };
   }, [expanded]);
 
   // Keep lightweight-charts sized to the fluid container on every layout change
@@ -1612,36 +1625,78 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
 
   return (
     <div
-      className={`omni-chart-shell ${expanded ? 'is-expanded fixed inset-0 z-50 p-2 sm:p-3' : 'w-full'}`}
-      style={expanded ? { background: 'var(--void)', paddingTop: 'max(8px, env(safe-area-inset-top))', paddingBottom: 'max(8px, env(safe-area-inset-bottom))' } : undefined}
+      className={`omni-chart-shell ${expanded ? 'is-expanded fixed inset-0 z-[100] p-2 sm:p-3 flex flex-col' : 'w-full'}`}
+      style={expanded ? {
+        background: 'var(--void)',
+        paddingTop: 'max(8px, env(safe-area-inset-top))',
+        paddingBottom: 'max(8px, env(safe-area-inset-bottom))',
+      } : undefined}
     >
-      <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
+      {/* Toolbar always present — symbol + timeframe switches remain fully usable when expanded */}
+      <div
+        className={`flex items-center justify-between gap-2 mb-1 flex-wrap shrink-0 ${expanded ? 'pb-2 border-b' : ''}`}
+        style={expanded ? { borderColor: 'var(--border)' } : undefined}
+      >
         <div className="flex gap-1 items-center flex-wrap">
           {typeof onSymbolChange === 'function' && SYMBOLS.map(sym => (
-            <button key={sym} type="button" onClick={() => onSymbolChange(sym)}
-              className="font-mono text-[10px] px-1.5 py-0.5 rounded"
-              style={{ background: symbol === sym ? 'var(--emerald)' : 'var(--panel2)', color: symbol === sym ? '#05070a' : 'var(--textDim)' }}>
+            <button
+              key={sym}
+              type="button"
+              onClick={() => onSymbolChange(sym)}
+              className={`font-mono rounded transition-colors ${expanded ? 'text-[11px] px-2.5 py-1.5' : 'text-[10px] px-1.5 py-0.5'}`}
+              style={{
+                background: symbol === sym ? 'var(--emerald)' : 'var(--panel2)',
+                color: symbol === sym ? '#05070a' : 'var(--textDim)',
+              }}
+            >
               {symLabel(sym)}
             </button>
           ))}
+          <span className="mx-0.5 hidden sm:inline" style={{ color: 'var(--border)' }}>|</span>
           {TIMEFRAMES.map(tf => (
-            <button key={tf} onClick={() => setTimeframe(tf)}
-              className="font-mono text-[10px] px-2 py-0.5 rounded"
-              style={{ background: timeframe === tf ? 'var(--panel2)' : 'transparent', color: timeframe === tf ? 'var(--emerald)' : 'var(--textFaint)', border: '1px solid var(--border)' }}>
+            <button
+              key={tf}
+              type="button"
+              onClick={() => setTimeframe(tf)}
+              className={`font-mono rounded ${expanded ? 'text-[11px] px-2.5 py-1.5' : 'text-[10px] px-2 py-0.5'}`}
+              style={{
+                background: timeframe === tf ? 'var(--panel2)' : 'transparent',
+                color: timeframe === tf ? 'var(--emerald)' : 'var(--textFaint)',
+                border: '1px solid var(--border)',
+              }}
+            >
               {tf}
             </button>
           ))}
           <div className="relative" ref={indicatorMenuRef}>
-            <button onClick={() => setShowIndicatorMenu(v => !v)}
-              className="font-mono text-[10px] px-2 py-0.5 rounded flex items-center gap-1"
-              style={{ background: showIndicatorMenu ? 'var(--panel2)' : 'transparent', color: 'var(--textFaint)', border: '1px solid var(--border)' }}>
+            <button
+              type="button"
+              onClick={() => setShowIndicatorMenu(v => !v)}
+              className={`font-mono rounded flex items-center gap-1 ${expanded ? 'text-[11px] px-2.5 py-1.5' : 'text-[10px] px-2 py-0.5'}`}
+              style={{
+                background: showIndicatorMenu ? 'var(--panel2)' : 'transparent',
+                color: 'var(--textFaint)',
+                border: '1px solid var(--border)',
+              }}
+            >
               <SlidersHorizontal size={11} /> Indicators
             </button>
             {showIndicatorMenu && (
-              <div className="absolute z-20 mt-1 rounded p-2 space-y-1.5" style={{ background: 'var(--panel2)', border: '1px solid var(--border)', minWidth: 150 }}>
+              <div
+                className="absolute z-20 mt-1 rounded p-2 space-y-1.5"
+                style={{ background: 'var(--panel2)', border: '1px solid var(--border)', minWidth: 150 }}
+              >
                 {INDICATOR_DEFS.map(ind => (
-                  <label key={ind.key} className="flex items-center gap-2 font-mono text-[10px] cursor-pointer whitespace-nowrap" style={{ color: 'var(--textDim)' }}>
-                    <input type="checkbox" checked={indicators[ind.key]} onChange={() => setIndicators(s => ({ ...s, [ind.key]: !s[ind.key] }))} />
+                  <label
+                    key={ind.key}
+                    className="flex items-center gap-2 font-mono text-[10px] cursor-pointer whitespace-nowrap"
+                    style={{ color: 'var(--textDim)' }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={indicators[ind.key]}
+                      onChange={() => setIndicators(s => ({ ...s, [ind.key]: !s[ind.key] }))}
+                    />
                     <span className="w-2 h-2 rounded-full shrink-0" style={{ background: ind.color }} />
                     {ind.label}
                   </label>
@@ -1652,24 +1707,40 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
         </div>
         <div className="flex items-center gap-2">
           {ohlcReadout && (
-            <div className="font-mono text-[10px] flex gap-2" style={{ color: 'var(--textDim)' }}>
+            <div className={`font-mono flex gap-2 ${expanded ? 'text-[11px]' : 'text-[10px]'}`} style={{ color: 'var(--textDim)' }}>
               <span>O <span style={{ color: 'var(--text)' }}>{fmtPrice(symbol, ohlcReadout.o)}</span></span>
               <span>H <span style={{ color: 'var(--emerald)' }}>{fmtPrice(symbol, ohlcReadout.h)}</span></span>
               <span>L <span style={{ color: 'var(--coral)' }}>{fmtPrice(symbol, ohlcReadout.l)}</span></span>
               <span>C <span style={{ color: 'var(--text)' }}>{fmtPrice(symbol, ohlcReadout.c)}</span></span>
             </div>
           )}
-          <button onClick={() => setExpanded(v => !v)} title={expanded ? 'Collapse' : 'Expand to full screen'}
-            className="font-mono text-[10px] p-1 rounded flex items-center"
-            style={{ color: 'var(--textFaint)', border: '1px solid var(--border)' }}>
-            {expanded ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+          <button
+            type="button"
+            onClick={() => setExpanded(v => !v)}
+            title={expanded ? 'Collapse (Esc)' : 'Expand to full screen'}
+            className={`font-mono p-1.5 rounded flex items-center ${expanded ? 'text-[11px]' : 'text-[10px]'}`}
+            style={{ color: 'var(--textFaint)', border: '1px solid var(--border)' }}
+          >
+            {expanded ? <Minimize2 size={14} /> : <Maximize2 size={12} />}
           </button>
         </div>
       </div>
-      <div className="omni-chart-canvas-wrap">
-        {status === 'empty' && <div className="absolute inset-0 z-10 flex items-center justify-center"><WaitingForBackend height={120} label="No chart data yet — try H1 or wait a minute" /></div>}
-        {status === 'error' && <div className="absolute inset-0 z-10 flex items-center justify-center"><WaitingForBackend height={120} label="Chart temporarily unavailable — retrying…" /></div>}
-        {status === 'loading' && <div className="absolute inset-0 z-10 flex items-center justify-center"><WaitingForBackend height={120} label="Loading candles…" /></div>}
+      <div className="omni-chart-canvas-wrap flex-1 min-h-0">
+        {status === 'empty' && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center">
+            <WaitingForBackend height={120} label="No chart data yet — try H1 or wait a minute" />
+          </div>
+        )}
+        {status === 'error' && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center">
+            <WaitingForBackend height={120} label="Chart temporarily unavailable — retrying…" />
+          </div>
+        )}
+        {status === 'loading' && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center">
+            <WaitingForBackend height={120} label="Loading candles…" />
+          </div>
+        )}
         <div ref={containerRef} className="omni-chart-canvas" style={{ opacity: status === 'ok' ? 1 : 0.2 }} />
       </div>
     </div>
