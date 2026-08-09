@@ -629,18 +629,29 @@ function useLiveFeed() {
   useEffect(() => {
     let cancelled = false;
     let timer = null;
+    let attempts = 0;
+    // Never stay on a blank "checking" shell — show the dashboard shell immediately as live
+    // and keep probing. Cold Render can take 30–60s; UI must still paint TopBar/tabs.
+    setMode('live');
     const tryProbe = () => {
-      omniFetch('/health', 4000)
+      attempts += 1;
+      const probe = attempts % 2 === 0
+        ? omniFetch('/health', 6000)
+        : omniFetch('/api/market?symbols=EURUSD', 8000);
+      probe
         .then(() => { if (!cancelled) { setMode('live'); setWakingBackend(false); } })
         .catch(() => {
           if (cancelled) return;
-          setMode(m => (m === 'live' ? m : 'checking'));
           setWakingBackend(true);
-          timer = setTimeout(tryProbe, 4000);
+          // Keep mode live so tabs/prices shell always render
+          setMode('live');
+          timer = setTimeout(tryProbe, attempts < 8 ? 2500 : 5000);
         });
     };
     tryProbe();
-    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+    // Hard ceiling: stop "waking" spinner after 45s even if backend is slow
+    const stopWake = setTimeout(() => { if (!cancelled) setWakingBackend(false); }, 45000);
+    return () => { cancelled = true; if (timer) clearTimeout(timer); clearTimeout(stopWake); };
   }, []);
 
   /* Clock runs regardless of mode. */
@@ -2666,13 +2677,21 @@ function markPwaDone() {
 }
 
 function markPwaDismissed() {
-  try { localStorage.setItem(PWA_DISMISS_KEY, '1'); } catch (_) {}
+  try { localStorage.setItem(PWA_DISMISS_KEY, String(Date.now())); } catch (_) {}
 }
 
 function isPwaFinished() {
   try {
-    if (localStorage.getItem(PWA_DONE_KEY) === '1') return true;
-    if (localStorage.getItem(PWA_DISMISS_KEY) === '1') return true;
+    // After user deletes the installed app they open the site in the browser again —
+    // clear stale "done" so Install can work once more.
+    if (!isStandalonePwa()) {
+      try { localStorage.removeItem(PWA_DONE_KEY); } catch (_) {}
+    } else {
+      return true;
+    }
+    // Only hide after explicit "Later" for this browser session period (7 days)
+    const dismissedAt = Number(localStorage.getItem(PWA_DISMISS_KEY) || 0);
+    if (dismissedAt && Date.now() - dismissedAt < 7 * 86400000) return true;
   } catch (_) {}
   return false;
 }
@@ -2709,9 +2728,6 @@ function InstallBanner({ installEvt, onInstalled, loggedIn }) {
     }
   }, []);
 
-  // Desktop: rely on Chrome/Edge address-bar ⊕ install icon only
-  if (!isMobileDevice()) return null;
-  // Only after login on phone
   if (!loggedIn) return null;
   if (hidden || isStandalonePwa() || isPwaFinished()) return null;
 
@@ -2751,13 +2767,13 @@ function InstallBanner({ installEvt, onInstalled, loggedIn }) {
       <div className="omni-panel px-3 py-2 flex flex-wrap items-center gap-2" style={{ borderColor: 'var(--emerald)' }}>
         <Download size={14} style={{ color: 'var(--emerald)' }} />
         <div className="flex-1 min-w-[140px] font-mono text-[11px]" style={{ color: 'var(--text)' }}>
-          Add OMNICEE to your phone
+          Install OMNICEE on this device
           <div className="text-[10px]" style={{ color: 'var(--textFaint)' }}>
             {installEvt
-              ? 'Tap Install — this message will not show again after you finish'
+              ? 'Tap Install — works offline shell + home screen icon'
               : isIosSafari()
-                ? 'Safari: Share → Add to Home Screen (once)'
-                : 'Use Install when ready — only shown once'}
+                ? 'iPhone: Share → Add to Home Screen'
+                : 'Chrome/Edge: Install button, or address-bar install icon, or menu → Install app'}
           </div>
         </div>
         <button
@@ -2849,12 +2865,10 @@ export default function OmniceeDashboard() {
     if (isStandalonePwa()) markPwaDone();
 
     const onPrompt = (e) => {
-      // Mobile only: defer prompt so our one-shot Install button can call it.
-      // Desktop: do NOT preventDefault — Chrome/Edge keep the address-bar install icon.
-      if (isMobileDevice()) {
-        e.preventDefault();
-        if (!isPwaFinished()) setInstallEvt(e);
-      }
+      // Capture so our Install button works after user deleted the app.
+      // Chrome still shows address-bar icon in many versions even with preventDefault.
+      e.preventDefault();
+      if (!isPwaFinished()) setInstallEvt(e);
     };
     const onInstalled = () => {
       markPwaDone();
@@ -2890,8 +2904,13 @@ export default function OmniceeDashboard() {
     <AppErrorBoundary>
     <div className="omni-root flex flex-col h-full min-h-[100dvh] min-h-[640px] w-full text-sm" style={{ background: 'var(--void, #05070a)', color: 'var(--text, #eef2f7)' }}>
       <ThemeStyle />
-      <TopBar now={feed.now || Date.now()} mode={feed.mode || 'checking'} socketLive={!!feed.socketLive} analysisLive={feed.analysisLive} wakingBackend={!!feed.wakingBackend} onCommand={handleCommand} />
+      <TopBar now={feed.now || Date.now()} mode={feed.mode || 'live'} socketLive={!!feed.socketLive} analysisLive={feed.analysisLive} wakingBackend={!!feed.wakingBackend} onCommand={handleCommand} />
       <InstallBanner installEvt={installEvt} loggedIn={!!user} onInstalled={() => setInstallEvt(null)} />
+      {feed.wakingBackend && (
+        <div className="px-4 py-2 font-mono text-[11px] border-b" style={{ borderColor: 'var(--border)', color: 'var(--gold)', background: 'var(--panel2)' }}>
+          Connecting to server… prices and signals appear when the backend is awake (can take up to a minute on free hosting).
+        </div>
+      )}
       <TickerTape prices={feed.prices || {}} changes={feed.changes || {}} flash={feed.flash || {}} quotes={feed.quotes || {}} />
       <div className="flex flex-col flex-1 min-h-0">
         <div className="flex-1 overflow-y-auto omni-scroll">
