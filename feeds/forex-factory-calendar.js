@@ -75,7 +75,14 @@ class ForexFactoryCalendar {
 
     const mapped = rows
       .map(e => {
-        const time = e.date ? new Date(e.date).getTime() : NaN;
+        let time = NaN;
+        if (e.date) {
+          time = new Date(e.date).getTime();
+          // Some hosts parse timezone-less strings as local; if invalid try ISO-ish
+          if (!Number.isFinite(time) && typeof e.date === 'string') {
+            time = new Date(e.date.replace(' ', 'T')).getTime();
+          }
+        }
         const country = e.country || '';
         const currency = COUNTRY_TO_CCY[country] || COUNTRY_TO_CCY[country.toUpperCase()] || (country.length === 3 ? country : 'USD');
         return {

@@ -698,7 +698,7 @@ function useLiveFeed() {
     };
     const pullSlow = async () => {
       try { const r = await recordFetch('outlook', omniFetch('/api/outlook')); if (!cancelled && r.ok) setOutlook(r.outlook); } catch (_) {}
-      try { const r = await recordFetch('calendar', omniFetch('/api/calendar')); if (!cancelled && r.ok && Array.isArray(r.events)) setCalendar(r.events); } catch (_) {}
+      try { const r = await recordFetch('calendar', omniFetch('/api/calendar')); if (!cancelled && r && Array.isArray(r.events)) setCalendar(r.events); else if (!cancelled && r && r.ok === false) setCalendar([]); } catch (_) {}
       try { const r = await recordFetch('levels', omniFetch('/api/levels')); if (!cancelled && r.ok && r.levels) setLevels(r.levels); } catch (_) {}
       try { const r = await recordFetch('heatmap', omniFetch('/api/heatmap')); if (!cancelled && r.ok) setHeatmapTiles(r.tiles); } catch (_) {}
       try { const r = await recordFetch('audit-trail', omniFetch('/api/audit-trail?limit=30')); if (!cancelled && r.ok) setAuditLog(r.entries); } catch (_) {}
@@ -1872,31 +1872,24 @@ function IntelTab({ now, outlook, mode, calendar }) {
       </div>
 
       <div className="omni-panel p-4">
-        <SectionHeader icon={Clock} title="Economic Calendar" sub="Forex Factory · high/medium impact" />
-        {(calendar && calendar.length) ? (
-          <div className="space-y-1.5 max-h-72 overflow-y-auto omni-scroll">
-            {calendar.slice(0, 40).map((e, i) => (
-              <div key={i} className="flex items-center gap-2 font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
+        <SectionHeader icon={Clock} title="Economic Calendar" sub="Forex Factory · this week · High first" />
+        {Array.isArray(calendar) && calendar.length > 0 ? (
+          <div className="space-y-1.5 max-h-80 overflow-y-auto omni-scroll">
+            {calendar.slice(0, 60).map((e, i) => (
+              <div key={`${e.name}-${e.time}-${i}`} className="flex items-center gap-2 font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
                 <Pill tone={String(e.impact).toLowerCase() === 'high' ? 'down' : String(e.impact).toLowerCase() === 'medium' ? 'warn' : 'neutral'}>{e.impact || '—'}</Pill>
-                <span className="flex-1" style={{ color: 'var(--textDim)' }}>{e.name}</span>
+                <span className="flex-1 min-w-0 truncate" style={{ color: 'var(--textDim)' }}>{e.name}</span>
                 <span style={{ color: 'var(--textFaint)' }}>{e.currency}</span>
-                <span style={{ color: 'var(--textFaint)' }}>{e.hoursAway != null ? `in ${e.hoursAway}h` : ''}</span>
+                <span className="shrink-0" style={{ color: 'var(--textFaint)' }}>
+                  {e.hoursAway != null ? (e.hoursAway < 0 ? `${Math.abs(e.hoursAway)}h ago` : `in ${e.hoursAway}h`) : ''}
+                </span>
               </div>
             ))}
-          </div>
-        ) : calendarRows === null ? <WaitingForBackend /> : calendarRows.length === 0 ? (
-          <div className="font-mono text-[11px] leading-relaxed" style={{ color: 'var(--textFaint)' }}>
-            Calendar still loading from Forex Factory…
           </div>
         ) : (
-          <div className="space-y-1.5">
-            {calendarRows.map((e, i) => (
-              <div key={i} className="flex items-center gap-2 font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
-                <Pill tone={e.impact === 'high' ? 'down' : e.impact === 'medium' ? 'warn' : 'neutral'}>{e.impact}</Pill>
-                <span className="flex-1" style={{ color: 'var(--textDim)' }}>{e.event}</span>
-                <span style={{ color: 'var(--textFaint)' }}>in {Math.floor(e.mins / 60)}h{e.mins % 60}m</span>
-              </div>
-            ))}
+          <div className="font-mono text-[11px] leading-relaxed space-y-1" style={{ color: 'var(--textFaint)' }}>
+            <div>No calendar rows yet.</div>
+            <div>Source: Forex Factory free feed. Opens after deploy + one successful /api/calendar.</div>
           </div>
         )}
       </div>

@@ -55,6 +55,7 @@ function dashboardReadAuth(req, res, next) {
   const path = (req.path || req.url || '').split('?')[0];
   const publicPricePaths = new Set([
     '/api/market', '/api/candles', '/api/health', '/health',
+    '/api/calendar', '/api/news',
   ]);
   if (req.method === 'GET' && publicPricePaths.has(path)) {
     req.telegramUser = { id: 'public-prices', username: 'public-prices' };
@@ -295,22 +296,32 @@ function createApp() {
     try {
       const events = await ffCalendar.economicCalendar();
       const now = Date.now();
-      const upcoming = (events || [])
-        .filter(e => Number.isFinite(e.time) && e.time >= now - 3600000)
-        .sort((a, b) => a.time - b.time)
-        .slice(0, 80)
-        .map(e => ({
-          name: e.name,
-          currency: e.currency,
-          time: e.time,
-          impact: e.impact,
-          forecast: e.forecast,
-          previous: e.previous,
-          source: e.source || 'forex-factory',
-          hoursAway: Math.round((e.time - now) / 3600000 * 10) / 10,
-        }));
-      res.json({ ok: true, events: upcoming, count: upcoming.length });
+      // Keep full week: from 2h ago through future (not only "next hour window")
+      let upcoming = (events || [])
+        .filter(e => Number.isFinite(e.time) && e.time >= now - 2 * 3600000)
+        .sort((a, b) => a.time - b.time);
+      // Prefer High/Medium first in the payload head, but keep Lows after
+      const rank = (imp) => {
+        const i = String(imp || '').toLowerCase();
+        if (i === 'high') return 0;
+        if (i === 'medium') return 1;
+        if (i === 'low') return 2;
+        return 3;
+      };
+      upcoming = [...upcoming].sort((a, b) => rank(a.impact) - rank(b.impact) || a.time - b.time);
+      const mapped = upcoming.slice(0, 100).map(e => ({
+        name: e.name,
+        currency: e.currency,
+        time: e.time,
+        impact: e.impact,
+        forecast: e.forecast,
+        previous: e.previous,
+        source: e.source || 'forex-factory',
+        hoursAway: Math.round((e.time - now) / 3600000 * 10) / 10,
+      }));
+      res.json({ ok: true, events: mapped, count: mapped.length });
     } catch (err) {
+      console.warn('[API] calendar failed:', err.message);
       res.status(503).json({ ok: false, error: err.message, events: [] });
     }
   });
@@ -528,13 +539,15 @@ function createApp() {
       console.warn('[API] Finnhub news failed:', err.message);
     }
 
+    const RELEVANT = /forex|currency|eur|usd|gbp|jpy|dxy|dollar|fed\b|fomc|ecb|boj|boe|cpi|nfp|inflation|rate|treasury|yield|gold|xau|oil|wti|brent|opec|bitcoin|btc|ethereum|eth|crypto|nasdaq|s&p|bond|central bank|payroll|jobs report/i;
     const seen = new Set();
     news = news.filter(n => {
       const k = String(n.headline || '').toLowerCase().slice(0, 60);
       if (!k || seen.has(k)) return false;
       seen.add(k);
-      return true;
-    }).sort((a, b) => (b.datetime || 0) - (a.datetime || 0)).slice(0, 40);
+      const text = `${n.headline || ''} ${n.summary || ''} ${n.category || ''}`;
+      return RELEVANT.test(text);
+    }).sort((a, b) => (b.datetime || 0) - (a.datetime || 0)).slice(0, 50);
 
     res.json({ ok: true, news, sources: ['yahoo', finnhub.enabled() ? 'finnhub' : null].filter(Boolean) });
   });

@@ -5,15 +5,25 @@ const https = require('https');
 const UA = 'Mozilla/5.0 (compatible; OMNICEE/1.0; +https://github.com/cee999/omnicee)';
 
 const TOPICS = [
-  'forex EUR USD',
-  'dollar index DXY',
-  'Federal Reserve interest rates',
-  'gold XAUUSD',
-  'crude oil WTI OPEC',
-  'bitcoin ethereum crypto',
-  'ECB Bank of England BoJ',
-  'US CPI NFP inflation',
-  'geopolitics oil markets',
+  // Forex & policy
+  'forex market EURUSD GBPUSD',
+  'US dollar index DXY FX',
+  'Federal Reserve interest rate decision',
+  'ECB interest rate euro',
+  'Bank of England rate GBP',
+  'Bank of Japan yen intervention',
+  'US CPI inflation NFP jobs report',
+  'FOMC minutes treasury yields',
+  // Metals / energy (macro FX drivers)
+  'gold price XAUUSD Fed',
+  'crude oil WTI OPEC inventory',
+  // Crypto markets
+  'bitcoin BTC price ETF',
+  'ethereum ETH crypto market',
+  'crypto regulation SEC exchange',
+  // Cross-asset finance
+  'stock market futures S&P Nasdaq',
+  'bond yields treasury dollar',
 ];
 
 function httpGetJSON(url) {
@@ -54,7 +64,7 @@ class YahooNewsFeed {
     this.topics = config.topics || TOPICS;
     this._cache = null;
     this._cacheTs = 0;
-    this.cacheMs = Number(config.cacheMs || process.env.YAHOO_NEWS_CACHE_MS || 10 * 60 * 1000);
+    this.cacheMs = Number(config.cacheMs || process.env.YAHOO_NEWS_CACHE_MS || 5 * 60 * 1000);
   }
 
   enabled() { return true; }
@@ -98,10 +108,26 @@ class YahooNewsFeed {
         merged.push(item);
       }
     }
-    merged.sort((a, b) => (b.datetime || 0) - (a.datetime || 0));
-    this._cache = merged;
+    const RELEVANT = /forex|currency|eur|usd|gbp|jpy|aud|cad|nzd|chf|dxy|dollar|fed\b|fomc|ecb|boj|boe|cpi|nfp|inflation|rate decision|treasury|yield|gold|xau|oil|wti|brent|opec|bitcoin|btc|ethereum|eth|crypto|nasdaq|s&p|equit|bond|liquidity|central bank|nonfarm|payroll/i;
+    const scored = merged.map(item => {
+      const text = `${item.headline} ${item.summary || ''} ${item.category || ''}`;
+      let score = 0;
+      if (RELEVANT.test(text)) score += 5;
+      if (/forex|EURUSD|GBPUSD|USDJPY|FX\b/i.test(text)) score += 3;
+      if (/bitcoin|ethereum|crypto|BTC|ETH/i.test(text)) score += 3;
+      if (/Fed|FOMC|ECB|CPI|NFP|inflation|interest rate/i.test(text)) score += 3;
+      if (/gold|oil|DXY|dollar index/i.test(text)) score += 2;
+      // recency boost
+      const ageH = (Date.now() - (item.datetime || 0)) / 3600000;
+      if (ageH < 6) score += 2;
+      else if (ageH < 24) score += 1;
+      return { ...item, _rel: score };
+    }).filter(item => item._rel >= 3); // drop non-market gossip
+    scored.sort((a, b) => (b._rel - a._rel) || ((b.datetime || 0) - (a.datetime || 0)));
+    const out = scored.map(({ _rel, ...rest }) => rest);
+    this._cache = out;
     this._cacheTs = now;
-    return merged.slice(0, limit);
+    return out.slice(0, limit);
   }
 }
 
