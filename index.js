@@ -185,8 +185,18 @@ async function runAnalysisCycle(symbol, timeframe) {
 
   try {
     const candles = candleStores[symbol]?.[timeframe];
-    if (!candles || candles.length < 50) {
-      log.debug(`${key}: not enough candles (${candles?.length || 0}/50) — waiting`);
+    const minBars = SIGNAL_SOFT_GATES ? 40 : 50;
+    if (!candles || candles.length < minBars) {
+      log.debug(`${key}: not enough candles (${candles?.length || 0}/${minBars}) — waiting`);
+      try {
+        auditTrail?.record?.({
+          symbol, timeframe, signalFired: false,
+          blockedReason: `need_${minBars}_candles_have_${candles?.length || 0}`,
+          score: 0,
+          reasons: [`candles ${candles?.length || 0}/${minBars}`],
+          gatesFailed: ['candle_history'],
+        });
+      } catch (_) {}
       return;
     }
 
@@ -1377,9 +1387,11 @@ function buildSingletons() {
   if (InstitutionalGates) {
     institutionalGates = new InstitutionalGates({
       minScore: MIN_SCORE,
-      minRR: 1.5,
+      minRR: SIGNAL_SOFT_GATES ? 1.2 : 1.5,
       maxRiskPct: Math.min(RISK_PCT, 2.0),
-      minRegimeTradeability: 50,
+      minRegimeTradeability: SIGNAL_SOFT_GATES ? 35 : 50,
+      requireEnsemble: !SIGNAL_SOFT_GATES,
+      minAgentConsensus: SIGNAL_SOFT_GATES ? 0.35 : 0.5,
     });
     log.info('InstitutionalGates created');
   }
@@ -1688,15 +1700,18 @@ function buildFeeds() {
       }
       onLivePrice(symbol, price, { source: 'deriv', change, bid, ask });
       try {
-        if (typeof onMT5Tick === 'function') {
-        }
-        for (const tf of ['M5', 'H1']) {
+        for (const tf of TIMEFRAMES_STR) {
           if (!candleStores[symbol]) candleStores[symbol] = {};
           const arr = candleStores[symbol][tf] || (candleStores[symbol][tf] = []);
-          const ms = tf === 'M5' ? 300000 : 3600000;
+          const ms = ({ M1: 60e3, M5: 300e3, M15: 900e3, H1: 3600e3, H4: 14400e3, D1: 86400e3 })[tf] || 3600e3;
           const bucket = Math.floor(Date.now() / ms) * ms;
           const lastBar = arr[arr.length - 1];
           if (!lastBar || lastBar.timestamp !== bucket) {
+            if (lastBar && lastBar.isClosed === false) {
+              lastBar.isClosed = true;
+              // Closed bar → analysis (same path as MT5)
+              try { onCandle({ symbol, timeframe: tf, candle: { ...lastBar }, isClosed: true }); } catch (_) {}
+            }
             arr.push({ open: price, high: price, low: price, close: price, volume: 0, timestamp: bucket, isClosed: false, source: 'deriv' });
             if (arr.length > 500) arr.splice(0, arr.length - 500);
           } else {
@@ -1717,6 +1732,10 @@ function buildFeeds() {
       if (candles.length > (prev.length * 0.5) || prev.length < 40) {
         candleStores[symbol][timeframe] = candles.slice(-500);
         log.info(`Deriv candles: ${symbol} ${timeframe} ${candles.length} bars`);
+        // CRITICAL: history seed must run analysis — isClosed path only fires on live bar close
+        if (TIMEFRAMES_STR.includes(timeframe) && candles.length >= (SIGNAL_SOFT_GATES ? 40 : 50)) {
+          setImmediate(() => runAnalysisCycle(symbol, timeframe));
+        }
       }
     });
     derivFeed.on('connected', () => log.info(`DerivFeed connected (app_id=${process.env.DERIV_APP_ID || '1089'}) — ticks + OHLC; MT5 overrides when online`));
@@ -1805,6 +1824,19 @@ async function main() {
   }
 
   const feeds = buildFeeds();
+  // periodic-analysis: Deriv/MT5 may fill candleStores without a closed-bar event
+  setInterval(() => {
+    for (const symbol of SYMBOLS) {
+      for (const tf of TIMEFRAMES_STR) {
+        const n = candleStores[symbol]?.[tf]?.length || 0;
+        if (n >= (SIGNAL_SOFT_GATES ? 40 : 50)) {
+          runAnalysisCycle(symbol, tf).catch(e => log.warn(`periodic analysis ${symbol} ${tf}: ${e.message}`));
+        }
+      }
+    }
+  }, Number(process.env.ANALYSIS_INTERVAL_MS || 180000));
+  log.info(`Periodic analysis every ${Number(process.env.ANALYSIS_INTERVAL_MS || 180000)/1000}s for ${SYMBOLS.join(',')}`);
+
   const keepUrl = process.env.KEEPALIVE_URL || process.env.RENDER_EXTERNAL_URL;
   if (keepUrl) {
     setInterval(() => {
