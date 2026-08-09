@@ -635,11 +635,27 @@ app.get('/api/levels', dashboardReadAuth, (req, res) => {
     }
 
     try {
+      // FIX: default fallback here was 'general' — Finnhub's broad
+      // business-news category — and the frontend's news fetch never
+      // passes a ?category, so this ran on every single default page
+      // load. The forex/crypto loop right below already covers both of
+      // the categories actually wanted here; this initial call just
+      // needs to not default to the one category that isn't either.
       let fh = symbol
         ? await finnhub.companyNews(symbol)
-        : await finnhub.marketNews(req.query.category || 'general');
+        : await finnhub.marketNews(req.query.category || 'crypto');
       if (!symbol && finnhub.enabled()) {
-        for (const cat of ['forex', 'crypto', 'general']) {
+        // FIX: was pulling Finnhub's 'general' category alongside forex/
+        // crypto — 'general' is broad business/markets news (earnings,
+        // IPOs, macro, whatever Finnhub considers newsworthy that day),
+        // not crypto/forex-specific. It fed into the same RELEVANT regex
+        // below, which — unlike feeds/yahoo-news-feed.js's own scoring,
+        // which explicitly penalizes pure-equity terms unless FX/crypto
+        // is also present — just needed one keyword match to pass. That
+        // let plain stock-market stories through as long as they
+        // mentioned, say, "the Fed" in passing. Dropped 'general' at the
+        // source instead of trying to out-filter it downstream.
+        for (const cat of ['forex', 'crypto']) {
           try {
             const extra = await finnhub.marketNews(cat);
             if (Array.isArray(extra)) fh = [...(Array.isArray(fh) ? fh : []), ...extra];
@@ -662,8 +678,24 @@ app.get('/api/levels', dashboardReadAuth, (req, res) => {
       console.warn('[API] Finnhub news failed:', err.message);
     }
 
-    // Strict market wire: crypto / FX / macro / commodities that move risk assets
-    const RELEVANT = /bitcoin|btc|ethereum|eth|crypto|defi|stablecoin|binance|coinbase|forex|fx\b|eurusd|gbpusd|usdjpy|currency|dollar|dxy|fed\b|fomc|ecb|boj|boe|cpi|nfp|inflation|interest rate|treasury|yield|gold|xau|oil|wti|brent|opec|nasdaq|s&p|central bank|payroll|etf|sec\b/i;
+    // FIX: RELEVANT below was "one keyword match, anywhere, passes" with
+    // no penalty for pure-equity content and no specificity floor — a
+    // story built entirely around Nasdaq/S&P earnings still got through
+    // as long as it mentioned "the Fed" once in passing, since fed\b was
+    // in the same flat alternation as bitcoin/forex/etc. That's the
+    // actual dilution behind "I want this very much crypto and forex" —
+    // not a missing filter, a too-loose one. Rewritten to match the
+    // stricter standard feeds/yahoo-news-feed.js already uses for its own
+    // scoring: crypto/forex/commodity terms are the core; macro (Fed/CPI/
+    // NFP/central-bank) genuinely moves both markets so it stays, but
+    // pure-equity terms (Nasdaq/S&P/earnings/IPO/ETF) with no crypto,
+    // forex, commodity, or macro tie-in are now excluded outright instead
+    // of being one regex-alternation away from passing.
+    const CRYPTO = /bitcoin|btc|ethereum|eth\b|crypto|defi|stablecoin|binance|coinbase|solana/i;
+    const FOREX = /forex|\bfx\b|eurusd|gbpusd|usdjpy|currency pair|\bdxy\b|dollar index/i;
+    const MACRO = /\bfed\b|fomc|\becb\b|\bboj\b|\bboe\b|\bcpi\b|\bnfp\b|inflation|interest rate|treasury yield|central bank|nonfarm|payroll/i;
+    const COMMODITY = /gold|\bxau\b|\boil\b|\bwti\b|brent|opec/i;
+    const PURE_EQUITY = /\b(nasdaq|s&p|dow jones|stock market|earnings|ipo|etf)\b/i;
     const NOISE = /celebrity|sports|football|nba|movie|netflix|recipe|horoscope|gossip|weather forecast/i;
     const seen = new Set();
     news = news.filter(n => {
@@ -672,14 +704,17 @@ app.get('/api/levels', dashboardReadAuth, (req, res) => {
       seen.add(k);
       const text = `${n.headline || ''} ${n.summary || ''} ${n.category || ''}`;
       if (NOISE.test(text)) return false;
-      return RELEVANT.test(text);
+      const hasCore = CRYPTO.test(text) || FOREX.test(text) || COMMODITY.test(text);
+      if (!hasCore && !MACRO.test(text)) return false;
+      if (PURE_EQUITY.test(text) && !hasCore) return false;
+      return true;
     }).map(n => {
       const text = `${n.headline || ''} ${n.summary || ''} ${n.category || ''}`;
       let rank = 0;
-      if (/bitcoin|btc|ethereum|eth|crypto|solana|binance|coinbase/i.test(text)) rank += 10;
-      if (/forex|eurusd|gbpusd|usdjpy|\bfx\b|currency/i.test(text)) rank += 10;
-      if (/dxy|dollar|fed\b|fomc|ecb|cpi|nfp/i.test(text)) rank += 5;
-      if (/gold|xau|oil|wti/i.test(text)) rank += 3;
+      if (CRYPTO.test(text)) rank += 10;
+      if (FOREX.test(text)) rank += 10;
+      if (COMMODITY.test(text)) rank += 4;
+      if (MACRO.test(text)) rank += 3;
       n._rank = rank;
       return n;
     }).sort((a, b) => (b._rank - a._rank) || ((b.datetime || 0) - (a.datetime || 0)))
