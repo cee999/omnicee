@@ -835,15 +835,22 @@ app.get('/api/levels', dashboardReadAuth, (req, res) => {
     res.json({ ok: true, outcome: saved });
   });
 
-  const EA_SECRET = process.env.EA_SECRET || '';
-  // FIX: EA_SECRET was undocumented in .env.example and, when unset, silently left /api/ea/signals — the endpoint that hands out live trading signals to the MT5 EA — open to anyone who finds the URL,...
-  if (!EA_SECRET) {
-    console.warn('[API] EA_SECRET not set — /api/ea/signals is open access (no auth required)');
-  }
+  const EA_SECRET = String(process.env.EA_SECRET || '').trim();
+  const EA_SECRET_REQUIRED = process.env.NODE_ENV === 'production';
   function eaAuth(req, res, next) {
-    const token = req.headers['x-ea-secret'] || req.query.secret;
-    if (!EA_SECRET) return next();
-    if (token === EA_SECRET) return next();
+    if (!EA_SECRET) {
+      if (EA_SECRET_REQUIRED) {
+        return res.status(503).json({ ok: false, error: 'EA authentication is not configured' });
+      }
+      return next();
+    }
+    const token = String(req.headers['x-ea-secret'] || '').trim();
+    const crypto = require('crypto');
+    const expected = Buffer.from(EA_SECRET);
+    const supplied = Buffer.from(token);
+    if (supplied.length === expected.length && supplied.length > 0 && crypto.timingSafeEqual(supplied, expected)) {
+      return next();
+    }
     return res.status(401).json({ ok: false, error: 'Invalid EA secret' });
   }
 

@@ -12,7 +12,7 @@
 
 //--- inputs
 input string InpServerURL   = "https://omnicee.onrender.com";
-input string InpEASecret    = "17380504905193";
+input string InpEASecret    = "";
 input int    InpPollSeconds = 5;
 input int    InpBalanceSync = 60;
 input int    InpPriceSync   = 1;
