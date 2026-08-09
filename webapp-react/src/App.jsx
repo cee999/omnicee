@@ -322,12 +322,19 @@ function ThemeStyle() {
           animation: none !important;
         }
       }
+      /* When full chart is open, hide ticker + top bar so symbols/TF are not covered */
+      body.omni-chart-expanded .omni-topbar,
+      body.omni-chart-expanded .omni-ticker-wrap,
+      body.omni-chart-expanded .omni-nav {
+        display: none !important;
+      }
       .omni-chart-shell.is-expanded {
         display: flex;
         flex-direction: column;
         width: 100%;
         height: 100%;
         max-height: 100dvh;
+        z-index: 9999 !important;
       }
       .omni-chart-shell.is-expanded .omni-chart-canvas-wrap {
         flex: 1 1 auto;
@@ -1213,7 +1220,7 @@ function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand,
     live: { label: 'Live', color: 'var(--emerald)', pulse: true },
   }[mode] || { label: 'Offline', color: 'var(--coral)', pulse: false };
   return (
-    <div className="flex items-center gap-2 sm:gap-4 px-2 sm:px-4 py-2.5 border-b shrink-0" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
+    <div className="omni-topbar flex items-center gap-2 sm:gap-4 px-2 sm:px-4 py-2.5 border-b shrink-0" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
       <div className="flex items-center gap-2 shrink-0">
         <div className="w-7 h-7 rounded flex items-center justify-center font-display text-[12px] font-bold"
           style={{ background: 'var(--emerald)', color: '#05070a' }}>Ω</div>
@@ -1903,17 +1910,21 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
     return () => document.removeEventListener('mousedown', onClick);
   }, [showIndicatorMenu]);
 
-  // Esc exits full-screen mode; lock body scroll while expanded so the
-  // underlying page cannot scroll under the portal overlay.
+  // Esc exits full-screen; hide ticker/topbar via body class; lock scroll.
   useEffect(() => {
-    if (!expanded) return;
+    if (expanded) {
+      document.body.classList.add('omni-chart-expanded');
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.classList.remove('omni-chart-expanded');
+      document.body.style.overflow = '';
+    }
     const onKey = (e) => { if (e.key === 'Escape') setExpanded(false); };
-    window.addEventListener('keydown', onKey);
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    if (expanded) window.addEventListener('keydown', onKey);
     return () => {
       window.removeEventListener('keydown', onKey);
-      document.body.style.overflow = prevOverflow;
+      document.body.classList.remove('omni-chart-expanded');
+      document.body.style.overflow = '';
     };
   }, [expanded]);
 
@@ -1977,11 +1988,12 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
 
   return (
     <div
-      className={`omni-chart-shell ${expanded ? 'is-expanded fixed inset-0 z-[100] p-2 sm:p-3 flex flex-col' : 'w-full'}`}
+      className={`omni-chart-shell ${expanded ? 'is-expanded fixed inset-0 z-[9999] p-2 sm:p-3 flex flex-col' : 'w-full'}`}
       style={expanded ? {
         background: 'var(--void)',
-        paddingTop: 'max(8px, env(safe-area-inset-top))',
-        paddingBottom: 'max(8px, env(safe-area-inset-bottom))',
+        // Extra top pad so symbol/TF row clears Telegram header + old ticker space
+        paddingTop: 'max(12px, calc(env(safe-area-inset-top, 0px) + 8px))',
+        paddingBottom: 'max(12px, env(safe-area-inset-bottom, 0px))',
       } : undefined}
     >
       {/* Controls ONLY in expanded mode — collapsed is a clean preview + Full button */}
