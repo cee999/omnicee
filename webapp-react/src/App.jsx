@@ -901,7 +901,8 @@ const TABS = [
   { key: 'DASH', label: 'Home', fkey: 'F1', icon: LayoutDashboard },
   { key: 'SIGNALS', label: 'Signals', fkey: 'F2', icon: Radio },
   { key: 'NEWS', label: 'News', fkey: 'F3', icon: Newspaper },
-  { key: 'MONITOR', label: 'System', fkey: 'F4', icon: Activity },
+  { key: 'VALID', label: 'Valid', fkey: 'F4', icon: FlaskConical },
+  { key: 'MONITOR', label: 'System', fkey: 'F5', icon: Activity },
 ];
 
 function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand }) {
@@ -2781,7 +2782,7 @@ export default function OmniceeDashboard() {
   const [activeTab, setActiveTab] = useState(() => {
     try {
       const tab = new URLSearchParams(window.location.search).get('tab');
-      if (tab && ['DASH', 'SIGNALS', 'NEWS', 'MONITOR'].includes(tab)) return tab;
+      if (tab && ['DASH', 'SIGNALS', 'NEWS', 'VALID', 'MONITOR'].includes(tab)) return tab;
     } catch (_) {}
     return 'DASH';
   });
@@ -2840,12 +2841,12 @@ export default function OmniceeDashboard() {
         <div className="flex-1 overflow-y-auto omni-scroll">
           {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} analysisLive={feed.analysisLive} socketLive={feed.socketLive} cryptoVolAlerts={feed.cryptoVolAlerts} />}
           {activeTab === 'SIGNALS' && (
-            <div className="space-y-2">
-              <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} auditLog={feed.auditLog} analysisLive={feed.analysisLive} />
-              <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} />
-            </div>
+            <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} auditLog={feed.auditLog} analysisLive={feed.analysisLive} />
           )}
           {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}
+          {activeTab === 'VALID' && (
+            <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} />
+          )}
           {activeTab === 'MONITOR' && (
             <div className="space-y-2">
               <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} fetchErrors={feed.fetchErrors} analysisLive={feed.analysisLive} socketLive={feed.socketLive} />
