@@ -689,6 +689,32 @@ app.get('/api/levels', dashboardReadAuth, (req, res) => {
     res.json({ ok: true, news, sources: ['yahoo', finnhub.enabled() ? 'finnhub' : null].filter(Boolean) });
   });
 
+  // Hurst analysis layer — path-dependence regime board (not a trade signal)
+  app.get('/api/hurst', dashboardReadAuth, async (_req, res) => {
+    try {
+      const live = getEngines() || {};
+      let board = [];
+      if (live.hurstAnalysis?.getLastBoard) {
+        const last = live.hurstAnalysis.getLastBoard();
+        board = last.board || [];
+      }
+      if ((!board || !board.length) && live.hurstAnalysis?.buildBoard && live.candleStores) {
+        const symbols = Object.keys(live.candleStores || {});
+        board = live.hurstAnalysis.buildBoard(live.candleStores, symbols);
+      }
+      // On-demand from fractal agent stores if still empty
+      if ((!board || !board.length) && live.candleStores) {
+        try {
+          const { buildHurstBoard } = require('../signal-pipeline/hurst-analysis');
+          board = buildHurstBoard(live.candleStores, Object.keys(live.candleStores), ['H1', 'H4']);
+        } catch (_) {}
+      }
+      res.json({ ok: true, layer: 'hurst_analysis', board: board || [], note: 'Analysis only — does not fire trades' });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
   app.get('/api/sentiment', dashboardReadAuth, async (_req, res) => {
     const out = { ok: true, fearGreed: null, crypto: null };
     try { out.fearGreed = await fearGreed.getLatest(); } catch (e) { out.fearGreedError = e.message; }
@@ -1046,6 +1072,7 @@ function startServer(config = {}) {
   forward('risk_update', 'risk');
   forward('stats_update', 'stats');
   forward('regime_update', 'regime', payload => db.saveTelemetry({ type: 'regime_update', ...payload }));
+  forward('hurst_update', 'hurst', payload => db.saveTelemetry({ type: 'hurst_update', ...(payload || {}) }));
   forward('telemetry_update', 'telemetry', db.saveTelemetry);
   // FIX: myfxbook/openinsider events previously only reached Telegram — now relayed to the live dashboard as well (see index.js wsBus.emit('intel', ...)).
   forward('intel', 'intel', payload => db.saveTelemetry({ type: 'intel_' + payload.kind, ...payload }));

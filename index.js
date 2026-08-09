@@ -83,6 +83,7 @@ const { WalkForwardOptimizer }= loadModule('./signal-pipeline/walk-forward-optim
 const { EnsembleEngine }     = loadModule('./signal-pipeline/ensemble-engine',    'EnsembleEngine')    || {};
 const { MicrostructureAgent }= loadModule('./agents/microstructure-agent',        'MicrostructureAgent') || {};
 const { FractalAgent }       = loadModule('./agents/fractal-agent',               'FractalAgent')      || {};
+const { HurstAnalysisEngine }= loadModule('./signal-pipeline/hurst-analysis',    'HurstAnalysisEngine') || {};
 const { DrawdownGuard }      = loadModule('./risk-engine/drawdown-guard',        'DrawdownGuard')     || {};
 const { RiskEngine }         = loadModule('./risk-engine/position-sizer',        'RiskEngine')        || {};
 const { SessionFilter }      = loadModule('./risk-engine/session-filter',        'SessionFilter')     || {};
@@ -413,6 +414,16 @@ async function runAnalysisCycle(symbol, timeframe) {
 
     if (wsBus) {
       wsBus.emit('regime_update', { symbol, timeframe, ...regime });
+    }
+
+    // Hurst analysis layer — independent of signal scoring / agent votes
+    if (hurstAnalysis && candleStores) {
+      try {
+        const board = hurstAnalysis.buildBoard(candleStores, SYMBOLS);
+        if (wsBus) wsBus.emit('hurst_update', { board, ts: Date.now() });
+      } catch (e) {
+        log.debug(`Hurst board: ${e.message}`);
+      }
     }
 
     // FIX: institutionalRiskManager was instantiated + connected but never fed live data — setRegime()/updateLiquidity() had zero call sites, so its regime-aware Kelly multiplier and liquidity check were...
@@ -1387,7 +1398,7 @@ function onMT5Tick(symbol, price, { bid, ask, timestamp } = {}) {
   onLivePrice(symbol, price, { source: 'mt5_ea', bid, ask });
 }
 
-let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, institutionalGates,
+let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, hurstAnalysis, institutionalGates,
     adaptiveLearning, drawdownGuard, riskEngine, sessionFilter, correlationFilter, memory,
     monteCarlo, bayesianEng, statValidator, walkForward, ensembleEng,
     signalMonitor, institutionalRiskManager, myfxbookFeed, openInsiderFeed,
@@ -1531,6 +1542,10 @@ function buildSingletons() {
 
   if (RegimeEngine) {
     regimeEngine = new RegimeEngine({ lookback: 120 });
+  if (HurstAnalysisEngine) {
+    hurstAnalysis = new HurstAnalysisEngine({ timeframes: ['H1', 'H4'] });
+    log.info('Hurst analysis layer online (separate from signal votes)');
+  }
     log.info('RegimeEngine created');
   }
 
@@ -1842,7 +1857,7 @@ function buildSingletons() {
       drawdownGuard, sessionFilter, riskEngine, institutionalRiskManager,
       opportunityRanker, relativeStrength, dataIntegrityMonitor, executionEngine,
       auditTrail, symbolManager, cotParser, memory,
-      regimeEngine, candleStores, symbols: SYMBOLS,
+      regimeEngine, hurstAnalysis, candleStores, symbols: SYMBOLS,
       onLivePrice, onMT5Tick,
       lastPriceBySymbol,
     });

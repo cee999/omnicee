@@ -814,6 +814,7 @@ function useLiveFeed() {
   const [journalStats, setJournalStats] = useState(null);
   const [learningProfiles, setLearningProfiles] = useState(null);
   const [relativeStrength, setRelativeStrength] = useState(null);
+  const [hurstBoard, setHurstBoard] = useState(null); // separate Hurst analysis layer
   const priceRef = useRef(prices);
   priceRef.current = prices;
   // Prefer broker (mt5_ea) ticks on the client so lower-rank sources cannot
@@ -1017,6 +1018,7 @@ function useLiveFeed() {
       try { const r = await recordFetch('sentiment', omniFetch('/api/sentiment')); if (!cancelled && r.ok) setSentiment(r); } catch (_) {}
       try { const r = await recordFetch('journal', omniFetch('/api/journal')); if (!cancelled && r.ok) setJournalStats(r.stats); } catch (_) {}
       try { const r = await recordFetch('learning', omniFetch('/api/learning?limit=20')); if (!cancelled && r.ok) setLearningProfiles(r.profiles); } catch (_) {}
+      try { const r = await recordFetch('hurst', omniFetch('/api/hurst')); if (!cancelled && r.ok) setHurstBoard(Array.isArray(r.board) ? r.board : []); } catch (_) {}
       try { const r = await recordFetch('watchlist', omniFetch('/api/watchlist')); if (!cancelled && r.ok) setRelativeStrength(r.relativeStrength); } catch (_) {}
     };
 
@@ -1155,6 +1157,10 @@ function useLiveFeed() {
           }
         } catch (_) {}
       });
+      socket.on('hurst', payload => {
+        if (cancelled || !payload) return;
+        if (Array.isArray(payload.board)) setHurstBoard(payload.board);
+      });
       socket.on('regime', payload => {
         if (cancelled || !payload?.symbol) return;
         // light touch: fold into outlook-like local note via analysisLive
@@ -1191,7 +1197,7 @@ function useLiveFeed() {
   return {
     now, prices, quotes, changes, flash, signals, calendar, levels, auditLog, equityCurve, equityCurveLive,
     stats, outlook, heatmapTiles, feedHealth, uptimeSec, accountBalance, socketLive, analysisLive, cryptoVolAlerts,
-    news, sentiment, journalStats, learningProfiles, relativeStrength, fetchErrors,
+    news, sentiment, journalStats, learningProfiles, relativeStrength, hurstBoard, fetchErrors,
     mode, connected: mode === 'live', wakingBackend,
   };
 }
@@ -3023,7 +3029,7 @@ function HeatTab({ heatmapTiles, mode, sentiment }) {
 }
 
 /* ── VALID ──────────────────────────────────────────────────────────── */
-function ValidTab({ signals, journalStats, learningProfiles, mode }) {
+function ValidTab({ signals, journalStats, learningProfiles, mode, hurstBoard }) {
   const live = mode === 'live';
 
   if (!live) {
@@ -3061,8 +3067,73 @@ function ValidTab({ signals, journalStats, learningProfiles, mode }) {
 
   const mcChartData = validated.slice(0, 20).reverse().map((s, i) => ({ label: `${s.symbol}#${i + 1}`, prob: s.validation.monteCarlo?.winProbability ?? 0 }));
 
+  const hurstTone = (pb) => {
+    if (pb === 'TREND_FOLLOW') return 'up';
+    if (pb === 'MEAN_REVERT') return 'warn';
+    return 'neutral';
+  };
+
   return (
     <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
+      {/* Dedicated Hurst analysis layer — not a trade signal */}
+      <div className="omni-panel p-3 sm:p-4">
+        <SectionHeader
+          icon={Activity}
+          title="Hurst analysis"
+          sub="regime playbook · separate from signal votes"
+        />
+        <p className="font-mono text-[10px] mb-3 leading-relaxed" style={{ color: 'var(--textFaint)' }}>
+          Path-dependence only. H&gt;0.55 trend-follow · H&lt;0.45 mean-revert (range fades) · ~0.5 stand aside.
+          Does not fire trades — use with structure at range edges or trend pullbacks.
+        </p>
+        {!Array.isArray(hurstBoard) || hurstBoard.length === 0 ? (
+          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
+            Waiting for candle history… Hurst board fills after H1/H4 bars load.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {hurstBoard.map((row) => (
+              <div
+                key={row.symbol}
+                className="omni-panel2 p-3 flex flex-col gap-1.5"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-[13px] font-semibold" style={{ color: 'var(--text)' }}>
+                    {typeof symLabel === 'function' ? symLabel(row.symbol) : row.symbol}
+                  </span>
+                  <span className="font-mono text-[10px]" style={{ color: 'var(--textDim)' }}>{row.timeframe || 'H1'}</span>
+                  <Pill tone={hurstTone(row.playbook)}>{row.playbook?.replace('_', ' ') || '—'}</Pill>
+                  {row.bias && row.bias !== 'NONE' && (
+                    <span className="font-mono text-[11px] font-semibold" style={{ color: row.bias === 'LONG' ? 'var(--emerald)' : 'var(--coral)' }}>
+                      {row.bias}
+                    </span>
+                  )}
+                  <span className="ml-auto font-mono text-[12px]" style={{ color: 'var(--gold)' }}>
+                    H={row.H != null ? Number(row.H).toFixed(3) : '—'}
+                  </span>
+                </div>
+                <div className="font-mono text-[11px]" style={{ color: 'var(--textDim)' }}>
+                  {row.label || row.regime || '—'}
+                  {row.confidence != null ? ` · conf ${Math.round(row.confidence)}%` : ''}
+                </div>
+                <div className="text-[11px] leading-relaxed" style={{ color: 'var(--textFaint)' }}>
+                  {row.detail || row.note || ''}
+                </div>
+                {row.multi && (row.multi.H4 || row.multi.H1) && (
+                  <div className="flex flex-wrap gap-2 mt-0.5 font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>
+                    {['H1', 'H4'].map((tf) => row.multi[tf] && (
+                      <span key={tf}>
+                        {tf}: H={row.multi[tf].H != null ? Number(row.multi[tf].H).toFixed(2) : '—'} ({row.multi[tf].playbook || '—'})
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {!hasAnyValidContent && (
         <div className="omni-panel p-4">
           <SectionHeader icon={FlaskConical} title="Validation" sub="waits on live signals + closed outcomes" />
@@ -3648,7 +3719,7 @@ export default function OmniceeDashboard() {
           )}
           {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}
           {activeTab === 'VALID' && (
-            <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} />
+            <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} hurstBoard={feed.hurstBoard} />
           )}
           {activeTab === 'MONITOR' && (
             <div className="space-y-2">

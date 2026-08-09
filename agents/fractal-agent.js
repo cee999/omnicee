@@ -395,4 +395,4 @@ class FractalAgent extends EventEmitter {
   }
 }
 
-module.exports = { FractalAgent };
+module.exports = { FractalAgent, RSAnalysis, DFAnalysis };
