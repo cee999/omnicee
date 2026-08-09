@@ -195,6 +195,55 @@ function ThemeStyle() {
         .omni-hide-xs { display: none !important; }
         .omni-panel { border-radius: 8px; }
       }
+      /* Fluid chart: fills parent, scales with viewport */
+      .omni-chart-shell {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        min-width: 0;
+        min-height: 0;
+      }
+      .omni-chart-canvas-wrap {
+        position: relative;
+        width: 100%;
+        min-width: 0;
+        flex: 1 1 auto;
+        min-height: clamp(200px, 42vh, 520px);
+        height: clamp(200px, 42vh, 520px);
+      }
+      .omni-chart-shell.is-expanded .omni-chart-canvas-wrap {
+        flex: 1 1 auto;
+        min-height: 0;
+        height: auto;
+      }
+      .omni-chart-canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+      .omni-home-grid {
+        display: grid;
+        width: 100%;
+        gap: 0.5rem;
+        grid-template-columns: 1fr;
+      }
+      @media (min-width: 900px) {
+        .omni-home-grid {
+          grid-template-columns: minmax(0, 1fr) minmax(200px, 28%);
+          align-items: stretch;
+        }
+        .omni-chart-canvas-wrap {
+          min-height: clamp(260px, 48vh, 560px);
+          height: clamp(260px, 48vh, 560px);
+        }
+      }
+      @media (min-width: 1200px) {
+        .omni-chart-canvas-wrap {
+          min-height: clamp(300px, 52vh, 640px);
+          height: clamp(300px, 52vh, 640px);
+        }
+      }
     `}</style>
   );
 }
@@ -1516,6 +1565,37 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [expanded]);
 
+  // Keep lightweight-charts sized to the fluid container on every layout change
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return undefined;
+    const fit = () => {
+      try {
+        if (!chartRef.current) return;
+        const w = el.clientWidth || 1;
+        const h = el.clientHeight || 1;
+        if (w < 2 || h < 2) return;
+        chartRef.current.applyOptions({ width: w, height: h });
+      } catch (_) {}
+    };
+    fit();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => {
+      requestAnimationFrame(fit);
+    }) : null;
+    if (ro) ro.observe(el);
+    window.addEventListener('resize', fit);
+    window.addEventListener('orientationchange', fit);
+    const t = setTimeout(fit, 50);
+    const t2 = setTimeout(fit, 300);
+    return () => {
+      if (ro) ro.disconnect();
+      window.removeEventListener('resize', fit);
+      window.removeEventListener('orientationchange', fit);
+      clearTimeout(t);
+      clearTimeout(t2);
+    };
+  }, [expanded, symbol, timeframe]);
+
   // The container itself never unmounts on expand/collapse (just its
   // wrapping classes change), so autoSize's own ResizeObserver should
   // catch it — but force a resize + refit too, same defensive pattern
@@ -1531,7 +1611,10 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
   }, [expanded]);
 
   return (
-    <div className={expanded ? 'fixed inset-0 z-50 flex flex-col p-2 sm:p-3' : ''} style={expanded ? { background: 'var(--void)', paddingTop: 'max(8px, env(safe-area-inset-top))', paddingBottom: 'max(8px, env(safe-area-inset-bottom))' } : undefined}>
+    <div
+      className={`omni-chart-shell ${expanded ? 'is-expanded fixed inset-0 z-50 p-2 sm:p-3' : 'w-full'}`}
+      style={expanded ? { background: 'var(--void)', paddingTop: 'max(8px, env(safe-area-inset-top))', paddingBottom: 'max(8px, env(safe-area-inset-bottom))' } : undefined}
+    >
       <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
         <div className="flex gap-1 items-center flex-wrap">
           {typeof onSymbolChange === 'function' && SYMBOLS.map(sym => (
@@ -1583,11 +1666,11 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
           </button>
         </div>
       </div>
-      <div className={expanded ? 'relative flex-1 min-h-0' : 'relative h-[220px] sm:h-[260px] md:h-[300px]'}>
-        {status === 'empty' && <div className="absolute inset-0 flex items-center justify-center"><WaitingForBackend height={180} label="No chart data yet — try H1 or wait a minute" /></div>}
-        {status === 'error' && <div className="absolute inset-0 flex items-center justify-center"><WaitingForBackend height={180} label="Chart temporarily unavailable — retrying…" /></div>}
-        {status === 'loading' && <div className="absolute inset-0 flex items-center justify-center"><WaitingForBackend height={180} label="Loading candles…" /></div>}
-        <div ref={containerRef} className="w-full h-full" style={{ opacity: status === 'ok' ? 1 : 0.15, minHeight: 280 }} />
+      <div className="omni-chart-canvas-wrap">
+        {status === 'empty' && <div className="absolute inset-0 z-10 flex items-center justify-center"><WaitingForBackend height={120} label="No chart data yet — try H1 or wait a minute" /></div>}
+        {status === 'error' && <div className="absolute inset-0 z-10 flex items-center justify-center"><WaitingForBackend height={120} label="Chart temporarily unavailable — retrying…" /></div>}
+        {status === 'loading' && <div className="absolute inset-0 z-10 flex items-center justify-center"><WaitingForBackend height={120} label="Loading candles…" /></div>}
+        <div ref={containerRef} className="omni-chart-canvas" style={{ opacity: status === 'ok' ? 1 : 0.2 }} />
       </div>
     </div>
   );
@@ -1628,7 +1711,7 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
         </div>
       )}
       {/* LIVE TICKS FIRST — no scroll required */}
-      <div className="grid grid-cols-1 xl:grid-cols-[1fr_minmax(200px,280px)] gap-2 w-full">
+      <div className="omni-home-grid">
         <div className="omni-panel p-2 md:p-3 order-2 lg:order-1">
           <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
             <div className="flex gap-1 flex-wrap">
