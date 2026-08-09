@@ -293,9 +293,14 @@ function ThemeStyle() {
         /* Prefer slightly larger interactive type on phones */
         .omni-nav span { font-size: 10px !important; letter-spacing: 0.04em; }
         .omni-chip { font-size: 11px !important; padding: 6px 10px !important; min-height: 34px; }
+        /* Mobile-first: chart must be tall enough to read — was too short (32vh) */
         .omni-chart-canvas-wrap {
-          min-height: clamp(170px, 32vh, 360px);
-          height: clamp(170px, 32vh, 360px);
+          min-height: clamp(240px, 48vh, 520px);
+          height: clamp(240px, 48vh, 520px);
+        }
+        /* Hide duplicate symbol row inside collapsed chart — parent DashTab already has symbols */
+        .omni-chart-shell:not(.is-expanded) .omni-chart-syms-inline {
+          display: none !important;
         }
         /* Larger row hit targets on phone */
         .omni-row { min-height: 44px; }
@@ -866,6 +871,18 @@ function useLiveFeed() {
   useEffect(() => {
     try {
       const tg = window.Telegram && window.Telegram.WebApp;
+      if (tg) {
+        try { tg.ready(); } catch (_) {}
+        try { tg.expand(); } catch (_) {}
+        try { tg.disableVerticalSwipes?.(); } catch (_) {}
+        try {
+          // Prefer full viewport height inside Telegram Mini App
+          if (typeof tg.requestFullscreen === 'function') tg.requestFullscreen();
+        } catch (_) {}
+        try {
+          document.documentElement.style.setProperty('--tg-viewport-stable-height', `${tg.viewportStableHeight || window.innerHeight}px`);
+        } catch (_) {}
+      }
       if (tg) { tg.ready(); tg.expand(); }
     } catch (_) { /* not inside Telegram, or SDK not loaded yet — fine */ }
     if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
@@ -1991,6 +2008,19 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
                 {tf}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => setIndicators(s => ({ ...s, vp: !s.vp }))}
+              className="omni-chip font-mono rounded text-[12px] px-3 py-2 min-h-[40px]"
+              style={{
+                background: indicators.vp ? 'rgba(34,211,238,0.18)' : 'transparent',
+                color: indicators.vp ? '#22d3ee' : 'var(--textFaint)',
+                border: `1px solid ${indicators.vp ? '#22d3ee' : 'var(--border)'}`,
+              }}
+              title="Volume Profile"
+            >
+              VP
+            </button>
             <div className="relative" ref={indicatorMenuRef}>
               <button
                 type="button"
@@ -2048,8 +2078,9 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
           </div>
         </div>
       ) : (
-      <div className="flex items-center justify-between gap-2 mb-1 flex-wrap shrink-0">
-        <div className="flex gap-1.5 items-center flex-wrap">
+      <div className="flex flex-col gap-1.5 mb-1 shrink-0">
+        {/* Desktop-only inline symbols — hidden on phones (parent already has symbol chips) */}
+        <div className="omni-chart-syms-inline hidden sm:flex gap-1.5 items-center flex-wrap">
           {typeof onSymbolChange === 'function' && SYMBOLS.map(sym => (
             <button
               key={sym}
@@ -2064,13 +2095,15 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
               {symLabel(sym)}
             </button>
           ))}
-          <span className="mx-0.5 hidden sm:inline" style={{ color: 'var(--border)' }}>|</span>
+        </div>
+        {/* Primary mobile toolbar: TF + VP + indicators + expand — always tappable */}
+        <div className="flex items-center gap-1.5 flex-wrap">
           {TIMEFRAMES.map(tf => (
             <button
               key={tf}
               type="button"
               onClick={() => setTimeframe(tf)}
-              className="omni-chip font-mono rounded text-[11px] px-2.5 py-1.5"
+              className="omni-chip font-mono rounded text-[11px] sm:text-[11px] px-2.5 py-2 min-h-[36px]"
               style={{
                 background: timeframe === tf ? 'var(--panel2)' : 'transparent',
                 color: timeframe === tf ? 'var(--emerald)' : 'var(--textFaint)',
@@ -2080,33 +2113,47 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
               {tf}
             </button>
           ))}
+          <button
+            type="button"
+            onClick={() => setIndicators(s => ({ ...s, vp: !s.vp }))}
+            className="omni-chip font-mono rounded text-[11px] px-2.5 py-2 min-h-[36px]"
+            style={{
+              background: indicators.vp ? 'rgba(34,211,238,0.18)' : 'transparent',
+              color: indicators.vp ? '#22d3ee' : 'var(--textFaint)',
+              border: `1px solid ${indicators.vp ? '#22d3ee' : 'var(--border)'}`,
+            }}
+            title="Volume Profile"
+          >
+            VP
+          </button>
           <div className="relative" ref={indicatorMenuRef}>
             <button
               type="button"
               onClick={() => setShowIndicatorMenu(v => !v)}
-              className="omni-chip font-mono rounded flex items-center gap-1 text-[11px] px-2.5 py-1.5"
+              className="omni-chip font-mono rounded flex items-center gap-1 text-[11px] px-2.5 py-2 min-h-[36px]"
               style={{
                 background: showIndicatorMenu ? 'var(--panel2)' : 'transparent',
                 color: 'var(--textFaint)',
                 border: '1px solid var(--border)',
               }}
             >
-              <SlidersHorizontal size={12} /> Indicators
+              <SlidersHorizontal size={14} />
+              <span className="hidden xs:inline sm:inline">Ind</span>
             </button>
             {showIndicatorMenu && (
               <div
-                className="absolute z-20 mt-1 rounded p-2 space-y-1.5"
-                style={{ background: 'var(--panel2)', border: '1px solid var(--border)', minWidth: 150 }}
+                className="absolute z-30 mt-1 right-0 sm:left-0 sm:right-auto rounded p-2 space-y-2"
+                style={{ background: 'var(--panel2)', border: '1px solid var(--border)', minWidth: 168 }}
               >
                 {INDICATOR_DEFS.map(ind => (
                   <label
                     key={ind.key}
-                    className="flex items-center gap-2 font-mono text-[10px] cursor-pointer whitespace-nowrap"
+                    className="flex items-center gap-2 font-mono text-[12px] cursor-pointer whitespace-nowrap min-h-[32px]"
                     style={{ color: 'var(--textDim)' }}
                   >
                     <input
                       type="checkbox"
-                      checked={indicators[ind.key]}
+                      checked={!!indicators[ind.key]}
                       onChange={() => setIndicators(s => ({ ...s, [ind.key]: !s[ind.key] }))}
                     />
                     <span className="w-2 h-2 rounded-full shrink-0" style={{ background: ind.color }} />
@@ -2116,24 +2163,16 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
               </div>
             )}
           </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {ohlcReadout && (
-            <div className="font-mono flex gap-2 text-[10px]" style={{ color: 'var(--textDim)' }}>
-              <span>O <span style={{ color: 'var(--text)' }}>{fmtPrice(symbol, ohlcReadout.o)}</span></span>
-              <span>H <span style={{ color: 'var(--emerald)' }}>{fmtPrice(symbol, ohlcReadout.h)}</span></span>
-              <span>L <span style={{ color: 'var(--coral)' }}>{fmtPrice(symbol, ohlcReadout.l)}</span></span>
-              <span>C <span style={{ color: 'var(--text)' }}>{fmtPrice(symbol, ohlcReadout.c)}</span></span>
-            </div>
-          )}
+          <div className="flex-1" />
           <button
             type="button"
             onClick={() => setExpanded(true)}
-            title="Expand to full screen"
-            className="font-mono p-1.5 rounded flex items-center text-[10px]"
-            style={{ color: 'var(--textFaint)', border: '1px solid var(--border)' }}
+            title="Full screen chart"
+            className="omni-chip font-mono rounded flex items-center gap-1 text-[11px] px-3 py-2 min-h-[36px]"
+            style={{ color: 'var(--emerald)', border: '1px solid var(--emerald)', background: 'rgba(31,227,168,0.08)' }}
           >
-            <Maximize2 size={12} />
+            <Maximize2 size={14} />
+            <span>Full</span>
           </button>
         </div>
       </div>
@@ -2203,15 +2242,16 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
       )}
       {/* LIVE TICKS FIRST — no scroll required */}
       <div className="omni-home-grid">
-        <div className="omni-panel p-2 md:p-3 order-2 lg:order-1">
+        {/* Chart first on mobile (order-1) — Market Watch was eating the fold */}
+        <div className="omni-panel p-2 md:p-3 order-1 lg:order-1">
           <div className="flex items-center justify-between gap-2 mb-1.5 flex-wrap">
-            <div className="flex gap-1.5 flex-wrap">
+            <div className="flex gap-1.5 flex-wrap overflow-x-auto omni-scroll max-w-full">
               {SYMBOLS.map(sym => (
                 <button
                   key={sym}
                   type="button"
                   onClick={() => setChartSymbol(sym)}
-                  className="omni-chip font-mono text-[11px] px-2.5 py-1.5 rounded"
+                  className="omni-chip font-mono text-[11px] px-2.5 py-2 min-h-[36px] rounded shrink-0"
                   style={{
                     background: chartSymbol === sym ? 'var(--emerald)' : 'var(--panel2)',
                     color: chartSymbol === sym ? '#05070a' : 'var(--textDim)',
@@ -2231,7 +2271,7 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
           <LiveChart symbol={chartSymbol} quote={q} signals={chartSignals} levels={levels} onSymbolChange={setChartSymbol} />
         </div>
 
-        <div className="omni-panel overflow-hidden order-1 xl:order-2 flex flex-col max-h-[min(38vh,300px)] sm:max-h-[min(42vh,340px)] xl:max-h-[min(52vh,640px)] min-h-[160px]">
+        <div className="omni-panel overflow-hidden order-2 xl:order-2 flex flex-col max-h-[min(28vh,220px)] sm:max-h-[min(36vh,280px)] xl:max-h-[min(52vh,640px)] min-h-[120px]">
           <div className="px-3 py-2 border-b" style={{ borderColor: 'var(--border)' }}>
             <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>Market Watch · live</span>
           </div>
