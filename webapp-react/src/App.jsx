@@ -1733,7 +1733,7 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
           <LiveChart symbol={chartSymbol} quote={q} signals={chartSignals} levels={levels} onSymbolChange={setChartSymbol} />
         </div>
 
-        <div className="omni-panel overflow-hidden order-1 xl:order-2 flex flex-col max-h-[40vh] xl:max-h-none xl:min-h-[280px]">
+        <div className="omni-panel overflow-hidden order-1 xl:order-2 flex flex-col max-h-[min(40vh,320px)] xl:max-h-[min(52vh,640px)] min-h-[180px]">
           <div className="px-3 py-1.5 border-b" style={{ borderColor: 'var(--border)' }}>
             <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>Market Watch · live</span>
           </div>
