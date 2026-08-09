@@ -173,7 +173,7 @@ class DerivFeed extends EventEmitter {
   _queueAllHistory() {
     for (const omni of this.symbols) {
       const d = DERIV_MAP[omni];
-      if (!d) continue;
+      if (!d || this._invalidSymbols.has(d)) continue;
       for (const spec of CANDLE_REQS) {
         this._pendingHistory.push({ omni, deriv: d, ...spec });
       }
@@ -204,8 +204,9 @@ class DerivFeed extends EventEmitter {
   _handle(msg) {
     if (msg.error) {
       const errMsg = msg.error.message || JSON.stringify(msg.error);
-      if (msg.error.code === 'InvalidSymbol' && msg.echo_req?.ticks) {
-        this._invalidSymbols.add(msg.echo_req.ticks);
+      const invalidSymbol = msg.echo_req?.ticks || msg.echo_req?.ticks_history;
+      if (msg.error.code === 'InvalidSymbol' && invalidSymbol) {
+        this._invalidSymbols.add(invalidSymbol);
       }
       this.emit('error', new Error(errMsg));
       return;
