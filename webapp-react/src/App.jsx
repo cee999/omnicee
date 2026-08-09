@@ -3030,6 +3030,25 @@ function HeatTab({ heatmapTiles, mode, sentiment }) {
 }
 
 /* ── ANALYSIS (standalone advanced fractal layer) ───────────────────── */
+function StructureCard({ label, accent, value, valueColor, sub, pill, pillTone, note }) {
+  return (
+    <div className="rounded-lg border p-2.5 space-y-1.5" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
+      <div className="flex items-center gap-1.5">
+        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: accent }} />
+        <span className="font-mono text-[9px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>{label}</span>
+      </div>
+      <div className="text-[15px] font-semibold font-mono" style={{ color: valueColor || 'var(--text)' }}>{value}</div>
+      {sub && <div className="font-mono text-[9px]" style={{ color: 'var(--textFaint)' }}>{sub}</div>}
+      {pill && <Pill tone={pillTone}>{pill}</Pill>}
+      {note && (
+        <div className="font-mono text-[9px] pt-1.5 mt-1 border-t leading-relaxed" style={{ color: 'var(--textFaint)', borderColor: 'var(--border)' }}>
+          {note}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AnalysisTab({ mode }) {
   const live = mode === 'live';
   const [board, setBoard] = useState([]);
@@ -3147,54 +3166,49 @@ function AnalysisTab({ mode }) {
                       {open ? '▲' : '▼'}
                     </span>
                   </button>
-                  <div className="px-3 pb-3 grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] font-mono">
-                    <div>
-                      <div style={{ color: 'var(--textFaint)' }}>Hurst H</div>
-                      <div className="text-[13px] font-semibold" style={{ color: 'var(--gold)' }}>
-                        {H != null ? Number(H).toFixed(3) : '—'}
-                      </div>
-                      <div style={{ color: 'var(--textFaint)' }}>
-                        conf {row.hurst?.confidence != null ? `${Number(row.hurst.confidence).toFixed(0)}%` : '—'}
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{ color: 'var(--textFaint)' }}>DFA α</div>
-                      <div className="text-[13px] font-semibold" style={{ color: dfa ? 'var(--emerald)' : 'var(--textFaint)' }}>
-                        {dfa?.alpha != null ? Number(dfa.alpha).toFixed(3) : '—'}
-                      </div>
-                      <div style={{ color: 'var(--textFaint)' }}>
-                        {dfa ? `R² ${Number(dfa.rSquared ?? 0).toFixed(2)} · conf ${Number(dfa.confidence).toFixed(0)}%` : '—'}
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{ color: 'var(--textFaint)' }}>FRAMA D</div>
-                      <div className="text-[13px] font-semibold">
-                        {frama?.fractalDimension != null ? Number(frama.fractalDimension).toFixed(3) : '—'}
-                      </div>
-                      <div style={{ color: 'var(--textFaint)' }}>{frama?.speed || '—'}</div>
-                    </div>
-                    <div>
-                      <div style={{ color: 'var(--textFaint)' }}>Lyapunov λ</div>
-                      <div className="text-[13px] font-semibold" style={{ color: lyap?.chaotic ? 'var(--coral)' : 'var(--text)' }}>
-                        {lyap?.exponent != null ? Number(lyap.exponent).toFixed(4) : '—'}
-                      </div>
-                      <div style={{ color: 'var(--textFaint)' }}>{lyap?.chaotic ? 'CHAOTIC' : 'stable'}</div>
-                    </div>
+                  <div className="px-3 pb-3 grid grid-cols-2 lg:grid-cols-4 gap-2">
+                    <StructureCard
+                      label="Hurst R/S"
+                      accent="var(--gold)"
+                      value={H != null ? Number(H).toFixed(3) : '—'}
+                      valueColor="var(--gold)"
+                      sub={`conf ${row.hurst?.confidence != null ? `${Number(row.hurst.confidence).toFixed(0)}%` : '—'}`}
+                      pill={row.hurst?.regime || 'R/S —'}
+                      pillTone="neutral"
+                      note={open ? row.hurst?.note : null}
+                    />
+                    <StructureCard
+                      label="DFA"
+                      accent="var(--emerald)"
+                      value={dfa?.alpha != null ? Number(dfa.alpha).toFixed(3) : '—'}
+                      valueColor={dfa ? 'var(--emerald)' : 'var(--textFaint)'}
+                      sub={dfa ? `R² ${Number(dfa.rSquared ?? 0).toFixed(2)} · conf ${Number(dfa.confidence).toFixed(0)}%` : '—'}
+                      pill={dfa?.regime ? String(dfa.regime).replace(/_/g, ' ') : 'DFA —'}
+                      pillTone={alphaTone(dfa?.alpha)}
+                      note={open ? dfa?.note : null}
+                    />
+                    <StructureCard
+                      label="FRAMA"
+                      accent="#22d3ee"
+                      value={frama?.fractalDimension != null ? Number(frama.fractalDimension).toFixed(3) : '—'}
+                      sub={frama?.speed || '—'}
+                      note={open ? frama?.note : null}
+                    />
+                    <StructureCard
+                      label="Lyapunov"
+                      accent={lyap?.chaotic ? 'var(--coral)' : 'var(--text)'}
+                      value={lyap?.exponent != null ? Number(lyap.exponent).toFixed(4) : '—'}
+                      valueColor={lyap?.chaotic ? 'var(--coral)' : 'var(--text)'}
+                      pill={lyap?.chaotic ? 'CHAOTIC' : 'stable'}
+                      pillTone={lyap?.chaotic ? 'warn' : 'neutral'}
+                      note={open ? lyap?.note : null}
+                    />
                   </div>
                   {open && (
                     <div className="px-3 pb-3 space-y-2 border-t" style={{ borderColor: 'var(--border)' }}>
                       <div className="font-mono text-[10px] pt-2" style={{ color: 'var(--textFaint)' }}>
                         {row.detail || row.label}
                       </div>
-                      {dfa?.note && (
-                        <div className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>{dfa.note}</div>
-                      )}
-                      {frama?.note && (
-                        <div className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>{frama.note}</div>
-                      )}
-                      {lyap?.note && (
-                        <div className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>{lyap.note}</div>
-                      )}
                       {row.multi && Object.keys(row.multi).length > 1 && (
                         <div className="flex flex-wrap gap-2 pt-1">
                           {Object.entries(row.multi).map(([tf, m]) => (
@@ -3210,10 +3224,6 @@ function AnalysisTab({ mode }) {
                           ))}
                         </div>
                       )}
-                      <div className="flex flex-wrap gap-2 pt-1">
-                        <Pill tone={alphaTone(dfa?.alpha)}>{dfa?.regime ? String(dfa.regime).replace(/_/g, ' ') : 'DFA —'}</Pill>
-                        <Pill tone="neutral">{row.hurst?.regime || 'R/S —'}</Pill>
-                      </div>
                     </div>
                   )}
                 </div>
