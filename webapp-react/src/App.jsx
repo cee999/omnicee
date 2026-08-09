@@ -2755,10 +2755,6 @@ function InstallBanner({ installEvt, onInstalled, loggedIn }) {
       }
       return;
     }
-    if (isIosSafari()) {
-      setIosHelp(true);
-      return;
-    }
     setIosHelp(true);
   };
 
@@ -2795,19 +2791,22 @@ function InstallBanner({ installEvt, onInstalled, loggedIn }) {
       </div>
       {iosHelp && (
         <div className="omni-panel2 mt-1 px-3 py-2 font-mono text-[10px] space-y-1" style={{ color: 'var(--textDim)' }}>
-          <div style={{ color: 'var(--text)' }}>iPhone / iPad (Safari)</div>
-          <div>1. Tap <b>Share</b> (square with arrow)</div>
-          <div>2. Tap <b>Add to Home Screen</b></div>
-          <div>3. Tap <b>Add</b></div>
+          <div style={{ color: 'var(--text)' }}>Desktop Chrome / Edge</div>
+          <div>1. Open the site in <b>Chrome</b> or <b>Edge</b> (not a private window)</div>
+          <div>2. Look for the <b>install icon</b> on the right side of the address bar</div>
+          <div>3. Or menu (⋮) → <b>Install OMNICEE</b> / <b>Apps → Install this site as an app</b></div>
+          <div>4. Stay on the page ~20 seconds after login, then try again</div>
+          <div className="pt-2" style={{ color: 'var(--text)' }}>Phone</div>
+          <div>iPhone Safari: Share → Add to Home Screen</div>
+          <div>Android Chrome: menu → Install app</div>
           <button
             type="button"
             className="mt-2 font-mono text-[10px] px-2 py-1 rounded"
             style={{ background: 'var(--emerald)', color: '#05070a' }}
             onClick={finishForever}
           >
-            I added it — hide this
+            I installed it — hide this
           </button>
-          <div className="pt-1" style={{ color: 'var(--textFaint)' }}>Android: tap Install above, or menu → Install app</div>
         </div>
       )}
     </div>

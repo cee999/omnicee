@@ -155,8 +155,13 @@ function createApp() {
     standardHeaders: true,
     legacyHeaders: false,
     skip: (req) => {
-      const p = req.path || '';
-      return p.startsWith('/api/ea/') || p.startsWith('/api/webhooks/') || p.startsWith('/api/auth/');
+      const p = (req.path || req.url || '').split('?')[0];
+      if (p.startsWith('/api/ea/') || p.startsWith('/api/webhooks/') || p.startsWith('/api/auth/')) return true;
+      // Static shell must never be rate-limited or Chrome cannot install the desktop app
+      if (p === '/sw.js' || p === '/manifest.json' || p === '/manifest.webmanifest') return true;
+      if (p.startsWith('/icons/') || p.startsWith('/assets/')) return true;
+      if (p === '/' || p === '/index.html') return true;
+      return false;
     },
   });
   app.use(publicLimiter);

@@ -14,12 +14,15 @@ const SHELL_ASSETS = [
 ];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches
-      .open(CACHE_VERSION)
-      .then((cache) => cache.addAll(SHELL_ASSETS).catch(() => {}))
-      .then(() => self.skipWaiting())
-  );
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE_VERSION);
+    await Promise.all(
+      SHELL_ASSETS.map((url) =>
+        cache.add(url).catch(() => fetch(url).then((r) => r.ok && cache.put(url, r)).catch(() => {}))
+      )
+    );
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener('activate', (event) => {
