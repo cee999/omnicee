@@ -580,7 +580,7 @@ function LoginGate({ onAuthed }) {
    self-contained simulator so the dashboard is never just a blank
    loading screen. ──────────────────────────────────────────────────── */
 function useLiveFeed() {
-  const [mode, setMode] = useState('checking'); // 'checking' | 'live'
+  const [mode, setMode] = useState('live'); // always show shell; never blank on checking
   const [now, setNow] = useState(Date.now());
   const [prices, setPrices] = useState(() => Object.fromEntries(SYMBOLS.map(s => [s, null])));
   const [quotes, setQuotes] = useState(() => Object.fromEntries(SYMBOLS.map(s => [s, null])));
@@ -2882,22 +2882,23 @@ export default function OmniceeDashboard() {
   }, []);
   const feed = useLiveFeed();
 
-  if (!user) {
-    return (
-      <>
-        <ThemeStyle />
-        <LoginGate onAuthed={(u) => setUser(u)} />
-        {/* No install banner on login screen — only after login on phone */}
-      </>
-    );
-  }
-
+  // MUST stay above any conditional return — React crashes (blank screen after login)
+  // if hook count changes between "logged out" and "logged in" renders.
   const handleCommand = useCallback((raw) => {
     const val = raw.toUpperCase();
     const tab = TABS.find(t => t.key === val || t.label.toUpperCase() === val);
     if (tab) { setActiveTab(tab.key); return; }
     if (SYMBOLS.includes(val)) { setActiveTab('SIGNALS'); return; }
   }, []);
+
+  if (!user) {
+    return (
+      <>
+        <ThemeStyle />
+        <LoginGate onAuthed={(u) => setUser(u)} />
+      </>
+    );
+  }
 
   return (
     <AppErrorBoundary>
