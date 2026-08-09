@@ -660,13 +660,16 @@ app.get('/api/levels', dashboardReadAuth, (req, res) => {
       console.warn('[API] Finnhub news failed:', err.message);
     }
 
-    const RELEVANT = /forex|currency|eur|usd|gbp|jpy|dxy|dollar|fed\b|fomc|ecb|boj|boe|cpi|nfp|inflation|rate|treasury|yield|gold|xau|oil|wti|brent|opec|bitcoin|btc|ethereum|eth|crypto|nasdaq|s&p|bond|central bank|payroll|jobs report/i;
+    // Strict market wire: crypto / FX / macro / commodities that move risk assets
+    const RELEVANT = /bitcoin|btc|ethereum|eth|crypto|defi|stablecoin|binance|coinbase|forex|fx\b|eurusd|gbpusd|usdjpy|currency|dollar|dxy|fed\b|fomc|ecb|boj|boe|cpi|nfp|inflation|interest rate|treasury|yield|gold|xau|oil|wti|brent|opec|nasdaq|s&p|central bank|payroll|etf|sec\b/i;
+    const NOISE = /celebrity|sports|football|nba|movie|netflix|recipe|horoscope|gossip|weather forecast/i;
     const seen = new Set();
     news = news.filter(n => {
       const k = String(n.headline || '').toLowerCase().slice(0, 60);
       if (!k || seen.has(k)) return false;
       seen.add(k);
       const text = `${n.headline || ''} ${n.summary || ''} ${n.category || ''}`;
+      if (NOISE.test(text)) return false;
       return RELEVANT.test(text);
     }).sort((a, b) => (b.datetime || 0) - (a.datetime || 0)).slice(0, 50);
 

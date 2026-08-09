@@ -1948,19 +1948,32 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
     };
   }, [expanded, symbol, timeframe]);
 
-  // The container itself never unmounts on expand/collapse (just its
-  // wrapping classes change), so autoSize's own ResizeObserver should
-  // catch it — but force a resize + refit too, same defensive pattern
-  // used at mount, in case the observer lags a frame behind the CSS.
+  // Force chart to re-measure after expand/collapse. On mobile (Telegram /
+  // PWA) the fixed full-screen shell often mounts at 0×0 for a frame; without
+  // staggered refits the canvas stays blank until a manual orientation change.
   useEffect(() => {
-    requestAnimationFrame(() => {
+    const fit = () => {
       try {
         if (!chartRef.current || !containerRef.current) return;
-        chartRef.current.applyOptions({ width: containerRef.current.clientWidth, height: containerRef.current.clientHeight });
+        const w = containerRef.current.clientWidth;
+        const h = containerRef.current.clientHeight;
+        if (w < 8 || h < 8) return;
+        chartRef.current.applyOptions({ width: w, height: h });
         chartRef.current.timeScale().fitContent();
       } catch (_) {}
-    });
-  }, [expanded]);
+    };
+    fit();
+    const t1 = setTimeout(fit, 50);
+    const t2 = setTimeout(fit, 200);
+    const t3 = setTimeout(fit, 500);
+    window.addEventListener('resize', fit);
+    try { window.visualViewport?.addEventListener('resize', fit); } catch (_) {}
+    return () => {
+      clearTimeout(t1); clearTimeout(t2); clearTimeout(t3);
+      window.removeEventListener('resize', fit);
+      try { window.visualViewport?.removeEventListener('resize', fit); } catch (_) {}
+    };
+  }, [expanded, symbol, timeframe]);
 
   return (
     <div
@@ -1971,17 +1984,17 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
         paddingBottom: 'max(8px, env(safe-area-inset-bottom))',
       } : undefined}
     >
-      {/* Same chart instance — when expanded, symbol + TF controls live on this chart (no second chart) */}
+      {/* Controls ONLY in expanded mode — collapsed is a clean preview + Full button */}
       {expanded ? (
         <div className="shrink-0 pb-2 mb-1 border-b space-y-2" style={{ borderColor: 'var(--border)' }}>
-          {/* Row 1: symbols — horizontal scroll on narrow phones */}
+          {/* Symbols — only here, not on collapsed chart */}
           <div className="flex gap-1.5 items-center overflow-x-auto omni-scroll" style={{ WebkitOverflowScrolling: 'touch' }}>
             {typeof onSymbolChange === 'function' && SYMBOLS.map(sym => (
               <button
                 key={sym}
                 type="button"
                 onClick={() => onSymbolChange(sym)}
-                className="omni-chip font-mono rounded transition-colors shrink-0 text-[12px] px-3 py-2 min-h-[40px]"
+                className="omni-chip font-mono rounded transition-colors shrink-0 text-[13px] px-3 py-2.5 min-h-[44px]"
                 style={{
                   background: symbol === sym ? 'var(--emerald)' : 'var(--panel2)',
                   color: symbol === sym ? '#05070a' : 'var(--textDim)',
@@ -1991,14 +2004,14 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
               </button>
             ))}
           </div>
-          {/* Row 2: timeframes + indicators + OHLC + collapse */}
+          {/* Timeframes + Indicators + close */}
           <div className="flex items-center gap-1.5 flex-wrap">
             {TIMEFRAMES.map(tf => (
               <button
                 key={tf}
                 type="button"
                 onClick={() => setTimeframe(tf)}
-                className="omni-chip font-mono rounded text-[12px] px-3 py-2 min-h-[40px]"
+                className="omni-chip font-mono rounded text-[13px] px-3 py-2.5 min-h-[44px]"
                 style={{
                   background: timeframe === tf ? 'var(--panel2)' : 'transparent',
                   color: timeframe === tf ? 'var(--emerald)' : 'var(--textFaint)',
@@ -2011,13 +2024,12 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
             <button
               type="button"
               onClick={() => setIndicators(s => ({ ...s, vp: !s.vp }))}
-              className="omni-chip font-mono rounded text-[12px] px-3 py-2 min-h-[40px]"
+              className="omni-chip font-mono rounded text-[13px] px-3 py-2.5 min-h-[44px]"
               style={{
                 background: indicators.vp ? 'rgba(34,211,238,0.18)' : 'transparent',
                 color: indicators.vp ? '#22d3ee' : 'var(--textFaint)',
                 border: `1px solid ${indicators.vp ? '#22d3ee' : 'var(--border)'}`,
               }}
-              title="Volume Profile"
             >
               VP
             </button>
@@ -2025,32 +2037,33 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
               <button
                 type="button"
                 onClick={() => setShowIndicatorMenu(v => !v)}
-                className="omni-chip font-mono rounded flex items-center gap-1 text-[12px] px-3 py-2 min-h-[40px]"
+                className="omni-chip font-mono rounded flex items-center gap-1.5 text-[13px] px-3 py-2.5 min-h-[44px]"
                 style={{
                   background: showIndicatorMenu ? 'var(--panel2)' : 'transparent',
-                  color: 'var(--textFaint)',
+                  color: showIndicatorMenu ? 'var(--emerald)' : 'var(--textFaint)',
                   border: '1px solid var(--border)',
                 }}
               >
-                <SlidersHorizontal size={14} /> Ind
+                <SlidersHorizontal size={16} /> Indicators
               </button>
               {showIndicatorMenu && (
                 <div
-                  className="absolute z-20 mt-1 rounded p-2 space-y-1.5"
-                  style={{ background: 'var(--panel2)', border: '1px solid var(--border)', minWidth: 150 }}
+                  className="absolute z-30 mt-1 left-0 rounded-lg p-3 space-y-2 shadow-lg"
+                  style={{ background: 'var(--panel2)', border: '1px solid var(--border)', minWidth: 200 }}
                 >
                   {INDICATOR_DEFS.map(ind => (
                     <label
                       key={ind.key}
-                      className="flex items-center gap-2 font-mono text-[11px] cursor-pointer whitespace-nowrap"
+                      className="flex items-center gap-2.5 font-mono text-[13px] cursor-pointer whitespace-nowrap min-h-[40px]"
                       style={{ color: 'var(--textDim)' }}
                     >
                       <input
                         type="checkbox"
-                        checked={indicators[ind.key]}
+                        className="w-4 h-4"
+                        checked={!!indicators[ind.key]}
                         onChange={() => setIndicators(s => ({ ...s, [ind.key]: !s[ind.key] }))}
                       />
-                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: ind.color }} />
+                      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: ind.color }} />
                       {ind.label}
                     </label>
                   ))}
@@ -2059,7 +2072,7 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
             </div>
             <div className="flex-1" />
             {ohlcReadout && (
-              <div className="font-mono text-[11px] flex gap-2 shrink-0" style={{ color: 'var(--textDim)' }}>
+              <div className="font-mono text-[11px] flex gap-2 shrink-0 hidden sm:flex" style={{ color: 'var(--textDim)' }}>
                 <span>O <span style={{ color: 'var(--text)' }}>{fmtPrice(symbol, ohlcReadout.o)}</span></span>
                 <span>H <span style={{ color: 'var(--emerald)' }}>{fmtPrice(symbol, ohlcReadout.h)}</span></span>
                 <span>L <span style={{ color: 'var(--coral)' }}>{fmtPrice(symbol, ohlcReadout.l)}</span></span>
@@ -2069,113 +2082,36 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
             <button
               type="button"
               onClick={() => setExpanded(false)}
-              title="Collapse (Esc)"
-              className="font-mono p-2 rounded flex items-center min-h-[40px] min-w-[40px] justify-center"
-              style={{ color: 'var(--textFaint)', border: '1px solid var(--border)' }}
+              title="Close full chart"
+              className="font-mono px-3 py-2.5 rounded flex items-center gap-1.5 min-h-[44px] text-[12px]"
+              style={{ color: 'var(--text)', border: '1px solid var(--border)', background: 'var(--panel2)' }}
             >
-              <Minimize2 size={16} />
+              <Minimize2 size={16} /> Close
             </button>
           </div>
         </div>
       ) : (
-      <div className="flex flex-col gap-1.5 mb-1 shrink-0">
-        {/* Desktop-only inline symbols — hidden on phones (parent already has symbol chips) */}
-        <div className="omni-chart-syms-inline hidden sm:flex gap-1.5 items-center flex-wrap">
-          {typeof onSymbolChange === 'function' && SYMBOLS.map(sym => (
-            <button
-              key={sym}
-              type="button"
-              onClick={() => onSymbolChange(sym)}
-              className="omni-chip font-mono rounded transition-colors text-[11px] px-2.5 py-1.5"
-              style={{
-                background: symbol === sym ? 'var(--emerald)' : 'var(--panel2)',
-                color: symbol === sym ? '#05070a' : 'var(--textDim)',
-              }}
-            >
-              {symLabel(sym)}
-            </button>
-          ))}
-        </div>
-        {/* Primary mobile toolbar: TF + VP + indicators + expand — always tappable */}
-        <div className="flex items-center gap-1.5 flex-wrap">
-          {TIMEFRAMES.map(tf => (
-            <button
-              key={tf}
-              type="button"
-              onClick={() => setTimeframe(tf)}
-              className="omni-chip font-mono rounded text-[11px] sm:text-[11px] px-2.5 py-2 min-h-[36px]"
-              style={{
-                background: timeframe === tf ? 'var(--panel2)' : 'transparent',
-                color: timeframe === tf ? 'var(--emerald)' : 'var(--textFaint)',
-                border: '1px solid var(--border)',
-              }}
-            >
-              {tf}
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => setIndicators(s => ({ ...s, vp: !s.vp }))}
-            className="omni-chip font-mono rounded text-[11px] px-2.5 py-2 min-h-[36px]"
-            style={{
-              background: indicators.vp ? 'rgba(34,211,238,0.18)' : 'transparent',
-              color: indicators.vp ? '#22d3ee' : 'var(--textFaint)',
-              border: `1px solid ${indicators.vp ? '#22d3ee' : 'var(--border)'}`,
-            }}
-            title="Volume Profile"
-          >
-            VP
-          </button>
-          <div className="relative" ref={indicatorMenuRef}>
-            <button
-              type="button"
-              onClick={() => setShowIndicatorMenu(v => !v)}
-              className="omni-chip font-mono rounded flex items-center gap-1 text-[11px] px-2.5 py-2 min-h-[36px]"
-              style={{
-                background: showIndicatorMenu ? 'var(--panel2)' : 'transparent',
-                color: 'var(--textFaint)',
-                border: '1px solid var(--border)',
-              }}
-            >
-              <SlidersHorizontal size={14} />
-              <span className="hidden xs:inline sm:inline">Ind</span>
-            </button>
-            {showIndicatorMenu && (
-              <div
-                className="absolute z-30 mt-1 right-0 sm:left-0 sm:right-auto rounded p-2 space-y-2"
-                style={{ background: 'var(--panel2)', border: '1px solid var(--border)', minWidth: 168 }}
-              >
-                {INDICATOR_DEFS.map(ind => (
-                  <label
-                    key={ind.key}
-                    className="flex items-center gap-2 font-mono text-[12px] cursor-pointer whitespace-nowrap min-h-[32px]"
-                    style={{ color: 'var(--textDim)' }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={!!indicators[ind.key]}
-                      onChange={() => setIndicators(s => ({ ...s, [ind.key]: !s[ind.key] }))}
-                    />
-                    <span className="w-2 h-2 rounded-full shrink-0" style={{ background: ind.color }} />
-                    {ind.label}
-                  </label>
-                ))}
-              </div>
+        /* Collapsed: preview only — no symbol/TF/indicator controls (those live in Full) */
+        <div className="flex items-center justify-between gap-2 mb-1.5 shrink-0">
+          <div className="font-mono text-[12px] flex items-center gap-2 min-w-0">
+            <span style={{ color: 'var(--text)' }} className="font-semibold">{symLabel(symbol)}</span>
+            <span style={{ color: 'var(--textFaint)' }}>·</span>
+            <span style={{ color: 'var(--textDim)' }}>{timeframe}</span>
+            {ohlcReadout && (
+              <span className="truncate" style={{ color: 'var(--textFaint)' }}>
+                {fmtPrice(symbol, ohlcReadout.c)}
+              </span>
             )}
           </div>
-          <div className="flex-1" />
           <button
             type="button"
             onClick={() => setExpanded(true)}
-            title="Full screen chart"
-            className="omni-chip font-mono rounded flex items-center gap-1 text-[11px] px-3 py-2 min-h-[36px]"
-            style={{ color: 'var(--emerald)', border: '1px solid var(--emerald)', background: 'rgba(31,227,168,0.08)' }}
+            className="omni-chip font-mono rounded flex items-center gap-1.5 text-[12px] px-3 py-2 min-h-[40px] shrink-0"
+            style={{ color: '#05070a', background: 'var(--emerald)', border: 'none', fontWeight: 600 }}
           >
-            <Maximize2 size={14} />
-            <span>Full</span>
+            <Maximize2 size={16} /> Full chart
           </button>
         </div>
-      </div>
       )}
       <div className="omni-chart-canvas-wrap flex-1 min-h-0">
         {status === 'empty' && (
@@ -2242,31 +2178,22 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
       )}
       {/* LIVE TICKS FIRST — no scroll required */}
       <div className="omni-home-grid">
-        {/* Chart first on mobile (order-1) — Market Watch was eating the fold */}
+        {/* Chart first — symbol/TF controls only inside Full chart (no duplicate chips here) */}
         <div className="omni-panel p-2 md:p-3 order-1 lg:order-1">
-          <div className="flex items-center justify-between gap-2 mb-1.5 flex-wrap">
-            <div className="flex gap-1.5 flex-wrap overflow-x-auto omni-scroll max-w-full">
-              {SYMBOLS.map(sym => (
-                <button
-                  key={sym}
-                  type="button"
-                  onClick={() => setChartSymbol(sym)}
-                  className="omni-chip font-mono text-[11px] px-2.5 py-2 min-h-[36px] rounded shrink-0"
-                  style={{
-                    background: chartSymbol === sym ? 'var(--emerald)' : 'var(--panel2)',
-                    color: chartSymbol === sym ? '#05070a' : 'var(--textDim)',
-                  }}
-                >
-                  {symLabel(sym)}
-                </button>
-              ))}
-            </div>
-            <div className="font-mono text-[12px] flex gap-3 items-center shrink-0">
-              {q?.bid != null && <span style={{ color: 'var(--coral)' }}>B {fmtPrice(chartSymbol, q.bid)}</span>}
-              {q?.ask != null && <span style={{ color: 'var(--emerald)' }}>A {fmtPrice(chartSymbol, q.ask)}</span>}
-              {q?.bid == null && <span style={{ color: 'var(--text)' }}>{fmtPrice(chartSymbol, q?.price ?? prices?.[chartSymbol])}</span>}
-              {q?.source === 'mt5_ea' && <Pill tone="up">MT5</Pill>}
-            </div>
+          <div className="flex items-center justify-between gap-2 mb-1 font-mono text-[11px]" style={{ color: 'var(--textDim)' }}>
+            <span>
+              <span style={{ color: 'var(--text)' }}>{symLabel(chartSymbol)}</span>
+              {q?.bid != null && q?.ask != null && (
+                <>
+                  {' '}
+                  <span style={{ color: 'var(--coral)' }}>{fmtPrice(chartSymbol, q.bid)}</span>
+                  {' / '}
+                  <span style={{ color: 'var(--emerald)' }}>{fmtPrice(chartSymbol, q.ask)}</span>
+                </>
+              )}
+            </span>
+            {q?.source === 'mt5_ea' && <Pill tone="up">MT5</Pill>}
+            <span style={{ color: 'var(--textFaint)' }}>Tap Full chart to switch symbol · TF · indicators</span>
           </div>
           <LiveChart symbol={chartSymbol} quote={q} signals={chartSignals} levels={levels} onSymbolChange={setChartSymbol} />
         </div>
@@ -2707,43 +2634,88 @@ function IntelTab({ now, outlook, mode, calendar }) {
 function NewsTab({ news, mode }) {
   const live = mode === 'live' && Array.isArray(news);
   const [cat, setCat] = useState('all');
+  const [selected, setSelected] = useState(null); // in-app reader — never leave the app
   const CATS = [
-    { id: 'all', label: 'All' },
+    { id: 'all', label: 'All markets' },
+    { id: 'crypto', label: 'Crypto' },
     { id: 'forex', label: 'Forex' },
+    { id: 'macro', label: 'Macro / Fed' },
     { id: 'gold', label: 'Gold' },
     { id: 'oil', label: 'Oil' },
-    { id: 'dxy', label: 'Dollar' },
-    { id: 'crypto', label: 'Crypto' },
   ];
+  const MARKET_RE = /bitcoin|btc|ethereum|eth|crypto|defi|stablecoin|sec\b|etf|binance|coinbase|forex|fx\b|eurusd|gbpusd|usdjpy|currency|dollar|dxy|fed\b|fomc|ecb|boj|boe|cpi|nfp|inflation|interest rate|treasury|yield|gold|xau|oil|wti|brent|opec|nasdaq|s&p|liquidity|central bank|risk.?on|risk.?off|payroll/i;
+  const NOISE_RE = /celebrity|sports|football|nba|movie|netflix|recipe|horoscope|weather forecast|gossip/i;
+
   const filtered = !live || !Array.isArray(news) ? null : news.filter(n => {
+    const h = `${n.headline || ''} ${n.summary || ''} ${n.category || ''}`;
+    if (NOISE_RE.test(h)) return false;
+    if (!MARKET_RE.test(h)) return false;
     if (cat === 'all') return true;
     const c = (n.category || '').toLowerCase();
-    const h = `${n.headline || ''} ${n.summary || ''}`.toLowerCase();
-    if (cat === 'forex') return c === 'forex' || /forex|eur|gbp|jpy|fx |currency|ecb|fed|fomc|cpi|nfp/.test(h);
-    if (cat === 'gold') return c === 'gold' || /gold|xau|bullion/.test(h);
-    if (cat === 'oil') return c === 'oil' || /oil|opec|wti|brent|crude/.test(h);
-    if (cat === 'dxy') return c === 'dxy' || /dollar index|dxy|greenback/.test(h);
-    if (cat === 'crypto') return c === 'crypto' || /bitcoin|btc|ethereum|eth|crypto/.test(h);
+    const t = h.toLowerCase();
+    if (cat === 'crypto') return c === 'crypto' || /bitcoin|btc|ethereum|eth|crypto|defi|stablecoin|sec\b|etf|binance|coinbase/.test(t);
+    if (cat === 'forex') return c === 'forex' || /forex|fx\b|eur|gbp|jpy|currency|dxy|dollar/.test(t);
+    if (cat === 'macro') return /fed\b|fomc|ecb|boj|boe|cpi|nfp|inflation|interest rate|treasury|yield|central bank|payroll/.test(t);
+    if (cat === 'gold') return c === 'gold' || /gold|xau|bullion/.test(t);
+    if (cat === 'oil') return c === 'oil' || /oil|opec|wti|brent|crude/.test(t);
     return true;
   });
   const items = filtered;
-  const major = items && items.length ? items[0] : null;
-  const rest = items && items.length > 1 ? items.slice(1) : [];
 
   const when = (dt) => {
     if (!dt) return '';
-    // support both seconds and milliseconds
     const ms = dt < 1e12 ? dt * 1000 : dt;
     return timeAgo(ms);
   };
 
+  if (selected) {
+    return (
+      <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
+        <button
+          type="button"
+          onClick={() => setSelected(null)}
+          className="omni-chip font-mono text-[12px] px-3 py-2 rounded min-h-[40px]"
+          style={{ color: 'var(--emerald)', border: '1px solid var(--border)', background: 'var(--panel2)' }}
+        >
+          ← Back to news
+        </button>
+        <div className="omni-panel p-4 space-y-3">
+          {selected.image ? (
+            <img
+              src={selected.image}
+              alt=""
+              className="w-full rounded object-cover max-h-48"
+              style={{ background: 'var(--panel2)' }}
+              onError={(e) => { e.currentTarget.style.display = 'none'; }}
+            />
+          ) : null}
+          <div className="font-mono text-[10px] uppercase" style={{ color: 'var(--textFaint)' }}>
+            {selected.source || 'Market wire'} · {when(selected.datetime)} ago
+            {selected.category ? ` · ${selected.category}` : ''}
+          </div>
+          <h2 className="text-[18px] font-semibold leading-snug" style={{ color: 'var(--text)' }}>
+            {selected.headline}
+          </h2>
+          <div className="text-[14px] leading-relaxed whitespace-pre-wrap" style={{ color: 'var(--textDim)' }}>
+            {selected.summary
+              || selected.headline
+              || 'Full article text is not provided by the wire. Headline and source summary only.'}
+          </div>
+          <div className="font-mono text-[10px] pt-2 border-t" style={{ color: 'var(--textFaint)', borderColor: 'var(--border)' }}>
+            Read inside OMNICEE — external sites are not opened from this tab.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="p-2 sm:p-3 space-y-2 sm:space-y-3 w-full max-w-[100vw]">
-      <SectionHeader icon={Newspaper} title="Market news" sub={live ? 'Financial + crypto headlines' : undefined} />
+      <SectionHeader icon={Newspaper} title="Market news" sub="Crypto · Forex · Macro only — opens in-app" />
       <div className="flex gap-1 flex-wrap">
         {CATS.map(c => (
           <button key={c.id} type="button" onClick={() => setCat(c.id)}
-            className="font-mono text-[10px] px-2 py-1 rounded uppercase"
+            className="font-mono text-[10px] px-2.5 py-1.5 rounded uppercase min-h-[32px]"
             style={{ background: cat === c.id ? 'var(--emerald)' : 'var(--panel2)', color: cat === c.id ? '#05070a' : 'var(--textDim)' }}>{c.label}</button>
         ))}
       </div>
@@ -2751,55 +2723,43 @@ function NewsTab({ news, mode }) {
       {items === null ? (
         <div className="omni-panel p-4"><WaitingForBackend height={200} /></div>
       ) : items.length === 0 ? (
-        <div className="omni-panel p-4 font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No news yet — wait a few seconds.</div>
+        <div className="omni-panel p-4 font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
+          No market-relevant headlines yet for this filter.
+        </div>
       ) : (
-        <>
-          {major && (
-            <a href={major.url || undefined} target={major.url ? '_blank' : undefined} rel="noreferrer"
-              className="omni-panel p-4 block" style={{ textDecoration: 'none', borderColor: 'var(--emerald)' }}>
-              <div className="font-mono text-[9px] uppercase mb-2" style={{ color: 'var(--emerald)' }}>Major story</div>
-              <div className="flex gap-4 items-start">
-                {major.image ? (
-                  <img src={major.image} alt="" className="rounded object-cover flex-shrink-0"
-                    style={{ width: 120, height: 80, background: 'var(--panel2)' }}
+        <div className="omni-panel overflow-hidden">
+          <div className="space-y-0 max-h-[min(70vh,640px)] overflow-y-auto omni-scroll">
+            {items.map((n, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => setSelected(n)}
+                className="omni-row w-full flex items-start gap-3 px-3 py-3 text-left border-b"
+                style={{ borderColor: 'var(--border)' }}
+              >
+                {n.image ? (
+                  <img src={n.image} alt="" loading="lazy" className="rounded object-cover flex-shrink-0"
+                    style={{ width: 64, height: 48, background: 'var(--panel2)' }}
                     onError={(e) => { e.currentTarget.style.display = 'none'; }} />
-                ) : null}
-                <div className="min-w-0 flex-1">
-                  <div className="text-[16px] font-semibold leading-snug" style={{ color: 'var(--text)' }}>{major.headline}</div>
-                  {major.summary ? <div className="text-[12px] mt-2 line-clamp-3" style={{ color: 'var(--textDim)' }}>{major.summary}</div> : null}
-                  <div className="font-mono text-[10px] mt-2 uppercase" style={{ color: 'var(--textFaint)' }}>
-                    {major.source || 'News'} · {when(major.datetime)} ago
+                ) : (
+                  <div className="flex items-center justify-center rounded flex-shrink-0" style={{ width: 64, height: 48, background: 'var(--panel2)' }}>
+                    <Newspaper size={16} style={{ color: 'var(--textFaint)' }} />
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="text-[13px] leading-snug" style={{ color: 'var(--text)' }}>{n.headline}</div>
+                  {n.summary ? (
+                    <div className="text-[11px] mt-1 line-clamp-2" style={{ color: 'var(--textDim)' }}>{n.summary}</div>
+                  ) : null}
+                  <div className="font-mono text-[9px] uppercase mt-1" style={{ color: 'var(--textFaint)' }}>
+                    {n.source || 'Wire'} · {when(n.datetime)} ago{n.category ? ` · ${n.category}` : ''}
                   </div>
                 </div>
-              </div>
-            </a>
-          )}
-
-          <div className="omni-panel p-4">
-            <div className="space-y-0.5 max-h-[520px] overflow-y-auto omni-scroll">
-              {rest.map((n, i) => (
-                <a key={i} href={n.url || undefined} target={n.url ? '_blank' : undefined} rel="noreferrer"
-                  className="omni-row flex items-start gap-3 px-2 py-2.5 rounded border-b" style={{ borderColor: 'var(--border)', textDecoration: 'none', cursor: n.url ? 'pointer' : 'default' }}>
-                  {n.image ? (
-                    <img src={n.image} alt="" loading="lazy" className="rounded object-cover flex-shrink-0"
-                      style={{ width: 64, height: 48, background: 'var(--panel2)' }}
-                      onError={(e) => { e.currentTarget.style.display = 'none'; }} />
-                  ) : (
-                    <div className="flex items-center justify-center rounded flex-shrink-0" style={{ width: 64, height: 48, background: 'var(--panel2)' }}>
-                      <Newspaper size={16} style={{ color: 'var(--textFaint)' }} />
-                    </div>
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[12px] leading-snug" style={{ color: 'var(--text)' }}>{n.headline}</div>
-                    <div className="font-mono text-[9px] uppercase mt-1" style={{ color: 'var(--textFaint)' }}>
-                      {n.source || 'News'} · {when(n.datetime)} ago
-                    </div>
-                  </div>
-                </a>
-              ))}
-            </div>
+                <ChevronRight size={16} className="shrink-0 mt-1" style={{ color: 'var(--textFaint)' }} />
+              </button>
+            ))}
           </div>
-        </>
+        </div>
       )}
     </div>
   );
