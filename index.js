@@ -2003,6 +2003,9 @@ async function main() {
   // Kick once shortly after boot so first Deriv seed is scored quickly
   setTimeout(() => {
     for (const symbol of SYMBOLS) scheduleLiveAnalysis(symbol, 'boot');
+  // boot-analysis-kick: again at 45s and 90s once candles exist from MT5/Deriv
+  setTimeout(() => { for (const s of SYMBOLS) scheduleLiveAnalysis(s, 'boot'); }, 45000);
+  setTimeout(() => { for (const s of SYMBOLS) scheduleLiveAnalysis(s, 'boot'); }, 90000);
   }, 15000);
   log.info(`Live analysis: adaptive throttle ${ADAPTIVE_THROTTLE ? 'ON' : 'OFF'} · heartbeat ${LIVE_ANALYSIS_INTERVAL_MS/1000}s · symbols ${SYMBOLS.join(',')}`);
 

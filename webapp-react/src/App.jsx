@@ -317,7 +317,7 @@ function authHeaders() {
   return h;
 }
 
-async function omniFetch(path, timeoutMs = 4000, options = {}) {
+async function omniFetch(path, timeoutMs = 12000, options = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -706,7 +706,7 @@ function useLiveFeed() {
       try { const r = await recordFetch('calendar', omniFetch('/api/calendar')); if (!cancelled && r && Array.isArray(r.events)) setCalendar(r.events); else if (!cancelled && r && r.ok === false) setCalendar([]); } catch (_) {}
       try { const r = await recordFetch('levels', omniFetch('/api/levels')); if (!cancelled && r.ok && r.levels) setLevels(r.levels); } catch (_) {}
       try { const r = await recordFetch('heatmap', omniFetch('/api/heatmap')); if (!cancelled && r.ok) setHeatmapTiles(r.tiles); } catch (_) {}
-      try { const r = await recordFetch('audit-trail', omniFetch('/api/audit-trail?limit=30')); if (!cancelled && r.ok) setAuditLog(r.entries); } catch (_) {}
+      try { const r = await recordFetch('audit-trail', omniFetch('/api/audit-trail?limit=50')); if (!cancelled && r.ok) setAuditLog([...(r.nearMisses||[]), ...(r.entries||[])].slice(0, 50)); } catch (_) {}
       try { const r = await recordFetch('health', omniFetch('/api/health')); if (!cancelled && r.ok) setFeedHealth(r.feeds); } catch (_) {}
       try { const r = await omniFetch('/health'); if (!cancelled && r.ok) setUptimeSec(r.uptime); } catch (_) {}
       // FIX (Known gap #2): "Equity curve stays illustrative even in live

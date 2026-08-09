@@ -56,6 +56,8 @@ function dashboardReadAuth(req, res, next) {
   const publicPricePaths = new Set([
     '/api/market', '/api/candles', '/api/health', '/health',
     '/api/calendar', '/api/news',
+    '/api/signals', '/api/audit-trail', '/api/outlook',
+    '/api/heatmap', '/api/stats', '/api/levels', '/api/watchlist',
   ]);
   if (req.method === 'GET' && publicPricePaths.has(path)) {
     req.telegramUser = { id: 'public-prices', username: 'public-prices' };
@@ -292,41 +294,97 @@ function createApp() {
     res.json({ ok: true, outlook: { ...outlook, news } });
   });
 
-  app.get('/api/calendar', dashboardReadAuth, async (_req, res) => {
+    app.get('/api/calendar', dashboardReadAuth, async (_req, res) => {
+    const now = Date.now();
+    let events = [];
+    let sources = [];
+    let feedError = null;
+
     try {
-      const events = await ffCalendar.economicCalendar();
-      const now = Date.now();
-      // Keep full week: from 2h ago through future (not only "next hour window")
-      let upcoming = (events || [])
-        .filter(e => Number.isFinite(e.time) && e.time >= now - 2 * 3600000)
-        .sort((a, b) => a.time - b.time);
-      // Prefer High/Medium first in the payload head, but keep Lows after
-      const rank = (imp) => {
-        const i = String(imp || '').toLowerCase();
-        if (i === 'high') return 0;
-        if (i === 'medium') return 1;
-        if (i === 'low') return 2;
-        return 3;
-      };
-      upcoming = [...upcoming].sort((a, b) => rank(a.impact) - rank(b.impact) || a.time - b.time);
-      const mapped = upcoming.slice(0, 100).map(e => ({
-        name: e.name,
-        currency: e.currency,
-        time: e.time,
-        impact: e.impact,
-        forecast: e.forecast,
-        previous: e.previous,
-        source: e.source || 'forex-factory',
-        hoursAway: Math.round((e.time - now) / 3600000 * 10) / 10,
-      }));
-      res.json({ ok: true, events: mapped, count: mapped.length });
+      const ff = await ffCalendar.economicCalendar();
+      if (Array.isArray(ff) && ff.length) {
+        events.push(...ff);
+        sources.push('forex-factory');
+      }
     } catch (err) {
-      console.warn('[API] calendar failed:', err.message);
-      res.status(503).json({ ok: false, error: err.message, events: [] });
+      feedError = err.message;
+      console.warn('[API] FF calendar:', err.message);
     }
+
+    // Finnhub fallback / merge when key is set (health shows finnhub:true on Render)
+    try {
+      if (finnhub.enabled()) {
+        const from = new Date(now - 12 * 3600000).toISOString().slice(0, 10);
+        const to = new Date(now + 7 * 86400000).toISOString().slice(0, 10);
+        const fh = await finnhub.economicCalendar(from, to);
+        if (Array.isArray(fh) && fh.length) {
+          for (const e of fh) {
+            events.push({
+              name: e.name || e.event || 'Event',
+              currency: e.currency || e.country || 'USD',
+              time: e.time,
+              impact: e.impact || e.importance || null,
+              forecast: e.estimate ?? e.forecast ?? null,
+              previous: e.prev ?? e.previous ?? null,
+              source: 'finnhub',
+            });
+          }
+          sources.push('finnhub');
+        }
+      }
+    } catch (err) {
+      console.warn('[API] Finnhub calendar:', err.message);
+      if (!feedError) feedError = err.message;
+    }
+
+    // De-dupe by name+day+currency
+    const seen = new Set();
+    const unique = [];
+    for (const e of events) {
+      if (!Number.isFinite(e.time)) continue;
+      const day = new Date(e.time).toISOString().slice(0, 10);
+      const k = `${(e.name || '').toLowerCase()}|${e.currency}|${day}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      unique.push(e);
+    }
+
+    let upcoming = unique.filter(e => e.time >= now - 12 * 3600000);
+    if (!upcoming.length && unique.length) {
+      upcoming = [...unique].sort((a, b) => a.time - b.time).slice(0, 40);
+    }
+
+    const rank = (imp) => {
+      const i = String(imp || '').toLowerCase();
+      if (i === 'high' || i === '3') return 0;
+      if (i === 'medium' || i === '2') return 1;
+      if (i === 'low' || i === '1') return 2;
+      return 3;
+    };
+    upcoming.sort((a, b) => rank(a.impact) - rank(b.impact) || a.time - b.time);
+
+    const mapped = upcoming.slice(0, 100).map(e => ({
+      name: e.name,
+      currency: e.currency,
+      time: e.time,
+      impact: e.impact,
+      forecast: e.forecast,
+      previous: e.previous,
+      source: e.source || 'calendar',
+      hoursAway: Math.round((e.time - now) / 3600000 * 10) / 10,
+    }));
+
+    res.json({
+      ok: true,
+      events: mapped,
+      count: mapped.length,
+      rawCount: unique.length,
+      sources,
+      feedError,
+    });
   });
 
-  app.get('/api/levels', dashboardReadAuth, (req, res) => {
+app.get('/api/levels', dashboardReadAuth, (req, res) => {
     const live = getEngines();
     const symbols = live.symbols || [];
     const stores = live.candleStores || {};
