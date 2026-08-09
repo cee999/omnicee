@@ -26,7 +26,7 @@ function requireEnv(name, fallback) {
 const BOT_TOKEN       = requireEnv('TELEGRAM_BOT_TOKEN', '');
 const CHAT_IDS        = (requireEnv('TELEGRAM_CHAT_IDS', '') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
-const SYMBOLS         = (requireEnv('SYMBOLS', 'EURUSD,GBPUSD,USDJPY,XAUUSD,USOIL,UUP,BTCUSDT,ETHUSDT') || '')
+const SYMBOLS         = (requireEnv('SYMBOLS', 'XAUUSD,BTCUSDT,ETHUSDT,EURUSD,GBPUSD,USDJPY,USOIL,UUP') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
 const TIMEFRAMES_STR  = (requireEnv('TIMEFRAMES', 'H1,H4') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
