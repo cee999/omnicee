@@ -14,7 +14,7 @@ import {
   Circle, Clock, Zap, Database,
   Terminal, Newspaper, Gauge as GaugeIcon,
   Layers, Target, DollarSign, SlidersHorizontal, Maximize2, Minimize2,
-  Download, Share2,
+  Download, Share2, Volume2, VolumeX,
 } from 'lucide-react';
 
 const SYMBOLS = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'USOIL', 'UUP', 'BTCUSDT', 'ETHUSDT'];
@@ -32,6 +32,57 @@ const BASE_PRICE = {
 };
 const DECIMALS = { EURUSD: 4, GBPUSD: 4, USDJPY: 3, XAUUSD: 2, USOIL: 2, UUP: 3, BTCUSDT: 1, ETHUSDT: 2 };
 const PIP = { EURUSD: 0.0001, GBPUSD: 0.0001, USDJPY: 0.01, XAUUSD: 0.1, BTCUSDT: 10, ETHUSDT: 1 };
+
+/* ── Audio feedback (fixes "dead silent" UX on mobile / Mini App) ─────────
+ * Short Web-Audio chimes for new high-quality signals. No external assets.
+ * Preference persisted in localStorage. Respects system mute and user toggle.
+ */
+const SOUND_PREF_KEY = 'omnicee_sound_enabled';
+function loadSoundPref() {
+  try {
+    const v = localStorage.getItem(SOUND_PREF_KEY);
+    if (v === null) return true; // default ON so the system is not silent
+    return v === '1' || v === 'true';
+  } catch (_) { return true; }
+}
+function saveSoundPref(on) {
+  try { localStorage.setItem(SOUND_PREF_KEY, on ? '1' : '0'); } catch (_) {}
+}
+
+let _audioCtx = null;
+function getAudioCtx() {
+  if (typeof window === 'undefined') return null;
+  if (!_audioCtx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (AC) _audioCtx = new AC();
+  }
+  return _audioCtx;
+}
+
+/** Play a short directional chime. direction: 'BUY' | 'SELL' | 'neutral' */
+function playSignalChime(direction = 'neutral') {
+  try {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    // Distinct tones: higher for BUY, lower for SELL
+    const base = direction === 'BUY' ? 880 : direction === 'SELL' ? 440 : 660;
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(base, now);
+    osc.frequency.exponentialRampToValueAtTime(base * 1.25, now + 0.08);
+    osc.frequency.exponentialRampToValueAtTime(base * 0.9, now + 0.18);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.22, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+    osc.start(now);
+    osc.stop(now + 0.3);
+  } catch (_) { /* audio optional */ }
+}
 
 // FIX: the Agent Breakdown panel renders `{s.agreeCount}/8 aligned`, but agreeCount was only ever computed by the demo signal generator further down — api/server.js's db.compactSignal() (the shape both...
 function signalScore(s) {
@@ -226,6 +277,16 @@ function ThemeStyle() {
         min-height: clamp(180px, 36vh, 480px);
         height: clamp(180px, 36vh, 480px);
       }
+      /* Dense desktop grids → horizontal scroll on narrow viewports so nothing is clipped */
+      .omni-table-scroll {
+        width: 100%;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior-x: contain;
+      }
+      .omni-table-scroll > .omni-table-grid {
+        min-width: 640px; /* keeps columns readable; parent scrolls */
+      }
       @media (max-width: 480px) {
         .omni-hide-xs { display: none !important; }
         .omni-panel { border-radius: 8px; }
@@ -236,9 +297,25 @@ function ThemeStyle() {
           min-height: clamp(170px, 32vh, 360px);
           height: clamp(170px, 32vh, 360px);
         }
+        /* Larger row hit targets on phone */
+        .omni-row { min-height: 44px; }
+        /* Signal cards alternative (used when we switch layout) */
+        .omni-signal-card {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          padding: 12px;
+          border-bottom: 1px solid var(--border);
+        }
       }
       @media (max-width: 380px) {
         .omni-nav span { font-size: 9px !important; }
+      }
+      /* Prefer reduced motion when user requests it */
+      @media (prefers-reduced-motion: reduce) {
+        .omni-pulse, .omni-ticker-track, .omni-flash-up, .omni-flash-down {
+          animation: none !important;
+        }
       }
       .omni-chart-shell.is-expanded {
         display: flex;
@@ -1003,7 +1080,16 @@ function useLiveFeed() {
       socket.on('signal', payload => {
         if (cancelled || !payload?.id) return;
         const norm = normalizeSignal(payload);
-        setSignals(prev => prev.some(s => s.id === payload.id) ? prev : [norm, ...prev].slice(0, 200));
+        setSignals(prev => {
+          if (prev.some(s => s.id === payload.id)) return prev;
+          // Audio feedback — only for newly seen high-quality signals
+          try {
+            if (loadSoundPref() && signalScore(norm) >= 70) {
+              playSignalChime(normalizeDirection(norm.action));
+            }
+          } catch (_) {}
+          return [norm, ...prev].slice(0, 200);
+        });
         // Browser push when a real signal arrives
         try {
           if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
@@ -1099,7 +1185,7 @@ const TABS = [
   { key: 'MONITOR', label: 'System', fkey: 'F5', icon: Activity },
 ];
 
-function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand }) {
+function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand, soundOn, onToggleSound }) {
   const [cmd, setCmd] = useState('');
   const time = new Date(now).toISOString().slice(11, 19);
   const date = new Date(now).toISOString().slice(0, 10);
@@ -1128,6 +1214,16 @@ function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand 
         />
       </div>
       <div className="flex items-center gap-2 sm:gap-3 ml-auto shrink-0">
+        <button
+          type="button"
+          onClick={() => { onToggleSound?.(); if (!soundOn) { /* unlocking audio on user gesture */ getAudioCtx()?.resume?.(); playSignalChime('neutral'); } }}
+          className="omni-chip flex items-center justify-center rounded p-1.5 min-w-[36px] min-h-[36px]"
+          title={soundOn ? 'Mute signal sounds' : 'Unmute signal sounds'}
+          aria-label={soundOn ? 'Mute' : 'Unmute'}
+          style={{ color: soundOn ? 'var(--emerald)' : 'var(--textFaint)', background: 'var(--panel2)' }}
+        >
+          {soundOn ? <Volume2 size={16} /> : <VolumeX size={16} />}
+        </button>
         <span className="flex items-center gap-1.5 font-mono text-[10px] sm:text-[11px] uppercase" style={{ color: status.color }}>
           <Circle size={7} fill="currentColor" className={status.pulse ? 'omni-pulse' : ''} />
           {status.label}
@@ -1976,31 +2072,33 @@ function SignalsTab({ signals, prices, quotes, auditLog, analysisLive }) {
       </div>
 
       <div className="omni-panel overflow-hidden">
-        <div className="grid grid-cols-[70px_46px_44px_44px_1fr_1fr_1fr_70px_50px] gap-2 px-3 py-2 font-mono text-[9px] uppercase tracking-wider border-b" style={{ color: 'var(--textFaint)', borderColor: 'var(--border)' }}>
-          <span>Symbol</span><span>TF</span><span>Dir</span><span>Grade</span><span>Entry</span><span>Stop</span><span>Targets</span><span>Gate</span><span>Age</span>
-        </div>
-        <div className="max-h-[520px] overflow-y-auto omni-scroll">
-          {filtered.length === 0 ? (
-            <div className="p-6 font-mono text-[11px] text-center" style={{ color: 'var(--textFaint)' }}>
-              No signals for this desk yet. The engine only fires when score ≥ min, agents agree, and risk gates pass — not on every tick.
+        <div className="omni-table-scroll">
+          <div className="omni-table-grid">
+            <div className="grid grid-cols-[70px_46px_44px_44px_1fr_1fr_1fr_70px_50px] gap-2 px-3 py-2 font-mono text-[9px] uppercase tracking-wider border-b" style={{ color: 'var(--textFaint)', borderColor: 'var(--border)' }}>
+              <span>Symbol</span><span>TF</span><span>Dir</span><span>Grade</span><span>Entry</span><span>Stop</span><span>Targets</span><span>Gate</span><span>Age</span>
             </div>
-          ) : filtered.map(s => (
-            <div key={s.id}>
-              <div onClick={() => setExpanded(expanded === s.id ? null : s.id)}
-                className="omni-row grid grid-cols-[70px_46px_44px_44px_1fr_1fr_1fr_70px_50px] gap-2 px-3 py-2 font-mono text-[11px] cursor-pointer border-b items-center"
-                style={{ borderColor: 'var(--border)' }}>
-                <span style={{ color: 'var(--text)' }}>{s.symbol}</span>
-                <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
-                <span style={{ color: s.action === 'BUY' ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
-                <span style={{ color: 'var(--gold)' }}>{gradeFor(s.score)}</span>
-                <span style={{ color: 'var(--textDim)' }}>{fmtPrice(s.symbol, s.entry)}</span>
-                <span style={{ color: 'var(--coral)' }}>{fmtPrice(s.symbol, s.stopLoss)}</span>
-                <span style={{ color: 'var(--emerald)' }}>{fmtPrice(s.symbol, s.targets[0])} / {fmtPrice(s.symbol, s.targets[1])}</span>
-                <Pill tone={s.gate.status === 'approved' ? 'up' : s.gate.status === 'gated' ? 'warn' : 'down'}>{s.gate.status}</Pill>
-                <span className="flex items-center gap-1" style={{ color: 'var(--textFaint)' }}>
-                  {timeAgo(s.timestamp)}<ChevronDown size={11} style={{ transform: expanded === s.id ? 'rotate(180deg)' : 'none' }} />
-                </span>
-              </div>
+            <div className="max-h-[min(520px,55vh)] overflow-y-auto omni-scroll">
+              {filtered.length === 0 ? (
+                <div className="p-6 font-mono text-[11px] text-center" style={{ color: 'var(--textFaint)' }}>
+                  No signals for this desk yet. The engine only fires when score ≥ min, agents agree, and risk gates pass — not on every tick.
+                </div>
+              ) : filtered.map(s => (
+                <div key={s.id}>
+                  <div onClick={() => setExpanded(expanded === s.id ? null : s.id)}
+                    className="omni-row grid grid-cols-[70px_46px_44px_44px_1fr_1fr_1fr_70px_50px] gap-2 px-3 py-2.5 font-mono text-[11px] cursor-pointer border-b items-center"
+                    style={{ borderColor: 'var(--border)' }}>
+                    <span style={{ color: 'var(--text)' }}>{s.symbol}</span>
+                    <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
+                    <span style={{ color: s.action === 'BUY' ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
+                    <span style={{ color: 'var(--gold)' }}>{gradeFor(s.score)}</span>
+                    <span style={{ color: 'var(--textDim)' }}>{fmtPrice(s.symbol, s.entry)}</span>
+                    <span style={{ color: 'var(--coral)' }}>{fmtPrice(s.symbol, s.stopLoss)}</span>
+                    <span style={{ color: 'var(--emerald)' }}>{fmtPrice(s.symbol, s.targets[0])} / {fmtPrice(s.symbol, s.targets[1])}</span>
+                    <Pill tone={s.gate.status === 'approved' ? 'up' : s.gate.status === 'gated' ? 'warn' : 'down'}>{s.gate.status}</Pill>
+                    <span className="flex items-center gap-1" style={{ color: 'var(--textFaint)' }}>
+                      {timeAgo(s.timestamp)}<ChevronDown size={11} style={{ transform: expanded === s.id ? 'rotate(180deg)' : 'none' }} />
+                    </span>
+                  </div>
               {expanded === s.id && (
                 <div className="px-4 py-3 border-b grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4" style={{ borderColor: 'var(--border)', background: '#080a0d' }}>
                   <div>
@@ -2070,10 +2168,12 @@ function SignalsTab({ signals, prices, quotes, auditLog, analysisLive }) {
               )}
             </div>
           ))}
+            </div>
+          </div>
         </div>
       </div>
 
-<div className="omni-panel p-3">
+      <div className="omni-panel p-3">
         <SectionHeader icon={ScrollText} title="Gate checks" sub={`${nearMiss.length} near miss · ${fired.length} fired recently`} />
         {checks.length === 0 ? (
           <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
@@ -2678,22 +2778,24 @@ function TapeTab({ signals, prices, mode }) {
         {mode !== 'live' ? <WaitingForBackend height={200} /> : approved.length === 0 ? (
           <div className="p-4 font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No approved signals yet.</div>
         ) : (
-          <>
-            <div className="grid grid-cols-[70px_46px_44px_1fr_60px] gap-2 px-3 py-2 font-mono text-[9px] uppercase tracking-wider border-b border-t" style={{ color: 'var(--textFaint)', borderColor: 'var(--border)' }}>
-              <span>Symbol</span><span>TF</span><span>Dir</span><span>Entry</span><span>Score</span>
+          <div className="omni-table-scroll">
+            <div className="omni-table-grid" style={{ minWidth: 360 }}>
+              <div className="grid grid-cols-[70px_46px_44px_1fr_60px] gap-2 px-3 py-2 font-mono text-[9px] uppercase tracking-wider border-b border-t" style={{ color: 'var(--textFaint)', borderColor: 'var(--border)' }}>
+                <span>Symbol</span><span>TF</span><span>Dir</span><span>Entry</span><span>Score</span>
+              </div>
+              <div className="max-h-96 overflow-y-auto omni-scroll">
+                {approved.map(s => (
+                  <div key={s.id} className="omni-row grid grid-cols-[70px_46px_44px_1fr_60px] gap-2 px-3 py-2.5 font-mono text-[11px] border-b items-center" style={{ borderColor: 'var(--border)' }}>
+                    <span style={{ color: 'var(--text)' }}>{s.symbol}</span>
+                    <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
+                    <span style={{ color: s.action === 'BUY' ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
+                    <span style={{ color: 'var(--textDim)' }}>{fmtPrice(s.symbol, s.entry)}</span>
+                    <span style={{ color: 'var(--gold)' }}>{s.score}</span>
+                  </div>
+                ))}
+              </div>
             </div>
-            <div className="max-h-96 overflow-y-auto omni-scroll">
-              {approved.map(s => (
-                <div key={s.id} className="omni-row grid grid-cols-[70px_46px_44px_1fr_60px] gap-2 px-3 py-2 font-mono text-[11px] border-b items-center" style={{ borderColor: 'var(--border)' }}>
-                  <span style={{ color: 'var(--text)' }}>{s.symbol}</span>
-                  <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
-                  <span style={{ color: s.action === 'BUY' ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
-                  <span style={{ color: 'var(--textDim)' }}>{fmtPrice(s.symbol, s.entry)}</span>
-                  <span style={{ color: 'var(--gold)' }}>{s.score}</span>
-                </div>
-              ))}
-            </div>
-          </>
+          </div>
         )}
       </div>
     </div>
@@ -2728,16 +2830,20 @@ function DeskTab({ signals, prices, quotes, changes, accountBalance, relativeStr
               <div>Empty queue means nothing cleared the gate yet — not a dead system.</div>
             </div>
           ) : (
-            <div className="max-h-72 overflow-y-auto omni-scroll">
-              {approved.map(s => (
-                <div key={s.id} className="omni-row grid grid-cols-[70px_40px_40px_1fr_1fr] gap-2 px-3 py-2 font-mono text-[11px] border-b" style={{ borderColor: 'var(--border)' }}>
-                  <span>{s.symbol}</span>
-                  <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
-                  <span style={{ color: s.action === 'BUY' || s.action === 'LONG' ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
-                  <span style={{ color: 'var(--textDim)' }}>{fmtPrice(s.symbol, s.entry)}</span>
-                  <span style={{ color: 'var(--gold)' }}>{s.score}</span>
+            <div className="omni-table-scroll">
+              <div className="omni-table-grid" style={{ minWidth: 340 }}>
+                <div className="max-h-72 overflow-y-auto omni-scroll">
+                  {approved.map(s => (
+                    <div key={s.id} className="omni-row grid grid-cols-[70px_40px_40px_1fr_1fr] gap-2 px-3 py-2.5 font-mono text-[11px] border-b" style={{ borderColor: 'var(--border)' }}>
+                      <span>{s.symbol}</span>
+                      <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
+                      <span style={{ color: s.action === 'BUY' || s.action === 'LONG' ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
+                      <span style={{ color: 'var(--textDim)' }}>{fmtPrice(s.symbol, s.entry)}</span>
+                      <span style={{ color: 'var(--gold)' }}>{s.score}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              </div>
             </div>
           )}
         </div>
@@ -3088,6 +3194,14 @@ export default function OmniceeDashboard() {
   });
   const [installEvt, setInstallEvt] = useState(null);
   const [user, setUser] = useState(() => getSession());
+  const [soundOn, setSoundOn] = useState(() => loadSoundPref());
+  const toggleSound = useCallback(() => {
+    setSoundOn(prev => {
+      const next = !prev;
+      saveSoundPref(next);
+      return next;
+    });
+  }, []);
   useEffect(() => {
     // If already running as installed app, never show install UI again
     if (isStandalonePwa()) markPwaDone();
@@ -3133,7 +3247,7 @@ export default function OmniceeDashboard() {
     <AppErrorBoundary>
     <div className="omni-root text-sm" style={{ background: 'var(--void, #05070a)', color: 'var(--text, #eef2f7)' }}>
       <ThemeStyle />
-      <TopBar now={feed.now || Date.now()} mode={feed.mode || 'live'} socketLive={!!feed.socketLive} analysisLive={feed.analysisLive} wakingBackend={!!feed.wakingBackend} onCommand={handleCommand} />
+      <TopBar now={feed.now || Date.now()} mode={feed.mode || 'live'} socketLive={!!feed.socketLive} analysisLive={feed.analysisLive} wakingBackend={!!feed.wakingBackend} onCommand={handleCommand} soundOn={soundOn} onToggleSound={toggleSound} />
       <InstallBanner installEvt={installEvt} loggedIn={!!user} onInstalled={() => setInstallEvt(null)} />
       {feed.wakingBackend && (
         <div className="px-4 py-2 font-mono text-[11px] border-b" style={{ borderColor: 'var(--border)', color: 'var(--gold)', background: 'var(--panel2)' }}>
