@@ -554,6 +554,7 @@ function useLiveFeed() {
   // whenever the socket below actually connects — this just tracks that so
   // the UI can show whether it's on tick-by-tick push or 5s-poll fallback.
   const [socketLive, setSocketLive] = useState(false);
+  const [analysisLive, setAnalysisLive] = useState(null); // { symbol, timeframe, ts }
   const [news, setNews] = useState(null);
   const [sentiment, setSentiment] = useState(null);
   const [journalStats, setJournalStats] = useState(null);
@@ -764,8 +765,8 @@ function useLiveFeed() {
         const src = payload.source || 'unknown';
         const rank = SRC_RANK[src] ?? 0;
         const prevSrc = priceSourceRef.current[sym];
-        if (prevSrc && prevSrc.rank > rank && (Date.now() - prevSrc.ts) < 60000) {
-          return; // keep broker price; ignore lower-authority feed
+        if (prevSrc && prevSrc.rank > rank && (Date.now() - prevSrc.ts) < 12000) {
+          return; // MT5 only blocks ~12s after last broker tick
         }
         priceSourceRef.current[sym] = { source: src, rank, ts: Date.now() };
         const prevPrice = priceRef.current[sym];
@@ -821,6 +822,39 @@ function useLiveFeed() {
       socket.on('balance', payload => {
         if (!cancelled && payload?.balance != null) setAccountBalance(Number(payload.balance));
       });
+
+      // Real-time analysis pulse (from scheduleLiveAnalysis / runAnalysisCycle)
+      socket.on('telemetry', payload => {
+        if (cancelled || !payload) return;
+        if (payload.type === 'analysis_live' || payload.type === 'signal_approved') {
+          setAnalysisLive({
+            symbol: payload.symbol,
+            timeframe: payload.timeframe,
+            type: payload.type,
+            ts: payload.timestamp || Date.now(),
+          });
+        }
+      });
+      socket.on('regime', payload => {
+        if (cancelled || !payload?.symbol) return;
+        // light touch: fold into outlook-like local note via analysisLive
+        setAnalysisLive(prev => ({
+          ...(prev || {}),
+          symbol: payload.symbol,
+          timeframe: payload.timeframe,
+          regime: payload.regime || payload.state,
+          ts: Date.now(),
+          type: 'regime',
+        }));
+      });
+      socket.on('feed_health', payload => {
+        if (!cancelled && payload) setFeedHealth(payload.feeds || payload);
+      });
+      socket.on('risk', payload => {
+        if (!cancelled && payload) {
+          /* risk push available for Desk/System; keep stats fresh */
+        }
+      });
     }).catch(() => {
       /* socket.io-client not resolvable in this environment — REST polling
          above already covers prices/stats, so the dashboard runs slightly
@@ -836,7 +870,7 @@ function useLiveFeed() {
 
   return {
     now, prices, quotes, changes, flash, signals, calendar, levels, auditLog, equityCurve, equityCurveLive,
-    stats, outlook, heatmapTiles, feedHealth, uptimeSec, accountBalance, socketLive,
+    stats, outlook, heatmapTiles, feedHealth, uptimeSec, accountBalance, socketLive, analysisLive,
     news, sentiment, journalStats, learningProfiles, relativeStrength, fetchErrors,
     mode, connected: mode === 'live', wakingBackend,
   };
@@ -846,14 +880,11 @@ function useLiveFeed() {
 const TABS = [
   { key: 'DASH', label: 'Home', fkey: 'F1', icon: LayoutDashboard },
   { key: 'SIGNALS', label: 'Signals', fkey: 'F2', icon: Radio },
-  { key: 'INTEL', label: 'Intel', fkey: 'F3', icon: Globe2 },
-  { key: 'NEWS', label: 'News', fkey: 'F4', icon: Newspaper },
-  { key: 'DESK', label: 'Desk', fkey: 'F5', icon: ShieldAlert },
-  { key: 'VALID', label: 'Valid', fkey: 'F6', icon: FlaskConical },
-  { key: 'MONITOR', label: 'System', fkey: 'F7', icon: Activity },
+  { key: 'NEWS', label: 'News', fkey: 'F3', icon: Newspaper },
+  { key: 'MONITOR', label: 'System', fkey: 'F4', icon: Activity },
 ];
 
-function TopBar({ now, mode, socketLive, wakingBackend, onCommand }) {
+function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand }) {
   const [cmd, setCmd] = useState('');
   const time = new Date(now).toISOString().slice(11, 19);
   const date = new Date(now).toISOString().slice(0, 10);
@@ -896,6 +927,11 @@ function TopBar({ now, mode, socketLive, wakingBackend, onCommand }) {
             title={socketLive ? 'Tick-by-tick prices over Socket.IO' : 'Falling back to 5s REST polling'}
           >
             {socketLive ? 'push' : 'poll'}
+          </span>
+          <span className="font-mono text-[9px] px-1.5 py-0.5 rounded uppercase tracking-wider"
+            style={{ color: analysisLive ? 'var(--gold)' : 'var(--textFaint)', border: `1px solid ${analysisLive ? 'var(--gold)' : 'var(--border)'}` }}
+            title={analysisLive ? `Last scan ${analysisLive.symbol || ''} ${analysisLive.timeframe || ''}` : 'Waiting for live analysis'}>
+            {analysisLive ? `scan ${analysisLive.symbol || ''}`.trim() : 'scan —'}
           </span>
         )}
         <span className="font-mono text-[11px] hidden md:inline" style={{ color: 'var(--textDim)' }}>{date}</span>
@@ -1411,7 +1447,7 @@ function LiveChart({ symbol, quote, signals, levels }) {
 }
 
 /* ── DASH ───────────────────────────────────────────────────────────── */
-function DashTab({ signals, accountBalance, journalStats, prices, quotes, changes, mode, outlook, now, levels }) {
+function DashTab({ signals, accountBalance, journalStats, prices, quotes, changes, mode, outlook, now, levels, analysisLive, socketLive }) {
   const approved = signals.filter(s => s.gate?.status === 'approved' || s.gate?.status === 'APPROVED');
   const recent = signals.slice(0, 12);
   const [chartSymbol, setChartSymbol] = useState('XAUUSD');
@@ -1420,6 +1456,16 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
 
   return (
     <div className="p-2 md:p-3 space-y-2 max-w-[1400px] mx-auto w-full">
+      {/* Real-time status */}
+      <div className="omni-panel px-3 py-2 flex flex-wrap items-center gap-3 font-mono text-[10px]" style={{ color: 'var(--textDim)' }}>
+        <span style={{ color: socketLive ? 'var(--emerald)' : 'var(--textFaint)' }}>{socketLive ? '● PRICE PUSH' : '○ PRICE POLL'}</span>
+        <span style={{ color: analysisLive ? 'var(--gold)' : 'var(--textFaint)' }}>
+          {analysisLive
+            ? `● LIVE SCAN ${analysisLive.symbol || ''} ${analysisLive.timeframe || ''} ${analysisLive.regime ? '· ' + analysisLive.regime : ''}`
+            : '○ SCAN WAITING'}
+        </span>
+        <span style={{ color: 'var(--textFaint)' }}>MT5 + Deriv only · analysis always on</span>
+      </div>
       {/* LIVE TICKS FIRST — no scroll required */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_260px] gap-2">
         <div className="omni-panel p-2 md:p-3 order-2 lg:order-1">
@@ -1509,7 +1555,7 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
   );
 }
 
-function SignalsTab({ signals, prices, quotes, auditLog }) {
+function SignalsTab({ signals, prices, quotes, auditLog, analysisLive }) {
   const [expanded, setExpanded] = useState(null);
   const [desk, setDesk] = useState('ALL');
   const DESKS = {
@@ -1958,7 +2004,7 @@ function NewsTab({ news, mode }) {
 }
 
 /* ── MONITOR ────────────────────────────────────────────────────────── */
-function MonitorTab({ auditLog, feedHealth, uptimeSec, mode, fetchErrors }) {
+function MonitorTab({ auditLog, feedHealth, uptimeSec, mode, fetchErrors, analysisLive, socketLive }) {
   const liveByName = new Map();
   for (const f of (feedHealth || [])) {
     liveByName.set(f.name, f);
@@ -2535,17 +2581,25 @@ export default function OmniceeDashboard() {
   return (
     <div className="omni-root flex flex-col h-full min-h-[640px] w-full text-sm">
       <ThemeStyle />
-      <TopBar now={feed.now} mode={feed.mode} socketLive={feed.socketLive} wakingBackend={feed.wakingBackend} onCommand={handleCommand} />
+      <TopBar now={feed.now} mode={feed.mode} socketLive={feed.socketLive} analysisLive={feed.analysisLive} wakingBackend={feed.wakingBackend} onCommand={handleCommand} />
       <TickerTape prices={feed.prices} changes={feed.changes} flash={feed.flash} quotes={feed.quotes} />
       <div className="flex flex-col flex-1 min-h-0">
         <div className="flex-1 overflow-y-auto omni-scroll">
-          {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} />}
-          {activeTab === 'SIGNALS' && <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} auditLog={feed.auditLog} />}
-          {activeTab === 'INTEL' && <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} calendar={feed.calendar} />}
+          {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} analysisLive={feed.analysisLive} socketLive={feed.socketLive} />}
+          {activeTab === 'SIGNALS' && (
+            <div className="space-y-2">
+              <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} auditLog={feed.auditLog} analysisLive={feed.analysisLive} />
+              <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} />
+            </div>
+          )}
           {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}
-          {activeTab === 'DESK' && <DeskTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} stats={feed.stats} accountBalance={feed.accountBalance} relativeStrength={feed.relativeStrength} mode={feed.mode} />}
-          {activeTab === 'VALID' && <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} />}
-          {activeTab === 'MONITOR' && <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} fetchErrors={feed.fetchErrors} />}
+          {activeTab === 'MONITOR' && (
+            <div className="space-y-2">
+              <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} fetchErrors={feed.fetchErrors} analysisLive={feed.analysisLive} socketLive={feed.socketLive} />
+              <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} calendar={feed.calendar} />
+              <DeskTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} stats={feed.stats} accountBalance={feed.accountBalance} relativeStrength={feed.relativeStrength} mode={feed.mode} />
+            </div>
+          )}
         </div>
         <div className="flex items-center justify-center gap-2 py-1 border-t font-mono text-[8px] uppercase tracking-wider" style={{ borderColor: 'var(--border)', color: 'var(--textFaint)' }}>
           <span>OMNICEE</span><span>·</span><span>Developed by James Yelbert</span>
