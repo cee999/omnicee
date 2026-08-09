@@ -38,7 +38,7 @@ async function save(userId, subscription) {
   const now = new Date();
   await db.collection('web_push_subscriptions').updateOne(
     { userId: uid, endpoint: subscription.endpoint },
-    { $set: { userId: uid, endpoint: subscription.endpoint, subscription, updatedAt: now, createdAt: now }, $setOnInsert: { createdAt: now } },
+    { $set: { userId: uid, endpoint: subscription.endpoint, subscription, updatedAt: now }, $setOnInsert: { createdAt: now } },
     { upsert: true }
   );
   return { ok: true };
