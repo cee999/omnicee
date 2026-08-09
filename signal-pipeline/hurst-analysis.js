@@ -183,7 +183,15 @@ function analyzeHurst(candles, meta = {}) {
     regime: hurst.regime,
     note: hurst.note,
     dfa: dfa && dfa.confidence > 0
-      ? { alpha: dfa.alpha, regime: dfa.regime, confidence: dfa.confidence }
+      ? {
+          alpha: dfa.alpha,
+          rSquared: dfa.rSquared,
+          regime: dfa.regime,
+          confidence: dfa.confidence,
+          scalesUsed: dfa.scalesUsed,
+          order: dfa.order,
+          note: dfa.note,
+        }
       : null,
     playbook: pb.playbook,
     bias: pb.bias,
