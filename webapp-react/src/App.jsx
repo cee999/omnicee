@@ -142,52 +142,63 @@ function ThemeStyle() {
         --text: #eef2f7; --textDim: #8b9bb0; --textFaint: #526078;
         background: var(--void); color: var(--text);
         font-family: 'Inter', system-ui, sans-serif;
+        width: 100%;
+        max-width: 100vw;
+        min-height: 100%;
+        min-height: 100dvh;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        overflow-x: hidden;
+        overflow-y: hidden;
+        box-sizing: border-box;
+        padding-left: env(safe-area-inset-left, 0px);
+        padding-right: env(safe-area-inset-right, 0px);
+        padding-top: env(safe-area-inset-top, 0px);
       }
       .omni-root .font-display { font-family: 'Orbitron', sans-serif; }
       .omni-root .font-mono { font-family: 'JetBrains Mono', monospace; }
-      .omni-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
-      .omni-panel2 { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; }
-      .omni-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+      .omni-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; max-width: 100%; }
+      .omni-panel2 { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; max-width: 100%; }
+      .omni-main { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; }
+      .omni-scroll { -webkit-overflow-scrolling: touch; }
+      .omni-scroll::-webkit-scrollbar { width: 4px; height: 4px; }
       .omni-scroll::-webkit-scrollbar-thumb { background: var(--borderBright); border-radius: 3px; }
       .omni-scroll::-webkit-scrollbar-track { background: transparent; }
-      @keyframes omni-marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
-      .omni-marquee { animation: omni-marquee 16s linear infinite; }
-      .omni-marquee:hover { animation-play-state: paused; }
       @keyframes omni-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
       .omni-pulse { animation: omni-pulse 1.8s ease-in-out infinite; }
       @keyframes omni-flash-up { 0% { background: rgba(31,227,168,0.35); } 100% { background: transparent; } }
       @keyframes omni-flash-down { 0% { background: rgba(255,84,112,0.35); } 100% { background: transparent; } }
       .omni-flash-up { animation: omni-flash-up 0.7s ease-out; }
       .omni-flash-down { animation: omni-flash-down 0.7s ease-out; }
-      .omni-tab-active { box-shadow: inset 3px 0 0 var(--emerald); background: var(--panel2); }
-.omni-ticker-wrap { height: 32px; }
-.omni-ticker-track { animation: omni-ticker 28s linear infinite; width: max-content; }
-.omni-ticker-wrap:hover .omni-ticker-track { animation-play-state: paused; }
-@keyframes omni-ticker { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+      .omni-tab-active { box-shadow: inset 0 2px 0 var(--emerald); background: var(--panel2); }
+      .omni-ticker-wrap { height: 28px; max-width: 100%; overflow: hidden; flex-shrink: 0; }
+      .omni-ticker-track { animation: omni-ticker 22s linear infinite; width: max-content; }
+      .omni-ticker-wrap:hover .omni-ticker-track { animation-play-state: paused; }
+      @keyframes omni-ticker { from { transform: translateX(0); } to { transform: translateX(-50%); } }
       .omni-cmd::placeholder { color: var(--textFaint); }
       .omni-row:hover { background: rgba(255,255,255,0.02); }
-      html, body, #root { width: 100%; max-width: 100vw; overflow-x: hidden; }
-      .omni-root {
+      .omni-nav {
+        flex-shrink: 0;
+        display: flex;
         width: 100%;
-        max-width: 100vw;
-        overflow-x: hidden;
-        min-height: 100dvh;
+        border-top: 1px solid var(--border);
+        background: var(--panel);
         padding-bottom: env(safe-area-inset-bottom, 0px);
-        padding-left: env(safe-area-inset-left, 0px);
-        padding-right: env(safe-area-inset-right, 0px);
-        box-sizing: border-box;
       }
-      .omni-ticker-wrap { height: 28px; max-width: 100%; }
-      @media (max-width: 640px) {
-        .omni-root { font-size: 12px; }
+      .omni-nav button {
+        flex: 1 1 0;
+        min-width: 0;
+        padding: 8px 2px;
+      }
+      @media (max-width: 480px) {
+        .omni-hide-xs { display: none !important; }
         .omni-panel { border-radius: 8px; }
-        .omni-cmd { font-size: 10px !important; }
       }
     `}</style>
   );
 }
 
-/* ── Small shared atoms ─────────────────────────────────────────────── */
 function Pill({ children, tone = 'neutral' }) {
   const map = {
     neutral: { color: 'var(--textDim)', bg: 'rgba(139,155,176,0.12)' },
@@ -1020,10 +1031,7 @@ function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand 
           style={{ background: 'var(--emerald)', color: '#05070a' }}>Ω</div>
         <span className="font-display text-sm tracking-[0.15em]" style={{ color: 'var(--text)' }}>OMNICEE</span>
       </div>
-      <span className="font-mono text-[10px] uppercase tracking-widest hidden sm:inline" style={{ color: 'var(--textFaint)' }}>
-        Institutional Signal Terminal
-      </span>
-      <div className="flex-1 flex items-center gap-2 max-w-md">
+      <div className="flex-1 flex items-center gap-2 min-w-0 max-w-full sm:max-w-md omni-hide-xs">
         <Terminal size={13} style={{ color: 'var(--gold)' }} />
         <input
           value={cmd}
@@ -1109,12 +1117,12 @@ function TickerTape({ prices, changes, flash, quotes }) {
 
 function NavBar({ active, onSelect }) {
   return (
-    <div className="flex border-t shrink-0 overflow-x-auto omni-scroll" style={{ borderColor: 'var(--border)', background: 'var(--panel)', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
+    <div className="omni-nav">
       {TABS.map(t => (
         <button
           key={t.key}
           onClick={() => onSelect(t.key)}
-          className="flex-1 min-w-[52px] flex flex-col items-center gap-0.5 py-2 transition-colors"
+          className="flex flex-col items-center gap-0.5 transition-colors"
           style={{
             color: active === t.key ? 'var(--emerald)' : 'var(--textDim)',
             background: active === t.key ? 'var(--panel2)' : 'transparent',
@@ -1594,7 +1602,7 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
   const chartSignals = useMemo(() => signals.filter(s => s.symbol === chartSymbol), [signals, chartSymbol]);
 
   return (
-    <div className="p-2 md:p-3 space-y-2 max-w-[1400px] mx-auto w-full">
+    <div className="p-2 sm:p-3 space-y-2 w-full">
       {/* Real-time status */}
       <div className="omni-panel px-3 py-2 flex flex-wrap items-center gap-3 font-mono text-[10px]" style={{ color: 'var(--textDim)' }}>
         <span style={{ color: socketLive ? 'var(--emerald)' : 'var(--textFaint)' }}>{socketLive ? '● PRICE PUSH' : '○ PRICE POLL'}</span>
@@ -1619,27 +1627,8 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
           ))}
         </div>
       )}
-
-      <div className="omni-panel px-3 py-2">
-        <div className="font-mono text-[10px] uppercase mb-1.5" style={{ color: 'var(--gold)' }}>
-          AI agents · multi-agent score
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {AGENTS.map(name => (
-            <span key={name} className="font-mono text-[9px] px-2 py-1 rounded" style={{ background: 'var(--panel2)', color: 'var(--textDim)', border: '1px solid var(--border)' }}>
-              {name}
-            </span>
-          ))}
-        </div>
-        <div className="font-mono text-[10px] mt-1.5" style={{ color: 'var(--textFaint)' }}>
-          {analysisLive
-            ? `Last live scan: ${analysisLive.symbol || '—'} ${analysisLive.timeframe || ''} ${analysisLive.regime ? '· ' + analysisLive.regime : ''} — agents re-score while prices tick`
-            : 'Agents wait for MT5/Deriv candles, then score each pair (SMC, MTF, Momentum, Volume, Sentiment, Pattern, Fractal, Microstructure)'}
-        </div>
-      </div>
-
       {/* LIVE TICKS FIRST — no scroll required */}
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_260px] gap-2">
+      <div className="grid grid-cols-1 xl:grid-cols-[1fr_minmax(200px,280px)] gap-2 w-full">
         <div className="omni-panel p-2 md:p-3 order-2 lg:order-1">
           <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
             <div className="flex gap-1 flex-wrap">
@@ -1661,7 +1650,7 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
           <LiveChart symbol={chartSymbol} quote={q} signals={chartSignals} levels={levels} onSymbolChange={setChartSymbol} />
         </div>
 
-        <div className="omni-panel overflow-hidden order-1 lg:order-2 flex flex-col max-h-[320px] lg:max-h-[340px]">
+        <div className="omni-panel overflow-hidden order-1 xl:order-2 flex flex-col max-h-[40vh] xl:max-h-none xl:min-h-[280px]">
           <div className="px-3 py-1.5 border-b" style={{ borderColor: 'var(--border)' }}>
             <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>Market Watch · live</span>
           </div>
@@ -1747,7 +1736,7 @@ function SignalsTab({ signals, prices, quotes, auditLog, analysisLive }) {
   const fired = checks.filter(e => e.fired);
 
   return (
-    <div className="p-4 space-y-3">
+    <div className="p-2 sm:p-3 space-y-2 sm:space-y-3 w-full max-w-[100vw]">
 <div className="flex items-center gap-2 flex-wrap">
         <SectionHeader icon={Radio} title="Signal Desks" sub={`${filtered.length} signal(s) · MT5 or Deriv prices`} />
         <div className="ml-auto flex gap-1 flex-wrap">
@@ -1968,7 +1957,7 @@ function IntelTab({ now, outlook, mode, calendar }) {
     : null;
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
       <div className="omni-panel p-4">
         <SectionHeader icon={Globe2} title="Market Outlook" sub={live ? 'live briefing · regime + session + calendar' : undefined} />
         {narrative ? (
@@ -2099,7 +2088,7 @@ function NewsTab({ news, mode }) {
   };
 
   return (
-    <div className="p-4 space-y-3">
+    <div className="p-2 sm:p-3 space-y-2 sm:space-y-3 w-full max-w-[100vw]">
       <SectionHeader icon={Newspaper} title="Market news" sub={live ? 'Financial + crypto headlines' : undefined} />
       <div className="flex gap-1 flex-wrap">
         {CATS.map(c => (
@@ -2199,7 +2188,7 @@ function MonitorTab({ auditLog, feedHealth, uptimeSec, mode, fetchErrors, analys
   const liveCount = feeds.filter(f => f.status === 'live').length;
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
       <div className="omni-panel p-4">
         <SectionHeader
           icon={Database}
@@ -2280,7 +2269,7 @@ function HeatTab({ heatmapTiles, mode, sentiment }) {
 
   if (live) {
     return (
-      <div className="p-4 space-y-4">
+      <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
         {fg && (
           <div className="omni-panel p-4 flex items-center justify-between gap-4 flex-wrap">
             <div>
@@ -2340,7 +2329,7 @@ function HeatTab({ heatmapTiles, mode, sentiment }) {
   }
 
   return (
-    <div className="p-4">
+    <div className="p-2 sm:p-3 w-full max-w-[100vw]">
       <div className="omni-panel p-4">
         <SectionHeader icon={Flame} title="Market Heat Map" />
         <WaitingForBackend height={200} />
@@ -2355,7 +2344,7 @@ function ValidTab({ signals, journalStats, learningProfiles, mode }) {
 
   if (!live) {
     return (
-      <div className="p-4">
+      <div className="p-2 sm:p-3 w-full max-w-[100vw]">
         <div className="omni-panel p-4">
           <SectionHeader icon={FlaskConical} title="Validation" />
           <WaitingForBackend height={240} />
@@ -2389,7 +2378,7 @@ function ValidTab({ signals, journalStats, learningProfiles, mode }) {
   const mcChartData = validated.slice(0, 20).reverse().map((s, i) => ({ label: `${s.symbol}#${i + 1}`, prob: s.validation.monteCarlo?.winProbability ?? 0 }));
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
       {!hasAnyValidContent && (
         <div className="omni-panel p-4">
           <SectionHeader icon={FlaskConical} title="Validation" sub="waits on live signals + closed outcomes" />
@@ -2480,7 +2469,7 @@ function TapeTab({ signals, prices, mode }) {
   const approved = useMemo(() => signals.filter(s => s.gate.status === 'approved').slice(0, 20), [signals]);
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
       <div className="flex items-center gap-4">
         <StatCard label="Approved Signals" value={approved.length} icon={Activity} />
         <StatCard label="Avg Score" value={approved.length ? Math.round(approved.reduce((a, s) => a + s.score, 0) / approved.length) : '—'} icon={GaugeIcon} accent="var(--blue)" />
@@ -2522,7 +2511,7 @@ function DeskTab({ signals, prices, quotes, changes, accountBalance, relativeStr
   }, [signals]);
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard label="Approved Queue" value={approved.length} icon={Activity} />
         <StatCard label="All Signals" value={signals.length} icon={Radio} />
@@ -2622,7 +2611,7 @@ function RiskTab({ prices, changes, accountBalance, relativeStrength, mode }) {
   const ranked = liveRanked || [...SYMBOLS].sort((a, b) => (changes[b] ?? 0) - (changes[a] ?? 0));
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="omni-panel p-4">
           <SectionHeader icon={GaugeIcon} title="Position Size Calculator" />
@@ -2943,7 +2932,7 @@ export default function OmniceeDashboard() {
 
   return (
     <AppErrorBoundary>
-    <div className="omni-root flex flex-col h-full min-h-[100dvh] min-h-[640px] w-full text-sm" style={{ background: 'var(--void, #05070a)', color: 'var(--text, #eef2f7)' }}>
+    <div className="omni-root text-sm" style={{ background: 'var(--void, #05070a)', color: 'var(--text, #eef2f7)' }}>
       <ThemeStyle />
       <TopBar now={feed.now || Date.now()} mode={feed.mode || 'live'} socketLive={!!feed.socketLive} analysisLive={feed.analysisLive} wakingBackend={!!feed.wakingBackend} onCommand={handleCommand} />
       <InstallBanner installEvt={installEvt} loggedIn={!!user} onInstalled={() => setInstallEvt(null)} />
@@ -2953,8 +2942,8 @@ export default function OmniceeDashboard() {
         </div>
       )}
       <TickerTape prices={feed.prices || {}} changes={feed.changes || {}} flash={feed.flash || {}} quotes={feed.quotes || {}} />
-      <div className="flex flex-col flex-1 min-h-0">
-        <div className="flex-1 overflow-y-auto omni-scroll">
+      <div className="flex flex-col flex-1 min-h-0" style={{ minHeight: 0 }}>
+        <div className="omni-main omni-scroll">
           {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} analysisLive={feed.analysisLive} socketLive={feed.socketLive} cryptoVolAlerts={feed.cryptoVolAlerts} />}
           {activeTab === 'SIGNALS' && (
             <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} auditLog={feed.auditLog} analysisLive={feed.analysisLive} />
@@ -2971,7 +2960,7 @@ export default function OmniceeDashboard() {
             </div>
           )}
         </div>
-        <div className="flex items-center justify-center gap-2 py-1 border-t font-mono text-[8px] uppercase tracking-wider" style={{ borderColor: 'var(--border)', color: 'var(--textFaint)' }}>
+        <div className="omni-hide-xs flex items-center justify-center gap-2 py-0.5 border-t font-mono text-[8px] uppercase tracking-wider" style={{ borderColor: 'var(--border)', color: 'var(--textFaint)' }}>
           <span>OMNICEE</span><span>·</span><span>Developed by James Yelbert</span>
         </div>
         <NavBar active={activeTab} onSelect={setActiveTab} />
