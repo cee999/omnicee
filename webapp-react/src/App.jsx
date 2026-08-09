@@ -921,18 +921,20 @@ function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand 
           {status.label}
         </span>
         {mode === 'live' && (
-          <span
-            className="font-mono text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded hidden sm:inline"
-            style={{ color: socketLive ? 'var(--emerald)' : 'var(--textFaint)', border: `1px solid ${socketLive ? 'var(--emerald)' : 'var(--border)'}` }}
-            title={socketLive ? 'Tick-by-tick prices over Socket.IO' : 'Falling back to 5s REST polling'}
-          >
-            {socketLive ? 'push' : 'poll'}
-          </span>
-          <span className="font-mono text-[9px] px-1.5 py-0.5 rounded uppercase tracking-wider"
-            style={{ color: analysisLive ? 'var(--gold)' : 'var(--textFaint)', border: `1px solid ${analysisLive ? 'var(--gold)' : 'var(--border)'}` }}
-            title={analysisLive ? `Last scan ${analysisLive.symbol || ''} ${analysisLive.timeframe || ''}` : 'Waiting for live analysis'}>
-            {analysisLive ? `scan ${analysisLive.symbol || ''}`.trim() : 'scan —'}
-          </span>
+          <>
+            <span
+              className="font-mono text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded hidden sm:inline"
+              style={{ color: socketLive ? 'var(--emerald)' : 'var(--textFaint)', border: `1px solid ${socketLive ? 'var(--emerald)' : 'var(--border)'}` }}
+              title={socketLive ? 'Tick-by-tick prices over Socket.IO' : 'Falling back to 5s REST polling'}
+            >
+              {socketLive ? 'push' : 'poll'}
+            </span>
+            <span className="font-mono text-[9px] px-1.5 py-0.5 rounded uppercase tracking-wider"
+              style={{ color: analysisLive ? 'var(--gold)' : 'var(--textFaint)', border: `1px solid ${analysisLive ? 'var(--gold)' : 'var(--border)'}` }}
+              title={analysisLive ? `Last scan ${analysisLive.symbol || ''} ${analysisLive.timeframe || ''}` : 'Waiting for live analysis'}>
+              {analysisLive ? `scan ${analysisLive.symbol || ''}`.trim() : 'scan —'}
+            </span>
+          </>
         )}
         <span className="font-mono text-[11px] hidden md:inline" style={{ color: 'var(--textDim)' }}>{date}</span>
         <span className="font-mono text-[12px] font-semibold" style={{ color: 'var(--text)' }}>{time} UTC</span>
