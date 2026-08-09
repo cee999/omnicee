@@ -1,4 +1,5 @@
 import { io } from 'socket.io-client';
+import { showWebNotification } from '../notifications.js';
 
 const APP_TOKEN = import.meta.env.VITE_APP_TOKEN || '';
 
@@ -55,6 +56,11 @@ export function connectOmniceeSocket(handlers = {}) {
   ];
   channels.forEach(ch => {
     if (handlers[ch]) socket.on(ch, handlers[ch]);
+  });
+
+  socket.on('notification', notification => {
+    showWebNotification(notification).catch(() => {});
+    handlers.notification?.(notification);
   });
 
   socket.getHistory = (payload) => socket.emit('get_history', payload);
