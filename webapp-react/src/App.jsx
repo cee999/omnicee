@@ -2576,12 +2576,42 @@ function RiskTab({ prices, changes, accountBalance, relativeStrength, mode }) {
 }
 
 
+
+const PWA_DONE_KEY = 'omnicee_pwa_done';
+const PWA_DISMISS_KEY = 'omnicee_pwa_dismissed';
+
 function isStandalonePwa() {
   try {
     if (window.matchMedia('(display-mode: standalone)').matches) return true;
+    if (window.matchMedia('(display-mode: minimal-ui)').matches) return true;
     if (window.navigator.standalone === true) return true; // iOS Safari
   } catch (_) {}
   return false;
+}
+
+function markPwaDone() {
+  try { localStorage.setItem(PWA_DONE_KEY, '1'); } catch (_) {}
+}
+
+function markPwaDismissed() {
+  try { localStorage.setItem(PWA_DISMISS_KEY, '1'); } catch (_) {}
+}
+
+function isPwaFinished() {
+  try {
+    if (localStorage.getItem(PWA_DONE_KEY) === '1') return true;
+    if (localStorage.getItem(PWA_DISMISS_KEY) === '1') return true;
+  } catch (_) {}
+  return false;
+}
+
+function isMobileDevice() {
+  try {
+    if (navigator.userAgentData?.mobile) return true;
+  } catch (_) {}
+  const ua = navigator.userAgent || '';
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(ua)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 }
 
 function isIosSafari() {
@@ -2592,29 +2622,56 @@ function isIosSafari() {
   return iOS && webkit && notOther;
 }
 
-/** Visible install path — beforeinstallprompt alone never shows a button by itself. */
-function InstallBanner({ installEvt, onInstalled }) {
-  const [dismissed, setDismissed] = useState(false);
+/**
+ * PC Chrome/Edge: do not steal beforeinstallprompt — address-bar install icon stays.
+ * Phone after login: one-shot banner; after install or dismiss it never returns.
+ */
+function InstallBanner({ installEvt, onInstalled, loggedIn }) {
   const [iosHelp, setIosHelp] = useState(false);
-  const standalone = isStandalonePwa();
-  if (standalone || dismissed) return null;
+  const [hidden, setHidden] = useState(() => isStandalonePwa() || isPwaFinished());
+
+  useEffect(() => {
+    if (isStandalonePwa()) {
+      markPwaDone();
+      setHidden(true);
+    }
+  }, []);
+
+  // Desktop: rely on Chrome/Edge address-bar ⊕ install icon only
+  if (!isMobileDevice()) return null;
+  // Only after login on phone
+  if (!loggedIn) return null;
+  if (hidden || isStandalonePwa() || isPwaFinished()) return null;
+
+  const finishForever = () => {
+    markPwaDone();
+    setHidden(true);
+    onInstalled?.();
+  };
+
+  const dismissForever = () => {
+    markPwaDismissed();
+    setHidden(true);
+  };
 
   const onInstallClick = async () => {
     if (installEvt?.prompt) {
       try {
         await installEvt.prompt();
         const choice = await installEvt.userChoice;
-        if (choice?.outcome === 'accepted') onInstalled?.();
-      } catch (_) {}
+        // Accepted or dismissed browser UI — never nag again
+        if (choice?.outcome === 'accepted') finishForever();
+        else dismissForever();
+      } catch (_) {
+        dismissForever();
+      }
       return;
     }
     if (isIosSafari()) {
       setIosHelp(true);
       return;
     }
-    // Desktop without deferred prompt yet — browser may still allow via menu
-    setIosHelp(false);
-    alert('Install: use the browser menu → "Install app" / "Add to Home screen". Chrome/Edge address bar may also show an install icon.');
+    setIosHelp(true);
   };
 
   return (
@@ -2622,9 +2679,13 @@ function InstallBanner({ installEvt, onInstalled }) {
       <div className="omni-panel px-3 py-2 flex flex-wrap items-center gap-2" style={{ borderColor: 'var(--emerald)' }}>
         <Download size={14} style={{ color: 'var(--emerald)' }} />
         <div className="flex-1 min-w-[140px] font-mono text-[11px]" style={{ color: 'var(--text)' }}>
-          Install OMNICEE on this device
+          Add OMNICEE to your phone
           <div className="text-[10px]" style={{ color: 'var(--textFaint)' }}>
-            {installEvt ? 'Ready — works offline shell + home screen icon' : isIosSafari() ? 'iPhone/iPad: use Share → Add to Home Screen' : 'Waiting for browser install offer — or use browser menu'}
+            {installEvt
+              ? 'Tap Install — this message will not show again after you finish'
+              : isIosSafari()
+                ? 'Safari: Share → Add to Home Screen (once)'
+                : 'Use Install when ready — only shown once'}
           </div>
         </div>
         <button
@@ -2633,25 +2694,32 @@ function InstallBanner({ installEvt, onInstalled }) {
           className="font-mono text-[10px] uppercase px-3 py-1.5 rounded font-semibold"
           style={{ background: 'var(--emerald)', color: '#05070a' }}
         >
-          {installEvt ? 'Install app' : isIosSafari() ? 'How to install' : 'Install help'}
+          {installEvt ? 'Install' : isIosSafari() ? 'How to add' : 'Install'}
         </button>
         <button
           type="button"
-          onClick={() => setDismissed(true)}
+          onClick={dismissForever}
           className="font-mono text-[10px] px-2 py-1 rounded"
           style={{ color: 'var(--textFaint)', border: '1px solid var(--border)' }}
         >
-          Later
+          Done / Later
         </button>
       </div>
       {iosHelp && (
         <div className="omni-panel2 mt-1 px-3 py-2 font-mono text-[10px] space-y-1" style={{ color: 'var(--textDim)' }}>
           <div style={{ color: 'var(--text)' }}>iPhone / iPad (Safari)</div>
-          <div>1. Tap the <b>Share</b> button (square with arrow)</div>
-          <div>2. Scroll and tap <b>Add to Home Screen</b></div>
-          <div>3. Tap <b>Add</b> — OMNICEE opens like an app</div>
-          <div className="pt-1" style={{ color: 'var(--textFaint)' }}>Android Chrome: menu ⋮ → Install app / Add to Home screen</div>
-          <div style={{ color: 'var(--textFaint)' }}>PC Chrome/Edge: install icon in address bar, or menu → Install OMNICEE</div>
+          <div>1. Tap <b>Share</b> (square with arrow)</div>
+          <div>2. Tap <b>Add to Home Screen</b></div>
+          <div>3. Tap <b>Add</b></div>
+          <button
+            type="button"
+            className="mt-2 font-mono text-[10px] px-2 py-1 rounded"
+            style={{ background: 'var(--emerald)', color: '#05070a' }}
+            onClick={finishForever}
+          >
+            I added it — hide this
+          </button>
+          <div className="pt-1" style={{ color: 'var(--textFaint)' }}>Android: tap Install above, or menu → Install app</div>
         </div>
       )}
     </div>
@@ -2664,11 +2732,26 @@ export default function OmniceeDashboard() {
   const [installEvt, setInstallEvt] = useState(null);
   const [user, setUser] = useState(() => getSession());
   useEffect(() => {
-    const h = (e) => { e.preventDefault(); setInstallEvt(e); };
-    window.addEventListener('beforeinstallprompt', h);
-    window.addEventListener('appinstalled', () => setInstallEvt(null));
+    // If already running as installed app, never show install UI again
+    if (isStandalonePwa()) markPwaDone();
+
+    const onPrompt = (e) => {
+      // Mobile only: defer prompt so our one-shot Install button can call it.
+      // Desktop: do NOT preventDefault — Chrome/Edge keep the address-bar install icon.
+      if (isMobileDevice()) {
+        e.preventDefault();
+        if (!isPwaFinished()) setInstallEvt(e);
+      }
+    };
+    const onInstalled = () => {
+      markPwaDone();
+      setInstallEvt(null);
+    };
+    window.addEventListener('beforeinstallprompt', onPrompt);
+    window.addEventListener('appinstalled', onInstalled);
     return () => {
-      window.removeEventListener('beforeinstallprompt', h);
+      window.removeEventListener('beforeinstallprompt', onPrompt);
+      window.removeEventListener('appinstalled', onInstalled);
     };
   }, []);
   const feed = useLiveFeed();
@@ -2678,9 +2761,7 @@ export default function OmniceeDashboard() {
       <>
         <ThemeStyle />
         <LoginGate onAuthed={(u) => setUser(u)} />
-        <div className="fixed bottom-0 left-0 right-0 z-50 max-w-lg mx-auto">
-          <InstallBanner installEvt={installEvt} onInstalled={() => setInstallEvt(null)} />
-        </div>
+        {/* No install banner on login screen — only after login on phone */}
       </>
     );
   }
@@ -2696,7 +2777,7 @@ export default function OmniceeDashboard() {
     <div className="omni-root flex flex-col h-full min-h-[640px] w-full text-sm">
       <ThemeStyle />
       <TopBar now={feed.now} mode={feed.mode} socketLive={feed.socketLive} analysisLive={feed.analysisLive} wakingBackend={feed.wakingBackend} onCommand={handleCommand} />
-      <InstallBanner installEvt={installEvt} onInstalled={() => setInstallEvt(null)} />
+      <InstallBanner installEvt={installEvt} loggedIn={!!user} onInstalled={() => setInstallEvt(null)} />
       <TickerTape prices={feed.prices} changes={feed.changes} flash={feed.flash} quotes={feed.quotes} />
       <div className="flex flex-col flex-1 min-h-0">
         <div className="flex-1 overflow-y-auto omni-scroll">
