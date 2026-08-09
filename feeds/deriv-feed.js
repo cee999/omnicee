@@ -42,6 +42,7 @@ class DerivFeed extends EventEmitter {
     this._lastQuote = new Map();
     this._lastTickAt = 0;
     this._pendingHistory = [];
+    this._invalidSymbols = new Set();
     this._historyBusy = false;
     this._pingTimer = null;
     this._watchTimer = null;
@@ -164,7 +165,7 @@ class DerivFeed extends EventEmitter {
   _subscribeTicks() {
     for (const omni of this.symbols) {
       const d = DERIV_MAP[omni];
-      if (!d) continue;
+      if (!d || this._invalidSymbols.has(d)) continue;
       this._send({ ticks: d, subscribe: 1 });
     }
   }
@@ -202,7 +203,11 @@ class DerivFeed extends EventEmitter {
 
   _handle(msg) {
     if (msg.error) {
-      this.emit('error', new Error(msg.error.message || JSON.stringify(msg.error)));
+      const errMsg = msg.error.message || JSON.stringify(msg.error);
+      if (msg.error.code === 'InvalidSymbol' && msg.echo_req?.ticks) {
+        this._invalidSymbols.add(msg.echo_req.ticks);
+      }
+      this.emit('error', new Error(errMsg));
       return;
     }
 
