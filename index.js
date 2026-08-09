@@ -142,6 +142,34 @@ const agentPool = {};
 const lastVotes = {};
 
 const inFlight = new Set();
+/** Live analysis throttle: symbol:tf → last run ms */
+const lastAnalysisAt = new Map();
+const LIVE_ANALYSIS_MIN_MS = Number(process.env.LIVE_ANALYSIS_MIN_MS || 20000); // 20s per symbol/tf
+const LIVE_ANALYSIS_INTERVAL_MS = Number(process.env.ANALYSIS_INTERVAL_MS || 45000); // always-on loop
+
+/**
+ * Schedule analysis the same way the chart stays live: on ticks + timer.
+ * Throttled so agents do not thrash CPU, but always-on while prices move.
+ */
+function scheduleLiveAnalysis(symbol, reason = 'tick') {
+  if (!SYMBOLS.includes(symbol)) return;
+  for (const tf of TIMEFRAMES_STR) {
+    const key = `${symbol}:${tf}`;
+    const n = candleStores[symbol]?.[tf]?.length || 0;
+    const minBars = SIGNAL_SOFT_GATES ? 40 : 50;
+    if (n < minBars) continue;
+    const last = lastAnalysisAt.get(key) || 0;
+    if (Date.now() - last < LIVE_ANALYSIS_MIN_MS) continue;
+    if (inFlight.has(key)) continue;
+    lastAnalysisAt.set(key, Date.now());
+    setImmediate(() => {
+      runAnalysisCycle(symbol, tf).catch(e =>
+        log.warn(`live analysis [${key}] (${reason}): ${e.message}`)
+      );
+    });
+  }
+}
+
 
 function initAgentsForSymbol(symbol) {
   agentPool[symbol] = {
@@ -218,6 +246,17 @@ async function runAnalysisCycle(symbol, timeframe) {
     if (!agents) return;
 
     log.info(`[Analysis] ${key} — ${candles.length} candles`);
+    if (wsBus) {
+      try {
+        wsBus.emit('telemetry_update', {
+          type: 'analysis_live',
+          symbol,
+          timeframe,
+          candles: candles.length,
+          timestamp: Date.now(),
+        });
+      } catch (_) {}
+    }
 
     const [smcResult, mtfResult, momResult, volumeResult, microResult, fractalResult] = await Promise.all([
       agents.smc?.analyze(candles)
@@ -1129,6 +1168,9 @@ function onLivePrice(symbol, price, { change = null, bias = null, source = 'cand
   const a = Number.isFinite(ask) ? ask : (prev?.ask ?? null);
   lastPriceBySymbol[symbol] = { price, bid: b, ask: a, source, rank, ts: now };
 
+  // Always-on analysis: same spirit as live chart — rescore while ticks flow
+  try { scheduleLiveAnalysis(symbol, source); } catch (_) {}
+
   if (executionEngine?.onPrice) {
     try { executionEngine.onPrice(symbol, price, null); }
     catch (e) { log.warn(`ExecutionEngine.onPrice error [${symbol}]: ${e.message}`); }
@@ -1824,18 +1866,17 @@ async function main() {
   }
 
   const feeds = buildFeeds();
-  // periodic-analysis: Deriv/MT5 may fill candleStores without a closed-bar event
+  // Always-on analysis loop (chart-like): keeps checking while server is up
   setInterval(() => {
     for (const symbol of SYMBOLS) {
-      for (const tf of TIMEFRAMES_STR) {
-        const n = candleStores[symbol]?.[tf]?.length || 0;
-        if (n >= (SIGNAL_SOFT_GATES ? 40 : 50)) {
-          runAnalysisCycle(symbol, tf).catch(e => log.warn(`periodic analysis ${symbol} ${tf}: ${e.message}`));
-        }
-      }
+      scheduleLiveAnalysis(symbol, 'heartbeat');
     }
-  }, Number(process.env.ANALYSIS_INTERVAL_MS || 180000));
-  log.info(`Periodic analysis every ${Number(process.env.ANALYSIS_INTERVAL_MS || 180000)/1000}s for ${SYMBOLS.join(',')}`);
+  }, LIVE_ANALYSIS_INTERVAL_MS);
+  // Kick once shortly after boot so first Deriv seed is scored quickly
+  setTimeout(() => {
+    for (const symbol of SYMBOLS) scheduleLiveAnalysis(symbol, 'boot');
+  }, 15000);
+  log.info(`Live analysis: min ${LIVE_ANALYSIS_MIN_MS/1000}s/symbol · heartbeat ${LIVE_ANALYSIS_INTERVAL_MS/1000}s · symbols ${SYMBOLS.join(',')}`);
 
   const keepUrl = process.env.KEEPALIVE_URL || process.env.RENDER_EXTERNAL_URL;
   if (keepUrl) {
@@ -1857,12 +1898,22 @@ async function main() {
   let connected = 0;
   for (const f of feeds) {
     try {
-      await f.instance.connect();
+      if (typeof f.instance.connect === 'function') {
+        await f.instance.connect();
+      } else if (typeof f.instance.start === 'function') {
+        f.instance.start();
+      }
       f.seed?.();
       log.info(`${f.name} connected`);
       connected++;
     } catch (err) {
-      log.error(`${f.name} connection failed: ${err.message}`);
+      // Deriv may already be started in buildFeeds(); do not treat as fatal
+      if (typeof f.instance.isConnected === 'function' && f.instance.isConnected()) {
+        log.info(`${f.name} already live`);
+        connected++;
+      } else {
+        log.error(`${f.name} connection failed: ${err.message}`);
+      }
     }
   }
 

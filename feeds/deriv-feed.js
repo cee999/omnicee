@@ -52,6 +52,12 @@ class DerivFeed extends EventEmitter {
   enabled() { return this.symbols.length > 0; }
   isConnected() { return this._connected === true; }
 
+  /** Alias so index.js main() `await feed.connect()` works (same as start). */
+  async connect() {
+    this.start();
+    return this;
+  }
+
   start() {
     this._stopped = false;
     this._connect();
