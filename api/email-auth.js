@@ -13,9 +13,26 @@ function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+function getOtpPepper() {
+  const pepper = String(process.env.OTP_PEPPER || '').trim();
+  if (pepper) return pepper;
+  // Never silently fall back to a known/static secret in production.
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('OTP_PEPPER is required in production');
+  }
+  return 'omnicee-local-dev-otp';
+}
+
 function hashCode(email, code) {
-  const pepper = process.env.OTP_PEPPER || process.env.EA_SECRET || 'omnicee-otp';
+  const pepper = getOtpPepper();
   return crypto.createHash('sha256').update(`${email}:${code}:${pepper}`).digest('hex');
+}
+
+function safeEqualHex(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const left = Buffer.from(a, 'hex');
+  const right = Buffer.from(b, 'hex');
+  return left.length === right.length && left.length > 0 && crypto.timingSafeEqual(left, right);
 }
 
 function randomCode() {
@@ -39,7 +56,7 @@ async function sendEmail({ to, subject, text }) {
     from = `OMNICEE <${from}>`;
   }
   if (!isValidFromAddress(from)) {
-    console.warn(`[AUTH] Invalid EMAIL_FROM="${from}" — falling back to ${DEFAULT_FROM}`);
+    console.warn('[AUTH] Invalid EMAIL_FROM configured — using default sender');
     from = DEFAULT_FROM;
   }
 
@@ -80,7 +97,7 @@ async function sendEmail({ to, subject, text }) {
     return { provider: 'smtp' };
   }
 
-  if (process.env.ALLOW_DEV_OTP === 'true') {
+  if (process.env.ALLOW_DEV_OTP === 'true' && process.env.NODE_ENV !== 'production') {
     console.log(`[AUTH DEV OTP] ${to} => code in response (ALLOW_DEV_OTP)`);
     return { provider: 'dev' };
   }
@@ -91,15 +108,24 @@ async function sendEmail({ to, subject, text }) {
 function createEmailAuthRouter(express, db) {
   const router = express.Router();
 
-  // FIX: the 30s cooldown alone only slows a single source down to ~2 requests/min — cheap to sidestep by rotating source IPs to keep mail-bombing ONE target inbox with OTP codes, since nothing capped...
-  const MAX_PER_DAY = Number(process.env.OTP_MAX_PER_EMAIL_PER_DAY || 8);
+  const MAX_PER_DAY = Math.max(1, Number(process.env.OTP_MAX_PER_EMAIL_PER_DAY || 8));
   const DAY_MS = 24 * 60 * 60 * 1000;
+  const COOLDOWN_MS = 30000;
   const lastRequest = new Map();
+  const ipRequest = new Map();
+  const MAX_PER_IP_PER_HOUR = Math.max(1, Number(process.env.OTP_MAX_PER_IP_PER_HOUR || 20));
+  const HOUR_MS = 60 * 60 * 1000;
 
   function cleanupStale(now) {
-    if (lastRequest.size < 500) return;
-    for (const [email, rec] of lastRequest) {
-      if (now - rec.windowStart > DAY_MS) lastRequest.delete(email);
+    if (lastRequest.size >= 500) {
+      for (const [email, rec] of lastRequest) {
+        if (now - rec.windowStart > DAY_MS) lastRequest.delete(email);
+      }
+    }
+    if (ipRequest.size >= 500) {
+      for (const [ip, rec] of ipRequest) {
+        if (now - rec.windowStart > HOUR_MS) ipRequest.delete(ip);
+      }
     }
   }
 
@@ -112,8 +138,19 @@ function createEmailAuthRouter(express, db) {
 
       const now = Date.now();
       cleanupStale(now);
+      const ip = String(req.ip || req.socket?.remoteAddress || 'unknown');
+      const ipPrev = ipRequest.get(ip);
+      if (ipPrev && now - ipPrev.last < COOLDOWN_MS) {
+        return res.status(429).json({ ok: false, error: 'Wait 30 seconds before requesting another code' });
+      }
+      const ipWindowStart = ipPrev && now - ipPrev.windowStart < HOUR_MS ? ipPrev.windowStart : now;
+      const ipCount = ipPrev && now - ipPrev.windowStart < HOUR_MS ? ipPrev.count + 1 : 1;
+      if (ipCount > MAX_PER_IP_PER_HOUR) {
+        return res.status(429).json({ ok: false, error: 'Too many code requests from this address. Try again later.' });
+      }
+
       const prev = lastRequest.get(email);
-      if (prev && now - prev.last < 30000) {
+      if (prev && now - prev.last < COOLDOWN_MS) {
         return res.status(429).json({ ok: false, error: 'Wait 30 seconds before requesting another code' });
       }
       const windowStart = prev && now - prev.windowStart < DAY_MS ? prev.windowStart : now;
@@ -121,7 +158,9 @@ function createEmailAuthRouter(express, db) {
       if (count > MAX_PER_DAY) {
         return res.status(429).json({ ok: false, error: 'Too many codes requested for this email today. Try again tomorrow.' });
       }
+
       lastRequest.set(email, { last: now, windowStart, count });
+      ipRequest.set(ip, { last: now, windowStart: ipWindowStart, count: ipCount });
 
       const code = randomCode();
       const codeHash = hashCode(email, code);
@@ -166,7 +205,7 @@ function createEmailAuthRouter(express, db) {
         message: 'Code sent. Check your email inbox (and spam).',
         expiresInSec: Math.floor(CODE_TTL_MS / 1000),
       };
-      if (sendResult.provider === 'dev') payload.devCode = code;
+      if (sendResult.provider === 'dev' && process.env.NODE_ENV !== 'production') payload.devCode = code;
       res.json(payload);
     } catch (err) {
       console.warn('[AUTH] request failed:', err.message);
@@ -197,7 +236,7 @@ function createEmailAuthRouter(express, db) {
         return res.status(401).json({ ok: false, error: 'Too many attempts. Request a new code.' });
       }
 
-      const ok = row.codeHash === hashCode(email, code);
+      const ok = safeEqualHex(row.codeHash, hashCode(email, code));
       if (!ok) {
         await mongo.collection('email_otps').updateOne({ email }, { $inc: { attempts: 1 } });
         return res.status(401).json({ ok: false, error: 'Wrong code' });
@@ -259,7 +298,9 @@ function createEmailAuthRouter(express, db) {
 function extractToken(req) {
   const h = req.headers.authorization || '';
   if (h.startsWith('Bearer ')) return h.slice(7).trim();
-  return (req.headers['x-session-token'] || req.query?.token || '').trim() || null;
+  // Do not accept session tokens in query strings: URLs can leak through logs,
+  // browser history, referrers, analytics, and proxy caches.
+  return (req.headers['x-session-token'] || '').trim() || null;
 }
 
 function emailSessionMiddleware(db) {
