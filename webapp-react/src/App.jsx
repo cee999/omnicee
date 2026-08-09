@@ -1383,6 +1383,8 @@ const INDICATOR_DEFS = [
   { key: 'ema20', label: 'EMA 20', color: CHART_COLORS.ema20 },
   { key: 'ema50', label: 'EMA 50', color: CHART_COLORS.ema50 },
   { key: 'bb', label: 'Bollinger 20/2', color: CHART_COLORS.band },
+  { key: 'vp', label: 'Volume Profile', color: '#22d3ee' },
+  { key: 'vol', label: 'Volume bars', color: '#1fe3a8' },
 ];
 
 // Standard EMA — first value is a plain SMA seed, everything after that
@@ -1416,20 +1418,87 @@ function computeBollinger(closes, period = 20, mult = 2) {
   return { upper, lower };
 }
 
+/**
+ * Fixed-range Volume Profile from OHLCV candles.
+ * Distributes each bar's volume across price buckets spanned by high–low
+ * (uniform within the range — standard tick-proxy when true T&S is absent).
+ * Returns bins + POC + Value Area (≈70% of total volume around POC).
+ */
+function computeVolumeProfile(candles, rows = 28) {
+  if (!candles?.length || rows < 4) return null;
+  let lo = Infinity, hi = -Infinity;
+  let totalVol = 0;
+  for (const c of candles) {
+    if (!Number.isFinite(c.low) || !Number.isFinite(c.high)) continue;
+    if (c.low < lo) lo = c.low;
+    if (c.high > hi) hi = c.high;
+    totalVol += Number(c.volume) || 0;
+  }
+  if (!(hi > lo) || totalVol <= 0) {
+    // Fallback: synthetic volume from range so VP still draws when feed omits volume
+    totalVol = 0;
+    for (const c of candles) {
+      const synthetic = Math.max(Math.abs((c.high ?? 0) - (c.low ?? 0)), 1e-12);
+      totalVol += synthetic;
+    }
+    if (!(hi > lo) || totalVol <= 0) return null;
+  }
+  const step = (hi - lo) / rows;
+  if (!(step > 0)) return null;
+  const bins = Array.from({ length: rows }, (_, i) => ({
+    priceLow: lo + i * step,
+    priceHigh: lo + (i + 1) * step,
+    priceMid: lo + (i + 0.5) * step,
+    volume: 0,
+  }));
+  for (const c of candles) {
+    const cLo = Number(c.low), cHi = Number(c.high);
+    if (!Number.isFinite(cLo) || !Number.isFinite(cHi) || cHi < cLo) continue;
+    let vol = Number(c.volume);
+    if (!(vol > 0)) vol = Math.max(Math.abs(cHi - cLo), 1e-12);
+    const i0 = Math.max(0, Math.min(rows - 1, Math.floor((cLo - lo) / step)));
+    const i1 = Math.max(0, Math.min(rows - 1, Math.floor((cHi - lo) / step)));
+    const span = i1 - i0 + 1;
+    const share = vol / span;
+    for (let i = i0; i <= i1; i++) bins[i].volume += share;
+  }
+  let pocIdx = 0;
+  for (let i = 1; i < rows; i++) if (bins[i].volume > bins[pocIdx].volume) pocIdx = i;
+  // Value Area: expand from POC until ~70% of volume is covered
+  let vaLow = pocIdx, vaHigh = pocIdx, covered = bins[pocIdx].volume;
+  const target = totalVol * 0.7;
+  while (covered < target && (vaLow > 0 || vaHigh < rows - 1)) {
+    const up = vaHigh < rows - 1 ? bins[vaHigh + 1].volume : -1;
+    const dn = vaLow > 0 ? bins[vaLow - 1].volume : -1;
+    if (up >= dn) { vaHigh += 1; covered += bins[vaHigh].volume; }
+    else { vaLow -= 1; covered += bins[vaLow].volume; }
+  }
+  return {
+    bins,
+    maxVol: bins[pocIdx].volume,
+    poc: bins[pocIdx].priceMid,
+    vah: bins[vaHigh].priceHigh,
+    val: bins[vaLow].priceLow,
+    totalVol,
+  };
+}
+
 function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
   const [timeframe, setTimeframe] = useState('H1');
   const [status, setStatus] = useState('loading'); // loading | ok | empty | error
   const [ohlcReadout, setOhlcReadout] = useState(null);
-  const [indicators, setIndicators] = useState({ ema20: false, ema50: false, bb: false });
+  const [indicators, setIndicators] = useState({ ema20: false, ema50: false, bb: false, vp: false, vol: true });
   const [showIndicatorMenu, setShowIndicatorMenu] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
   const containerRef = useRef(null);
+  const vpCanvasRef = useRef(null);
   const chartRef = useRef(null);
   const candleSeriesRef = useRef(null);
   const volumeSeriesRef = useRef(null);
   const markersRef = useRef(null);
   const priceLinesRef = useRef([]);
+  const vpLinesRef = useRef([]);
   const srLinesRef = useRef([]);
   const ema20SeriesRef = useRef(null);
   const ema50SeriesRef = useRef(null);
@@ -1586,7 +1655,10 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
           value: c.volume || 0,
           color: c.close >= c.open ? 'rgba(31,227,168,0.35)' : 'rgba(255,84,112,0.35)',
         })));
-        candlesRef.current = candles.map(({ time, open, high, low, close }) => ({ time, open, high, low, close }));
+        // Keep volume on the ref so Volume Profile can distribute by price
+        candlesRef.current = candles.map(({ time, open, high, low, close, volume }) => ({
+          time, open, high, low, close, volume: volume || 0,
+        }));
         applyIndicators(candlesRef.current);
         const last = candles[candles.length - 1];
         lastBarRef.current = { time: last.time, open: last.open, high: last.high, low: last.low, close: last.close };
@@ -1679,8 +1751,132 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
     ema50SeriesRef.current?.applyOptions({ visible: indicators.ema50 });
     bbUpperSeriesRef.current?.applyOptions({ visible: indicators.bb });
     bbLowerSeriesRef.current?.applyOptions({ visible: indicators.bb });
+    volumeSeriesRef.current?.applyOptions({ visible: indicators.vol !== false });
     applyIndicators(candlesRef.current);
   }, [indicators, applyIndicators]);
+
+  // Volume Profile overlay — canvas bars on the left + POC / VAH / VAL price lines
+  useEffect(() => {
+    const canvas = vpCanvasRef.current;
+    const chart = chartRef.current;
+    const series = candleSeriesRef.current;
+    if (!canvas || !chart || !series) return undefined;
+
+    // Clear any previous VP price lines (separate from signal entry/SL lines)
+    const clearVpLines = () => {
+      (vpLinesRef.current || []).forEach((l) => {
+        try { series.removePriceLine(l); } catch (_) {}
+      });
+      vpLinesRef.current = [];
+    };
+
+    const draw = () => {
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      const wrap = canvas.parentElement;
+      const w = wrap?.clientWidth || 0;
+      const h = wrap?.clientHeight || 0;
+      if (w < 8 || h < 8) return;
+      const dpr = window.devicePixelRatio || 1;
+      if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
+        canvas.width = Math.floor(w * dpr);
+        canvas.height = Math.floor(h * dpr);
+        canvas.style.width = `${w}px`;
+        canvas.style.height = `${h}px`;
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+
+      if (!indicators.vp) {
+        clearVpLines();
+        return;
+      }
+
+      const profile = computeVolumeProfile(candlesRef.current, 28);
+      if (!profile) {
+        clearVpLines();
+        return;
+      }
+
+      const maxBarW = Math.min(120, Math.floor(w * 0.28));
+      const { bins, maxVol, poc, vah, val } = profile;
+
+      for (const bin of bins) {
+        const y1 = series.priceToCoordinate(bin.priceHigh);
+        const y2 = series.priceToCoordinate(bin.priceLow);
+        if (y1 == null || y2 == null) continue;
+        const top = Math.min(y1, y2);
+        const bot = Math.max(y1, y2);
+        const bh = Math.max(1, bot - top - 0.5);
+        const bw = maxVol > 0 ? (bin.volume / maxVol) * maxBarW : 0;
+        if (bw < 0.5) continue;
+        const inVA = bin.priceMid >= val && bin.priceMid <= vah;
+        const isPoc = Math.abs(bin.priceMid - poc) < (bins[0].priceHigh - bins[0].priceLow) * 0.6;
+        ctx.fillStyle = isPoc
+          ? 'rgba(240, 180, 41, 0.55)'
+          : inVA
+            ? 'rgba(34, 211, 238, 0.28)'
+            : 'rgba(94, 168, 255, 0.14)';
+        ctx.fillRect(0, top, bw, bh);
+      }
+
+      // POC / VAH / VAL as dashed price lines (recreate when profile changes)
+      clearVpLines();
+      try {
+        vpLinesRef.current = [
+          series.createPriceLine({
+            price: poc,
+            color: '#f0b429',
+            lineWidth: 1,
+            lineStyle: LineStyle.Solid,
+            axisLabelVisible: true,
+            title: 'POC',
+          }),
+          series.createPriceLine({
+            price: vah,
+            color: '#22d3ee',
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: 'VAH',
+          }),
+          series.createPriceLine({
+            price: val,
+            color: '#22d3ee',
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: 'VAL',
+          }),
+        ];
+      } catch (_) { /* series may be mid-swap */ }
+    };
+
+    draw();
+    // Redraw when user pans/zooms so bars stay locked to price levels
+    const onRange = () => { requestAnimationFrame(draw); };
+    try { chart.timeScale().subscribeVisibleLogicalRangeChange(onRange); } catch (_) {}
+    try { chart.subscribeCrosshairMove(onRange); } catch (_) {}
+    window.addEventListener('resize', onRange);
+    const ro = typeof ResizeObserver !== 'undefined' && canvas.parentElement
+      ? new ResizeObserver(() => requestAnimationFrame(draw))
+      : null;
+    if (ro && canvas.parentElement) ro.observe(canvas.parentElement);
+
+    return () => {
+      try { chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange); } catch (_) {}
+      window.removeEventListener('resize', onRange);
+      if (ro) ro.disconnect();
+      clearVpLines();
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        const w = canvas.parentElement?.clientWidth || 0;
+        const h = canvas.parentElement?.clientHeight || 0;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    };
+  }, [indicators.vp, symbol, timeframe, status, expanded]);
 
   // Close the indicator picker on an outside click.
   useEffect(() => {
@@ -1959,6 +2155,13 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
           </div>
         )}
         <div ref={containerRef} className="omni-chart-canvas" style={{ opacity: status === 'ok' ? 1 : 0.2 }} />
+        {/* Volume Profile overlay — left-side histogram locked to price scale */}
+        <canvas
+          ref={vpCanvasRef}
+          className="pointer-events-none absolute inset-0 z-[5]"
+          style={{ display: indicators.vp ? 'block' : 'none' }}
+          aria-hidden
+        />
       </div>
     </div>
   );
