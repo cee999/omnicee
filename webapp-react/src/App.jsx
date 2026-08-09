@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis,
   Tooltip, ResponsiveContainer, CartesianGrid, Cell,
@@ -14,9 +14,10 @@ import {
   Circle, Clock, Zap, Database,
   Terminal, Newspaper, Gauge as GaugeIcon,
   Layers, Target, DollarSign, SlidersHorizontal, Maximize2, Minimize2,
+  Download, Share2, Volume2, VolumeX,
 } from 'lucide-react';
 
-const SYMBOLS = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'USOIL', 'UUP', 'BTCUSDT', 'ETHUSDT'];
+const SYMBOLS = ['XAUUSD', 'BTCUSDT', 'ETHUSDT', 'EURUSD', 'GBPUSD', 'USDJPY', 'USOIL', 'UUP'];
 const SYMBOL_LABEL = { UUP: 'DXY', XAUUSD: 'GOLD', USOIL: 'OIL', BTCUSDT: 'BTC', ETHUSDT: 'ETH' };
 function symLabel(s) { return SYMBOL_LABEL[s] || s; }
 
@@ -31,6 +32,57 @@ const BASE_PRICE = {
 };
 const DECIMALS = { EURUSD: 4, GBPUSD: 4, USDJPY: 3, XAUUSD: 2, USOIL: 2, UUP: 3, BTCUSDT: 1, ETHUSDT: 2 };
 const PIP = { EURUSD: 0.0001, GBPUSD: 0.0001, USDJPY: 0.01, XAUUSD: 0.1, BTCUSDT: 10, ETHUSDT: 1 };
+
+/* ── Audio feedback (fixes "dead silent" UX on mobile / Mini App) ─────────
+ * Short Web-Audio chimes for new high-quality signals. No external assets.
+ * Preference persisted in localStorage. Respects system mute and user toggle.
+ */
+const SOUND_PREF_KEY = 'omnicee_sound_enabled';
+function loadSoundPref() {
+  try {
+    const v = localStorage.getItem(SOUND_PREF_KEY);
+    if (v === null) return true; // default ON so the system is not silent
+    return v === '1' || v === 'true';
+  } catch (_) { return true; }
+}
+function saveSoundPref(on) {
+  try { localStorage.setItem(SOUND_PREF_KEY, on ? '1' : '0'); } catch (_) {}
+}
+
+let _audioCtx = null;
+function getAudioCtx() {
+  if (typeof window === 'undefined') return null;
+  if (!_audioCtx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (AC) _audioCtx = new AC();
+  }
+  return _audioCtx;
+}
+
+/** Play a short directional chime. direction: 'BUY' | 'SELL' | 'neutral' */
+function playSignalChime(direction = 'neutral') {
+  try {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    // Distinct tones: higher for BUY, lower for SELL
+    const base = direction === 'BUY' ? 880 : direction === 'SELL' ? 440 : 660;
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(base, now);
+    osc.frequency.exponentialRampToValueAtTime(base * 1.25, now + 0.08);
+    osc.frequency.exponentialRampToValueAtTime(base * 0.9, now + 0.18);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.22, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+    osc.start(now);
+    osc.stop(now + 0.3);
+  } catch (_) { /* audio optional */ }
+}
 
 // FIX: the Agent Breakdown panel renders `{s.agreeCount}/8 aligned`, but agreeCount was only ever computed by the demo signal generator further down — api/server.js's db.compactSignal() (the shape both...
 function signalScore(s) {
@@ -99,7 +151,11 @@ function fmtPrice(symbol, v) {
   const d = DECIMALS[symbol] ?? 2;
   return Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 }
-function fmtPct(v, digits = 2) { return `${v >= 0 ? '+' : ''}${v.toFixed(digits)}%`; }
+function fmtPct(v, digits = 2) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '—';
+  return `${n >= 0 ? '+' : ''}${n.toFixed(digits)}%`;
+}
 function timeAgo(ts) {
   const s = Math.floor((Date.now() - ts) / 1000);
   if (s < 60) return `${s}s`;
@@ -137,35 +193,182 @@ function ThemeStyle() {
         --text: #eef2f7; --textDim: #8b9bb0; --textFaint: #526078;
         background: var(--void); color: var(--text);
         font-family: 'Inter', system-ui, sans-serif;
+        width: 100%;
+        max-width: 100vw;
+        min-height: 100%;
+        min-height: 100dvh;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        overflow-x: hidden;
+        overflow-y: hidden;
+        box-sizing: border-box;
+        padding-left: env(safe-area-inset-left, 0px);
+        padding-right: env(safe-area-inset-right, 0px);
+        padding-top: env(safe-area-inset-top, 0px);
       }
       .omni-root .font-display { font-family: 'Orbitron', sans-serif; }
       .omni-root .font-mono { font-family: 'JetBrains Mono', monospace; }
-      .omni-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
-      .omni-panel2 { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; }
-      .omni-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+      .omni-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; max-width: 100%; }
+      .omni-panel2 { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; max-width: 100%; }
+      .omni-main { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; }
+      .omni-scroll { -webkit-overflow-scrolling: touch; }
+      .omni-scroll::-webkit-scrollbar { width: 4px; height: 4px; }
       .omni-scroll::-webkit-scrollbar-thumb { background: var(--borderBright); border-radius: 3px; }
       .omni-scroll::-webkit-scrollbar-track { background: transparent; }
-      @keyframes omni-marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
-      .omni-marquee { animation: omni-marquee 16s linear infinite; }
-      .omni-marquee:hover { animation-play-state: paused; }
       @keyframes omni-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
       .omni-pulse { animation: omni-pulse 1.8s ease-in-out infinite; }
       @keyframes omni-flash-up { 0% { background: rgba(31,227,168,0.35); } 100% { background: transparent; } }
       @keyframes omni-flash-down { 0% { background: rgba(255,84,112,0.35); } 100% { background: transparent; } }
       .omni-flash-up { animation: omni-flash-up 0.7s ease-out; }
       .omni-flash-down { animation: omni-flash-down 0.7s ease-out; }
-      .omni-tab-active { box-shadow: inset 3px 0 0 var(--emerald); background: var(--panel2); }
-.omni-ticker-wrap { height: 32px; }
-.omni-ticker-track { animation: omni-ticker 28s linear infinite; width: max-content; }
-.omni-ticker-wrap:hover .omni-ticker-track { animation-play-state: paused; }
-@keyframes omni-ticker { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+      .omni-tab-active { box-shadow: inset 0 2px 0 var(--emerald); background: var(--panel2); }
+      .omni-ticker-wrap { height: 30px; max-width: 100%; overflow: hidden; flex-shrink: 0; }
+      .omni-ticker-track { animation: omni-ticker 28s linear infinite; width: max-content; }
+      .omni-ticker-wrap:hover .omni-ticker-track,
+      .omni-ticker-wrap:active .omni-ticker-track { animation-play-state: paused; }
+      @keyframes omni-ticker { from { transform: translateX(0); } to { transform: translateX(-50%); } }
       .omni-cmd::placeholder { color: var(--textFaint); }
       .omni-row:hover { background: rgba(255,255,255,0.02); }
+      .omni-nav {
+        flex-shrink: 0;
+        display: flex;
+        width: 100%;
+        border-top: 1px solid var(--border);
+        background: var(--panel);
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+        /* App-like bottom bar: tall enough for thumbs */
+        min-height: 56px;
+      }
+      .omni-nav button {
+        flex: 1 1 0;
+        min-width: 0;
+        min-height: 52px;
+        padding: 6px 2px 8px;
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+      }
+      .omni-nav button:active {
+        background: var(--panel2) !important;
+      }
+      /* Press feedback for rows / chips (mobile has no hover) */
+      .omni-row:active,
+      .omni-chip:active {
+        background: rgba(255,255,255,0.06) !important;
+      }
+      .omni-chip {
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+        user-select: none;
+      }
+      /* Fluid chart: fills parent, scales with viewport */
+      .omni-chart-shell {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        min-width: 0;
+        min-height: 0;
+      }
+      .omni-chart-canvas-wrap {
+        position: relative;
+        width: 100%;
+        min-width: 0;
+        flex: 1 1 auto;
+        min-height: clamp(180px, 36vh, 480px);
+        height: clamp(180px, 36vh, 480px);
+      }
+      /* Dense desktop grids → horizontal scroll on narrow viewports so nothing is clipped */
+      .omni-table-scroll {
+        width: 100%;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior-x: contain;
+      }
+      .omni-table-scroll > .omni-table-grid {
+        min-width: 640px; /* keeps columns readable; parent scrolls */
+      }
+      @media (max-width: 480px) {
+        .omni-hide-xs { display: none !important; }
+        .omni-panel { border-radius: 8px; }
+        /* Prefer slightly larger interactive type on phones */
+        .omni-nav span { font-size: 10px !important; letter-spacing: 0.04em; }
+        .omni-chip { font-size: 11px !important; padding: 6px 10px !important; min-height: 34px; }
+        /* Mobile-first: chart must be tall enough to read — was too short (32vh) */
+        .omni-chart-canvas-wrap {
+          min-height: clamp(240px, 48vh, 520px);
+          height: clamp(240px, 48vh, 520px);
+        }
+        /* Larger row hit targets on phone */
+        .omni-row { min-height: 44px; }
+        /* Signal cards alternative (used when we switch layout) */
+        .omni-signal-card {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          padding: 12px;
+          border-bottom: 1px solid var(--border);
+        }
+      }
+      @media (max-width: 380px) {
+        .omni-nav span { font-size: 9px !important; }
+      }
+      /* Prefer reduced motion when user requests it */
+      @media (prefers-reduced-motion: reduce) {
+        .omni-pulse, .omni-ticker-track, .omni-flash-up, .omni-flash-down {
+          animation: none !important;
+        }
+      }
+      /* When full chart is open, hide ticker + top bar so symbols/TF are not covered */
+      body.omni-chart-expanded .omni-topbar,
+      body.omni-chart-expanded .omni-ticker-wrap,
+      body.omni-chart-expanded .omni-nav {
+        display: none !important;
+      }
+      .omni-chart-shell.is-expanded {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        height: 100%;
+        max-height: 100dvh;
+        z-index: 9999 !important;
+      }
+      .omni-chart-shell.is-expanded .omni-chart-canvas-wrap {
+        flex: 1 1 auto;
+        min-height: 0;
+        height: auto;
+      }
+      .omni-chart-canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+      .omni-home-grid {
+        display: grid;
+        width: 100%;
+        gap: 0.5rem;
+        grid-template-columns: 1fr;
+      }
+      @media (min-width: 900px) {
+        .omni-home-grid {
+          grid-template-columns: minmax(0, 1fr) minmax(200px, 28%);
+          align-items: stretch;
+        }
+        .omni-chart-canvas-wrap {
+          min-height: clamp(260px, 48vh, 560px);
+          height: clamp(260px, 48vh, 560px);
+        }
+      }
+      @media (min-width: 1200px) {
+        .omni-chart-canvas-wrap {
+          min-height: clamp(300px, 52vh, 640px);
+          height: clamp(300px, 52vh, 640px);
+        }
+      }
     `}</style>
   );
 }
 
-/* ── Small shared atoms ─────────────────────────────────────────────── */
 function Pill({ children, tone = 'neutral' }) {
   const map = {
     neutral: { color: 'var(--textDim)', bg: 'rgba(139,155,176,0.12)' },
@@ -312,7 +515,52 @@ function authHeaders() {
   return h;
 }
 
-async function omniFetch(path, timeoutMs = 4000, options = {}) {
+
+/** Browser fetch for Forex Factory — Render's IP is often rate-limited (429). */
+async function fetchCalendarFromBrowser() {
+  const url = 'https://nfs.faireconomy.media/ff_calendar_thisweek.json';
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
+    if (!res.ok) throw new Error(`FF HTTP ${res.status}`);
+    const rows = await res.json();
+    if (!Array.isArray(rows)) return [];
+    const now = Date.now();
+    const COUNTRY = {
+      USD: 'USD', US: 'USD', EUR: 'EUR', EU: 'EUR', GBP: 'GBP', UK: 'GBP',
+      JPY: 'JPY', JP: 'JPY', AUD: 'AUD', CAD: 'CAD', NZD: 'NZD', CHF: 'CHF', CNY: 'CNY',
+    };
+    return rows.map((e) => {
+      const time = e.date ? new Date(e.date).getTime() : NaN;
+      const country = e.country || '';
+      return {
+        name: e.title || 'Event',
+        currency: COUNTRY[country] || COUNTRY[String(country).toUpperCase()] || (country.length === 3 ? country : 'USD'),
+        time,
+        impact: e.impact || null,
+        forecast: e.forecast || null,
+        previous: e.previous || null,
+        source: 'forex-factory-browser',
+        hoursAway: Number.isFinite(time) ? Math.round((time - now) / 3600000 * 10) / 10 : null,
+      };
+    }).filter((e) => e.name && Number.isFinite(e.time) && e.time >= now - 12 * 3600000)
+      .sort((a, b) => {
+        const rank = (i) => {
+          const x = String(i || '').toLowerCase();
+          if (x === 'high') return 0;
+          if (x === 'medium') return 1;
+          return 2;
+        };
+        return rank(a.impact) - rank(b.impact) || a.time - b.time;
+      })
+      .slice(0, 80);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function omniFetch(path, timeoutMs = 12000, options = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -325,6 +573,11 @@ async function omniFetch(path, timeoutMs = 4000, options = {}) {
     if (res.status === 401) {
       const err = new Error('AUTH_REQUIRED');
       err.code = 'AUTH_REQUIRED';
+      throw err;
+    }
+    if (res.status === 409 || res.status === 429) {
+      const err = new Error(`HTTP ${res.status}`);
+      err.soft = true;
       throw err;
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -530,7 +783,7 @@ function LoginGate({ onAuthed }) {
    self-contained simulator so the dashboard is never just a blank
    loading screen. ──────────────────────────────────────────────────── */
 function useLiveFeed() {
-  const [mode, setMode] = useState('checking'); // 'checking' | 'live'
+  const [mode, setMode] = useState('live'); // always show shell; never blank on checking
   const [now, setNow] = useState(Date.now());
   const [prices, setPrices] = useState(() => Object.fromEntries(SYMBOLS.map(s => [s, null])));
   const [quotes, setQuotes] = useState(() => Object.fromEntries(SYMBOLS.map(s => [s, null])));
@@ -554,11 +807,14 @@ function useLiveFeed() {
   // whenever the socket below actually connects — this just tracks that so
   // the UI can show whether it's on tick-by-tick push or 5s-poll fallback.
   const [socketLive, setSocketLive] = useState(false);
+  const [analysisLive, setAnalysisLive] = useState(null); // { symbol, timeframe, ts }
+  const [cryptoVolAlerts, setCryptoVolAlerts] = useState([]);
   const [news, setNews] = useState(null);
   const [sentiment, setSentiment] = useState(null);
   const [journalStats, setJournalStats] = useState(null);
   const [learningProfiles, setLearningProfiles] = useState(null);
   const [relativeStrength, setRelativeStrength] = useState(null);
+  const [hurstBoard, setHurstBoard] = useState(null); // separate Hurst analysis layer
   const priceRef = useRef(prices);
   priceRef.current = prices;
   // Prefer broker (mt5_ea) ticks on the client so lower-rank sources cannot
@@ -577,18 +833,29 @@ function useLiveFeed() {
   useEffect(() => {
     let cancelled = false;
     let timer = null;
+    let attempts = 0;
+    // Never stay on a blank "checking" shell — show the dashboard shell immediately as live
+    // and keep probing. Cold Render can take 30–60s; UI must still paint TopBar/tabs.
+    setMode('live');
     const tryProbe = () => {
-      omniFetch('/health', 4000)
+      attempts += 1;
+      const probe = attempts % 2 === 0
+        ? omniFetch('/health', 6000)
+        : omniFetch('/api/market?symbols=EURUSD', 8000);
+      probe
         .then(() => { if (!cancelled) { setMode('live'); setWakingBackend(false); } })
         .catch(() => {
           if (cancelled) return;
-          setMode(m => (m === 'live' ? m : 'checking'));
           setWakingBackend(true);
-          timer = setTimeout(tryProbe, 4000);
+          // Keep mode live so tabs/prices shell always render
+          setMode('live');
+          timer = setTimeout(tryProbe, attempts < 8 ? 2500 : 5000);
         });
     };
     tryProbe();
-    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+    // Hard ceiling: stop "waking" spinner after 45s even if backend is slow
+    const stopWake = setTimeout(() => { if (!cancelled) setWakingBackend(false); }, 45000);
+    return () => { cancelled = true; if (timer) clearTimeout(timer); clearTimeout(stopWake); };
   }, []);
 
   /* Clock runs regardless of mode. */
@@ -608,6 +875,18 @@ function useLiveFeed() {
   useEffect(() => {
     try {
       const tg = window.Telegram && window.Telegram.WebApp;
+      if (tg) {
+        try { tg.ready(); } catch (_) {}
+        try { tg.expand(); } catch (_) {}
+        try { tg.disableVerticalSwipes?.(); } catch (_) {}
+        try {
+          // Prefer full viewport height inside Telegram Mini App
+          if (typeof tg.requestFullscreen === 'function') tg.requestFullscreen();
+        } catch (_) {}
+        try {
+          document.documentElement.style.setProperty('--tg-viewport-stable-height', `${tg.viewportStableHeight || window.innerHeight}px`);
+        } catch (_) {}
+      }
       if (tg) { tg.ready(); tg.expand(); }
     } catch (_) { /* not inside Telegram, or SDK not loaded yet — fine */ }
     if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
@@ -623,7 +902,14 @@ function useLiveFeed() {
   const [fetchErrors, setFetchErrors] = useState({});
   const recordFetch = (key, promise) => promise
     .then(r => { setFetchErrors(prev => (prev[key] ? { ...prev, [key]: null } : prev)); return r; })
-    .catch(err => { setFetchErrors(prev => ({ ...prev, [key]: err.message })); throw err; });
+    .catch(err => {
+      const msg = String(err?.message || err || '');
+      // Silent for cold-start / rate-limit / abort — friends should not see a wall of API errors
+      const silent = /409|429|Abort|timeout|AUTH_REQUIRED|Failed to fetch|NetworkError|503|502/i.test(msg);
+      if (!silent) setFetchErrors(prev => ({ ...prev, [key]: msg }));
+      else setFetchErrors(prev => (prev[key] ? { ...prev, [key]: null } : prev));
+      throw err;
+    });
 
   useEffect(() => {
     if (mode !== 'live') return;
@@ -696,10 +982,23 @@ function useLiveFeed() {
     };
     const pullSlow = async () => {
       try { const r = await recordFetch('outlook', omniFetch('/api/outlook')); if (!cancelled && r.ok) setOutlook(r.outlook); } catch (_) {}
-      try { const r = await recordFetch('calendar', omniFetch('/api/calendar')); if (!cancelled && r.ok && Array.isArray(r.events)) setCalendar(r.events); } catch (_) {}
+      try {
+        let events = [];
+        try {
+          const r = await recordFetch('calendar', omniFetch('/api/calendar'));
+          if (r && Array.isArray(r.events) && r.events.length) events = r.events;
+        } catch (_) {}
+        // If API empty (Render often 429 on Forex Factory), load from the browser IP
+        if (!events.length) {
+          try {
+            events = await fetchCalendarFromBrowser();
+          } catch (_) {}
+        }
+        if (!cancelled) setCalendar(events);
+      } catch (_) {}
       try { const r = await recordFetch('levels', omniFetch('/api/levels')); if (!cancelled && r.ok && r.levels) setLevels(r.levels); } catch (_) {}
       try { const r = await recordFetch('heatmap', omniFetch('/api/heatmap')); if (!cancelled && r.ok) setHeatmapTiles(r.tiles); } catch (_) {}
-      try { const r = await recordFetch('audit-trail', omniFetch('/api/audit-trail?limit=30')); if (!cancelled && r.ok) setAuditLog(r.entries); } catch (_) {}
+      try { const r = await recordFetch('audit-trail', omniFetch('/api/audit-trail?limit=50')); if (!cancelled && r.ok) setAuditLog([...(r.nearMisses||[]), ...(r.entries||[])].slice(0, 50)); } catch (_) {}
       try { const r = await recordFetch('health', omniFetch('/api/health')); if (!cancelled && r.ok) setFeedHealth(r.feeds); } catch (_) {}
       try { const r = await omniFetch('/health'); if (!cancelled && r.ok) setUptimeSec(r.uptime); } catch (_) {}
       // FIX (Known gap #2): "Equity curve stays illustrative even in live
@@ -719,6 +1018,7 @@ function useLiveFeed() {
       try { const r = await recordFetch('sentiment', omniFetch('/api/sentiment')); if (!cancelled && r.ok) setSentiment(r); } catch (_) {}
       try { const r = await recordFetch('journal', omniFetch('/api/journal')); if (!cancelled && r.ok) setJournalStats(r.stats); } catch (_) {}
       try { const r = await recordFetch('learning', omniFetch('/api/learning?limit=20')); if (!cancelled && r.ok) setLearningProfiles(r.profiles); } catch (_) {}
+      try { const r = await recordFetch('hurst', omniFetch('/api/hurst')); if (!cancelled && r.ok) setHurstBoard(Array.isArray(r.board) ? r.board : []); } catch (_) {}
       try { const r = await recordFetch('watchlist', omniFetch('/api/watchlist')); if (!cancelled && r.ok) setRelativeStrength(r.relativeStrength); } catch (_) {}
     };
 
@@ -764,8 +1064,8 @@ function useLiveFeed() {
         const src = payload.source || 'unknown';
         const rank = SRC_RANK[src] ?? 0;
         const prevSrc = priceSourceRef.current[sym];
-        if (prevSrc && prevSrc.rank > rank && (Date.now() - prevSrc.ts) < 60000) {
-          return; // keep broker price; ignore lower-authority feed
+        if (prevSrc && prevSrc.rank > rank && (Date.now() - prevSrc.ts) < 12000) {
+          return; // MT5 only blocks ~12s after last broker tick
         }
         priceSourceRef.current[sym] = { source: src, rank, ts: Date.now() };
         const prevPrice = priceRef.current[sym];
@@ -802,7 +1102,16 @@ function useLiveFeed() {
       socket.on('signal', payload => {
         if (cancelled || !payload?.id) return;
         const norm = normalizeSignal(payload);
-        setSignals(prev => prev.some(s => s.id === payload.id) ? prev : [norm, ...prev].slice(0, 200));
+        setSignals(prev => {
+          if (prev.some(s => s.id === payload.id)) return prev;
+          // Audio feedback — only for newly seen high-quality signals
+          try {
+            if (loadSoundPref() && signalScore(norm) >= 70) {
+              playSignalChime(normalizeDirection(norm.action));
+            }
+          } catch (_) {}
+          return [norm, ...prev].slice(0, 200);
+        });
         // Browser push when a real signal arrives
         try {
           if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
@@ -821,6 +1130,57 @@ function useLiveFeed() {
       socket.on('balance', payload => {
         if (!cancelled && payload?.balance != null) setAccountBalance(Number(payload.balance));
       });
+
+      // Real-time analysis pulse (from scheduleLiveAnalysis / runAnalysisCycle)
+      socket.on('telemetry', payload => {
+        if (cancelled || !payload) return;
+        if (payload.type === 'analysis_live' || payload.type === 'signal_approved') {
+          setAnalysisLive({
+            symbol: payload.symbol,
+            timeframe: payload.timeframe,
+            type: payload.type,
+            ts: payload.timestamp || Date.now(),
+          });
+        }
+        if (payload.type === 'crypto_volatility_alert' || payload.type === 'crypto_volatility' || payload.type === 'gold_volatility') {
+          setCryptoVolAlerts(prev => [payload, ...prev].slice(0, 20));
+        }
+      });
+      socket.on('crypto_volatility_alert', payload => {
+        if (cancelled || !payload) return;
+        setCryptoVolAlerts(prev => [payload, ...prev].slice(0, 20));
+        try {
+          if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+            new Notification(`OMNICEE ${payload.symbol} ${payload.direction}`, {
+              body: payload.message || `${payload.absPct}% in ${payload.window}`,
+            });
+          }
+        } catch (_) {}
+      });
+      socket.on('hurst', payload => {
+        if (cancelled || !payload) return;
+        if (Array.isArray(payload.board)) setHurstBoard(payload.board);
+      });
+      socket.on('regime', payload => {
+        if (cancelled || !payload?.symbol) return;
+        // light touch: fold into outlook-like local note via analysisLive
+        setAnalysisLive(prev => ({
+          ...(prev || {}),
+          symbol: payload.symbol,
+          timeframe: payload.timeframe,
+          regime: payload.regime || payload.state,
+          ts: Date.now(),
+          type: 'regime',
+        }));
+      });
+      socket.on('feed_health', payload => {
+        if (!cancelled && payload) setFeedHealth(payload.feeds || payload);
+      });
+      socket.on('risk', payload => {
+        if (!cancelled && payload) {
+          /* risk push available for Desk/System; keep stats fresh */
+        }
+      });
     }).catch(() => {
       /* socket.io-client not resolvable in this environment — REST polling
          above already covers prices/stats, so the dashboard runs slightly
@@ -836,8 +1196,8 @@ function useLiveFeed() {
 
   return {
     now, prices, quotes, changes, flash, signals, calendar, levels, auditLog, equityCurve, equityCurveLive,
-    stats, outlook, heatmapTiles, feedHealth, uptimeSec, accountBalance, socketLive,
-    news, sentiment, journalStats, learningProfiles, relativeStrength, fetchErrors,
+    stats, outlook, heatmapTiles, feedHealth, uptimeSec, accountBalance, socketLive, analysisLive, cryptoVolAlerts,
+    news, sentiment, journalStats, learningProfiles, relativeStrength, hurstBoard, fetchErrors,
     mode, connected: mode === 'live', wakingBackend,
   };
 }
@@ -846,14 +1206,13 @@ function useLiveFeed() {
 const TABS = [
   { key: 'DASH', label: 'Home', fkey: 'F1', icon: LayoutDashboard },
   { key: 'SIGNALS', label: 'Signals', fkey: 'F2', icon: Radio },
-  { key: 'INTEL', label: 'Intel', fkey: 'F3', icon: Globe2 },
+  { key: 'ANALYSIS', label: 'Analysis', fkey: 'F3', icon: Layers },
   { key: 'NEWS', label: 'News', fkey: 'F4', icon: Newspaper },
-  { key: 'DESK', label: 'Desk', fkey: 'F5', icon: ShieldAlert },
-  { key: 'VALID', label: 'Valid', fkey: 'F6', icon: FlaskConical },
-  { key: 'MONITOR', label: 'System', fkey: 'F7', icon: Activity },
+  { key: 'VALID', label: 'Valid', fkey: 'F5', icon: FlaskConical },
+  { key: 'MONITOR', label: 'System', fkey: 'F6', icon: Activity },
 ];
 
-function TopBar({ now, mode, socketLive, wakingBackend, onCommand }) {
+function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand, soundOn, onToggleSound }) {
   const [cmd, setCmd] = useState('');
   const time = new Date(now).toISOString().slice(11, 19);
   const date = new Date(now).toISOString().slice(0, 10);
@@ -864,16 +1223,13 @@ function TopBar({ now, mode, socketLive, wakingBackend, onCommand }) {
     live: { label: 'Live', color: 'var(--emerald)', pulse: true },
   }[mode] || { label: 'Offline', color: 'var(--coral)', pulse: false };
   return (
-    <div className="flex items-center gap-4 px-4 py-2.5 border-b" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
-      <div className="flex items-center gap-2">
-        <div className="w-6 h-6 rounded flex items-center justify-center font-display text-[11px] font-bold"
+    <div className="omni-topbar flex items-center gap-2 sm:gap-4 px-2 sm:px-4 py-2.5 border-b shrink-0" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
+      <div className="flex items-center gap-2 shrink-0">
+        <div className="w-7 h-7 rounded flex items-center justify-center font-display text-[12px] font-bold"
           style={{ background: 'var(--emerald)', color: '#05070a' }}>Ω</div>
-        <span className="font-display text-sm tracking-[0.15em]" style={{ color: 'var(--text)' }}>OMNICEE</span>
+        <span className="font-display text-sm tracking-[0.12em] hidden xs:inline sm:inline" style={{ color: 'var(--text)' }}>OMNICEE</span>
       </div>
-      <span className="font-mono text-[10px] uppercase tracking-widest hidden sm:inline" style={{ color: 'var(--textFaint)' }}>
-        Institutional Signal Terminal
-      </span>
-      <div className="flex-1 flex items-center gap-2 max-w-md">
+      <div className="flex-1 flex items-center gap-2 min-w-0 max-w-full sm:max-w-md omni-hide-xs">
         <Terminal size={13} style={{ color: 'var(--gold)' }} />
         <input
           value={cmd}
@@ -884,22 +1240,39 @@ function TopBar({ now, mode, socketLive, wakingBackend, onCommand }) {
           style={{ color: 'var(--gold)', borderBottom: '1px solid var(--border)' }}
         />
       </div>
-      <div className="flex items-center gap-3 ml-auto">
-        <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase" style={{ color: status.color }}>
+      <div className="flex items-center gap-2 sm:gap-3 ml-auto shrink-0">
+        <button
+          type="button"
+          onClick={() => { onToggleSound?.(); if (!soundOn) { /* unlocking audio on user gesture */ getAudioCtx()?.resume?.(); playSignalChime('neutral'); } }}
+          className="omni-chip flex items-center justify-center rounded p-1.5 min-w-[36px] min-h-[36px]"
+          title={soundOn ? 'Mute signal sounds' : 'Unmute signal sounds'}
+          aria-label={soundOn ? 'Mute' : 'Unmute'}
+          style={{ color: soundOn ? 'var(--emerald)' : 'var(--textFaint)', background: 'var(--panel2)' }}
+        >
+          {soundOn ? <Volume2 size={16} /> : <VolumeX size={16} />}
+        </button>
+        <span className="flex items-center gap-1.5 font-mono text-[10px] sm:text-[11px] uppercase" style={{ color: status.color }}>
           <Circle size={7} fill="currentColor" className={status.pulse ? 'omni-pulse' : ''} />
           {status.label}
         </span>
         {mode === 'live' && (
-          <span
-            className="font-mono text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded hidden sm:inline"
-            style={{ color: socketLive ? 'var(--emerald)' : 'var(--textFaint)', border: `1px solid ${socketLive ? 'var(--emerald)' : 'var(--border)'}` }}
-            title={socketLive ? 'Tick-by-tick prices over Socket.IO' : 'Falling back to 5s REST polling'}
-          >
-            {socketLive ? 'push' : 'poll'}
-          </span>
+          <>
+            <span
+              className="font-mono text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded hidden sm:inline"
+              style={{ color: socketLive ? 'var(--emerald)' : 'var(--textFaint)', border: `1px solid ${socketLive ? 'var(--emerald)' : 'var(--border)'}` }}
+              title={socketLive ? 'Tick-by-tick prices over Socket.IO' : 'Falling back to 5s REST polling'}
+            >
+              {socketLive ? 'push' : 'poll'}
+            </span>
+            <span className="font-mono text-[9px] px-1.5 py-0.5 rounded uppercase tracking-wider hidden xs:inline"
+              style={{ color: analysisLive ? 'var(--gold)' : 'var(--textFaint)', border: `1px solid ${analysisLive ? 'var(--gold)' : 'var(--border)'}` }}
+              title={analysisLive ? `Last scan ${analysisLive.symbol || ''} ${analysisLive.timeframe || ''}` : 'Waiting for live analysis'}>
+              {analysisLive ? `scan ${analysisLive.symbol || ''}`.trim() : 'scan —'}
+            </span>
+          </>
         )}
         <span className="font-mono text-[11px] hidden md:inline" style={{ color: 'var(--textDim)' }}>{date}</span>
-        <span className="font-mono text-[12px] font-semibold" style={{ color: 'var(--text)' }}>{time} UTC</span>
+        <span className="font-mono text-[11px] sm:text-[12px] font-semibold" style={{ color: 'var(--text)' }}>{time}</span>
       </div>
     </div>
   );
@@ -913,10 +1286,10 @@ function TickerTape({ prices, changes, flash, quotes }) {
       <div className="omni-ticker-track flex items-center gap-6 px-3 py-1.5 font-mono text-[11px] whitespace-nowrap">
         {syms.map((sym, i) => {
           const q = quotes?.[sym];
-          const mid = q?.price ?? prices[sym];
+          const mid = q?.price ?? prices?.[sym];
           const bid = q?.bid;
           const ask = q?.ask;
-          const ch = changes[sym];
+          const ch = changes?.[sym];
           const up = ch == null ? null : ch >= 0;
           const fl = flash[sym];
           return (
@@ -952,20 +1325,21 @@ function TickerTape({ prices, changes, flash, quotes }) {
 
 function NavBar({ active, onSelect }) {
   return (
-    <div className="flex border-t shrink-0 overflow-x-auto omni-scroll" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
+    <div className="omni-nav">
       {TABS.map(t => (
         <button
           key={t.key}
+          type="button"
           onClick={() => onSelect(t.key)}
-          className="flex-1 min-w-[52px] flex flex-col items-center gap-0.5 py-2 transition-colors"
+          className="flex flex-col items-center justify-center gap-0.5 transition-colors"
           style={{
             color: active === t.key ? 'var(--emerald)' : 'var(--textDim)',
             background: active === t.key ? 'var(--panel2)' : 'transparent',
             borderTop: active === t.key ? '2px solid var(--emerald)' : '2px solid transparent',
           }}
         >
-          <t.icon size={16} />
-          <span className="font-mono text-[8px] uppercase tracking-wider">{t.label}</span>
+          <t.icon size={20} strokeWidth={active === t.key ? 2.25 : 1.75} />
+          <span className="font-mono text-[9px] uppercase tracking-wider leading-none">{t.label}</span>
         </button>
       ))}
     </div>
@@ -1036,6 +1410,8 @@ const INDICATOR_DEFS = [
   { key: 'ema20', label: 'EMA 20', color: CHART_COLORS.ema20 },
   { key: 'ema50', label: 'EMA 50', color: CHART_COLORS.ema50 },
   { key: 'bb', label: 'Bollinger 20/2', color: CHART_COLORS.band },
+  { key: 'vp', label: 'Volume Profile', color: '#22d3ee' },
+  { key: 'vol', label: 'Volume bars', color: '#1fe3a8' },
 ];
 
 // Standard EMA — first value is a plain SMA seed, everything after that
@@ -1069,20 +1445,87 @@ function computeBollinger(closes, period = 20, mult = 2) {
   return { upper, lower };
 }
 
-function LiveChart({ symbol, quote, signals, levels }) {
+/**
+ * Fixed-range Volume Profile from OHLCV candles.
+ * Distributes each bar's volume across price buckets spanned by high–low
+ * (uniform within the range — standard tick-proxy when true T&S is absent).
+ * Returns bins + POC + Value Area (≈70% of total volume around POC).
+ */
+function computeVolumeProfile(candles, rows = 28) {
+  if (!candles?.length || rows < 4) return null;
+  let lo = Infinity, hi = -Infinity;
+  let totalVol = 0;
+  for (const c of candles) {
+    if (!Number.isFinite(c.low) || !Number.isFinite(c.high)) continue;
+    if (c.low < lo) lo = c.low;
+    if (c.high > hi) hi = c.high;
+    totalVol += Number(c.volume) || 0;
+  }
+  if (!(hi > lo) || totalVol <= 0) {
+    // Fallback: synthetic volume from range so VP still draws when feed omits volume
+    totalVol = 0;
+    for (const c of candles) {
+      const synthetic = Math.max(Math.abs((c.high ?? 0) - (c.low ?? 0)), 1e-12);
+      totalVol += synthetic;
+    }
+    if (!(hi > lo) || totalVol <= 0) return null;
+  }
+  const step = (hi - lo) / rows;
+  if (!(step > 0)) return null;
+  const bins = Array.from({ length: rows }, (_, i) => ({
+    priceLow: lo + i * step,
+    priceHigh: lo + (i + 1) * step,
+    priceMid: lo + (i + 0.5) * step,
+    volume: 0,
+  }));
+  for (const c of candles) {
+    const cLo = Number(c.low), cHi = Number(c.high);
+    if (!Number.isFinite(cLo) || !Number.isFinite(cHi) || cHi < cLo) continue;
+    let vol = Number(c.volume);
+    if (!(vol > 0)) vol = Math.max(Math.abs(cHi - cLo), 1e-12);
+    const i0 = Math.max(0, Math.min(rows - 1, Math.floor((cLo - lo) / step)));
+    const i1 = Math.max(0, Math.min(rows - 1, Math.floor((cHi - lo) / step)));
+    const span = i1 - i0 + 1;
+    const share = vol / span;
+    for (let i = i0; i <= i1; i++) bins[i].volume += share;
+  }
+  let pocIdx = 0;
+  for (let i = 1; i < rows; i++) if (bins[i].volume > bins[pocIdx].volume) pocIdx = i;
+  // Value Area: expand from POC until ~70% of volume is covered
+  let vaLow = pocIdx, vaHigh = pocIdx, covered = bins[pocIdx].volume;
+  const target = totalVol * 0.7;
+  while (covered < target && (vaLow > 0 || vaHigh < rows - 1)) {
+    const up = vaHigh < rows - 1 ? bins[vaHigh + 1].volume : -1;
+    const dn = vaLow > 0 ? bins[vaLow - 1].volume : -1;
+    if (up >= dn) { vaHigh += 1; covered += bins[vaHigh].volume; }
+    else { vaLow -= 1; covered += bins[vaLow].volume; }
+  }
+  return {
+    bins,
+    maxVol: bins[pocIdx].volume,
+    poc: bins[pocIdx].priceMid,
+    vah: bins[vaHigh].priceHigh,
+    val: bins[vaLow].priceLow,
+    totalVol,
+  };
+}
+
+function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
   const [timeframe, setTimeframe] = useState('H1');
   const [status, setStatus] = useState('loading'); // loading | ok | empty | error
   const [ohlcReadout, setOhlcReadout] = useState(null);
-  const [indicators, setIndicators] = useState({ ema20: false, ema50: false, bb: false });
+  const [indicators, setIndicators] = useState({ ema20: false, ema50: false, bb: false, vp: false, vol: true });
   const [showIndicatorMenu, setShowIndicatorMenu] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
   const containerRef = useRef(null);
+  const vpCanvasRef = useRef(null);
   const chartRef = useRef(null);
   const candleSeriesRef = useRef(null);
   const volumeSeriesRef = useRef(null);
   const markersRef = useRef(null);
   const priceLinesRef = useRef([]);
+  const vpLinesRef = useRef([]);
   const srLinesRef = useRef([]);
   const ema20SeriesRef = useRef(null);
   const ema50SeriesRef = useRef(null);
@@ -1119,7 +1562,9 @@ function LiveChart({ symbol, quote, signals, levels }) {
   // a demo and then jitters/flickers the moment it's live 24/7.
   useEffect(() => {
     if (!containerRef.current) return;
-    const chart = createChart(containerRef.current, {
+    let chart;
+    try {
+    chart = createChart(containerRef.current, {
       autoSize: true,
       layout: { background: { color: 'transparent' }, textColor: CHART_COLORS.text, fontFamily: 'JetBrains Mono, monospace', fontSize: 10 },
       grid: { vertLines: { color: CHART_COLORS.grid }, horzLines: { color: CHART_COLORS.grid } },
@@ -1148,7 +1593,8 @@ function LiveChart({ symbol, quote, signals, levels }) {
     });
     volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
 
-    const markers = createSeriesMarkers(candleSeries, []);
+    let markers = null;
+    try { markers = createSeriesMarkers(candleSeries, []); } catch (e) { console.warn('markers', e); }
 
     // Overlay indicators — created hidden, toggled visible from the menu.
     // Kept as separate series (rather than baked into candle data) so
@@ -1179,10 +1625,18 @@ function LiveChart({ symbol, quote, signals, levels }) {
         chart.timeScale().fitContent();
       } catch (_) {}
     });
+    } catch (err) {
+      console.error('[OMNICEE] chart mount failed', err);
+      return;
+    }
 
     return () => {
-      chart.unsubscribeCrosshairMove(onCrosshairMove);
-      chart.remove();
+      try {
+        if (chart) {
+          try { chart.unsubscribeCrosshairMove(onCrosshairMove); } catch (_) {}
+          try { chart.remove(); } catch (_) {}
+        }
+      } catch (_) {}
       chartRef.current = null;
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
@@ -1228,7 +1682,10 @@ function LiveChart({ symbol, quote, signals, levels }) {
           value: c.volume || 0,
           color: c.close >= c.open ? 'rgba(31,227,168,0.35)' : 'rgba(255,84,112,0.35)',
         })));
-        candlesRef.current = candles.map(({ time, open, high, low, close }) => ({ time, open, high, low, close }));
+        // Keep volume on the ref so Volume Profile can distribute by price
+        candlesRef.current = candles.map(({ time, open, high, low, close, volume }) => ({
+          time, open, high, low, close, volume: volume || 0,
+        }));
         applyIndicators(candlesRef.current);
         const last = candles[candles.length - 1];
         lastBarRef.current = { time: last.time, open: last.open, high: last.high, low: last.low, close: last.close };
@@ -1249,15 +1706,20 @@ function LiveChart({ symbol, quote, signals, levels }) {
   // the header bid/ask readout already uses. Bucketing mirrors index.js's
   // TIMEFRAME_MS math exactly so this bar and the server's eventual
   // closed bar for the same window never disagree on boundaries.
+  // FIX: was using quote.price (mid) here while historical bars now come
+  // bid-based from /api/candles — would've put a visibly different-
+  // looking bar right at the point where the eye compares it to the
+  // ticker most. Use bid (matching the ticker/header's own coral figure)
+  // whenever it exists, same fallback order the ticker itself uses.
   useEffect(() => {
-    const price = Number(quote?.price);
-    if (!candleSeriesRef.current || !Number.isFinite(price)) return;
+    const tickPrice = Number(quote?.bid ?? quote?.price);
+    if (!candleSeriesRef.current || !Number.isFinite(tickPrice)) return;
     const durationMs = TIMEFRAME_MS_CLIENT[timeframe];
     const bucketTime = Math.floor((quote.ts || Date.now()) / durationMs) * (durationMs / 1000);
     const prev = lastBarRef.current;
     const bar = (!prev || prev.time !== bucketTime)
-      ? { time: bucketTime, open: prev ? prev.close : price, high: price, low: price, close: price }
-      : { ...prev, high: Math.max(prev.high, price), low: Math.min(prev.low, price), close: price };
+      ? { time: bucketTime, open: prev ? prev.close : tickPrice, high: tickPrice, low: tickPrice, close: tickPrice }
+      : { ...prev, high: Math.max(prev.high, tickPrice), low: Math.min(prev.low, tickPrice), close: tickPrice };
     lastBarRef.current = bar;
     candleSeriesRef.current.update(bar);
     volumeSeriesRef.current?.update({ time: bar.time, value: lastVolRef.current, color: bar.close >= bar.open ? 'rgba(31,227,168,0.35)' : 'rgba(255,84,112,0.35)' });
@@ -1265,7 +1727,7 @@ function LiveChart({ symbol, quote, signals, levels }) {
     if (cs.length && cs[cs.length - 1].time === bar.time) cs[cs.length - 1] = bar;
     else cs.push(bar);
     applyIndicators(cs);
-  }, [quote?.price, quote?.ts, timeframe]);
+  }, [quote?.bid, quote?.price, quote?.ts, timeframe]);
 
   // Signal overlay: arrows for every signal on this symbol, entry/SL/TP1
   // price lines for only the most recent one (all of them would just be
@@ -1316,8 +1778,132 @@ function LiveChart({ symbol, quote, signals, levels }) {
     ema50SeriesRef.current?.applyOptions({ visible: indicators.ema50 });
     bbUpperSeriesRef.current?.applyOptions({ visible: indicators.bb });
     bbLowerSeriesRef.current?.applyOptions({ visible: indicators.bb });
+    volumeSeriesRef.current?.applyOptions({ visible: indicators.vol !== false });
     applyIndicators(candlesRef.current);
   }, [indicators, applyIndicators]);
+
+  // Volume Profile overlay — canvas bars on the left + POC / VAH / VAL price lines
+  useEffect(() => {
+    const canvas = vpCanvasRef.current;
+    const chart = chartRef.current;
+    const series = candleSeriesRef.current;
+    if (!canvas || !chart || !series) return undefined;
+
+    // Clear any previous VP price lines (separate from signal entry/SL lines)
+    const clearVpLines = () => {
+      (vpLinesRef.current || []).forEach((l) => {
+        try { series.removePriceLine(l); } catch (_) {}
+      });
+      vpLinesRef.current = [];
+    };
+
+    const draw = () => {
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      const wrap = canvas.parentElement;
+      const w = wrap?.clientWidth || 0;
+      const h = wrap?.clientHeight || 0;
+      if (w < 8 || h < 8) return;
+      const dpr = window.devicePixelRatio || 1;
+      if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
+        canvas.width = Math.floor(w * dpr);
+        canvas.height = Math.floor(h * dpr);
+        canvas.style.width = `${w}px`;
+        canvas.style.height = `${h}px`;
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+
+      if (!indicators.vp) {
+        clearVpLines();
+        return;
+      }
+
+      const profile = computeVolumeProfile(candlesRef.current, 28);
+      if (!profile) {
+        clearVpLines();
+        return;
+      }
+
+      const maxBarW = Math.min(120, Math.floor(w * 0.28));
+      const { bins, maxVol, poc, vah, val } = profile;
+
+      for (const bin of bins) {
+        const y1 = series.priceToCoordinate(bin.priceHigh);
+        const y2 = series.priceToCoordinate(bin.priceLow);
+        if (y1 == null || y2 == null) continue;
+        const top = Math.min(y1, y2);
+        const bot = Math.max(y1, y2);
+        const bh = Math.max(1, bot - top - 0.5);
+        const bw = maxVol > 0 ? (bin.volume / maxVol) * maxBarW : 0;
+        if (bw < 0.5) continue;
+        const inVA = bin.priceMid >= val && bin.priceMid <= vah;
+        const isPoc = Math.abs(bin.priceMid - poc) < (bins[0].priceHigh - bins[0].priceLow) * 0.6;
+        ctx.fillStyle = isPoc
+          ? 'rgba(240, 180, 41, 0.55)'
+          : inVA
+            ? 'rgba(34, 211, 238, 0.28)'
+            : 'rgba(94, 168, 255, 0.14)';
+        ctx.fillRect(0, top, bw, bh);
+      }
+
+      // POC / VAH / VAL as dashed price lines (recreate when profile changes)
+      clearVpLines();
+      try {
+        vpLinesRef.current = [
+          series.createPriceLine({
+            price: poc,
+            color: '#f0b429',
+            lineWidth: 1,
+            lineStyle: LineStyle.Solid,
+            axisLabelVisible: true,
+            title: 'POC',
+          }),
+          series.createPriceLine({
+            price: vah,
+            color: '#22d3ee',
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: 'VAH',
+          }),
+          series.createPriceLine({
+            price: val,
+            color: '#22d3ee',
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: 'VAL',
+          }),
+        ];
+      } catch (_) { /* series may be mid-swap */ }
+    };
+
+    draw();
+    // Redraw when user pans/zooms so bars stay locked to price levels
+    const onRange = () => { requestAnimationFrame(draw); };
+    try { chart.timeScale().subscribeVisibleLogicalRangeChange(onRange); } catch (_) {}
+    try { chart.subscribeCrosshairMove(onRange); } catch (_) {}
+    window.addEventListener('resize', onRange);
+    const ro = typeof ResizeObserver !== 'undefined' && canvas.parentElement
+      ? new ResizeObserver(() => requestAnimationFrame(draw))
+      : null;
+    if (ro && canvas.parentElement) ro.observe(canvas.parentElement);
+
+    return () => {
+      try { chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange); } catch (_) {}
+      window.removeEventListener('resize', onRange);
+      if (ro) ro.disconnect();
+      clearVpLines();
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        const w = canvas.parentElement?.clientWidth || 0;
+        const h = canvas.parentElement?.clientHeight || 0;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    };
+  }, [indicators.vp, symbol, timeframe, status, expanded]);
 
   // Close the indicator picker on an outside click.
   useEffect(() => {
@@ -1327,86 +1913,245 @@ function LiveChart({ symbol, quote, signals, levels }) {
     return () => document.removeEventListener('mousedown', onClick);
   }, [showIndicatorMenu]);
 
-  // Esc exits full-screen mode.
+  // Esc exits full-screen; hide ticker/topbar via body class; lock scroll.
   useEffect(() => {
-    if (!expanded) return;
+    if (expanded) {
+      document.body.classList.add('omni-chart-expanded');
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.classList.remove('omni-chart-expanded');
+      document.body.style.overflow = '';
+    }
     const onKey = (e) => { if (e.key === 'Escape') setExpanded(false); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    if (expanded) window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.classList.remove('omni-chart-expanded');
+      document.body.style.overflow = '';
+    };
   }, [expanded]);
 
-  // The container itself never unmounts on expand/collapse (just its
-  // wrapping classes change), so autoSize's own ResizeObserver should
-  // catch it — but force a resize + refit too, same defensive pattern
-  // used at mount, in case the observer lags a frame behind the CSS.
+  // Keep lightweight-charts sized to the fluid container on every layout change
   useEffect(() => {
-    requestAnimationFrame(() => {
+    const el = containerRef.current;
+    if (!el) return undefined;
+    const fit = () => {
+      try {
+        if (!chartRef.current) return;
+        const w = el.clientWidth || 1;
+        const h = el.clientHeight || 1;
+        if (w < 2 || h < 2) return;
+        chartRef.current.applyOptions({ width: w, height: h });
+      } catch (_) {}
+    };
+    fit();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => {
+      requestAnimationFrame(fit);
+    }) : null;
+    if (ro) ro.observe(el);
+    window.addEventListener('resize', fit);
+    window.addEventListener('orientationchange', fit);
+    const t = setTimeout(fit, 50);
+    const t2 = setTimeout(fit, 300);
+    return () => {
+      if (ro) ro.disconnect();
+      window.removeEventListener('resize', fit);
+      window.removeEventListener('orientationchange', fit);
+      clearTimeout(t);
+      clearTimeout(t2);
+    };
+  }, [expanded, symbol, timeframe]);
+
+  // Force chart to re-measure after expand/collapse. On mobile (Telegram /
+  // PWA) the fixed full-screen shell often mounts at 0×0 for a frame; without
+  // staggered refits the canvas stays blank until a manual orientation change.
+  useEffect(() => {
+    const fit = () => {
       try {
         if (!chartRef.current || !containerRef.current) return;
-        chartRef.current.applyOptions({ width: containerRef.current.clientWidth, height: containerRef.current.clientHeight });
+        const w = containerRef.current.clientWidth;
+        const h = containerRef.current.clientHeight;
+        if (w < 8 || h < 8) return;
+        chartRef.current.applyOptions({ width: w, height: h });
         chartRef.current.timeScale().fitContent();
       } catch (_) {}
-    });
-  }, [expanded]);
+    };
+    fit();
+    const t1 = setTimeout(fit, 50);
+    const t2 = setTimeout(fit, 200);
+    const t3 = setTimeout(fit, 500);
+    window.addEventListener('resize', fit);
+    try { window.visualViewport?.addEventListener('resize', fit); } catch (_) {}
+    return () => {
+      clearTimeout(t1); clearTimeout(t2); clearTimeout(t3);
+      window.removeEventListener('resize', fit);
+      try { window.visualViewport?.removeEventListener('resize', fit); } catch (_) {}
+    };
+  }, [expanded, symbol, timeframe]);
 
   return (
-    <div className={expanded ? 'fixed inset-0 z-50 flex flex-col p-3' : ''} style={expanded ? { background: 'var(--void)' } : undefined}>
-      <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
-        <div className="flex gap-1 items-center">
+    <div
+      className={`omni-chart-shell ${expanded ? 'is-expanded fixed inset-0 z-[9999] p-2 sm:p-3 flex flex-col' : 'w-full'}`}
+      style={expanded ? {
+        background: 'var(--void)',
+        // Extra top pad so symbol/TF row clears Telegram header + old ticker space
+        paddingTop: 'max(12px, calc(env(safe-area-inset-top, 0px) + 8px))',
+        paddingBottom: 'max(12px, env(safe-area-inset-bottom, 0px))',
+      } : undefined}
+    >
+      {/* Symbols + timeframes always visible (preview AND full). Indicators + VP in both. */}
+      <div
+        className={`shrink-0 space-y-1.5 ${expanded ? 'pb-2 mb-1 border-b' : 'mb-1.5'}`}
+        style={expanded ? { borderColor: 'var(--border)' } : undefined}
+      >
+        {/* Symbol chips — horizontal scroll on phones */}
+        <div className="flex gap-1.5 items-center overflow-x-auto omni-scroll" style={{ WebkitOverflowScrolling: 'touch' }}>
+          {typeof onSymbolChange === 'function' && SYMBOLS.map(sym => (
+            <button
+              key={sym}
+              type="button"
+              onClick={() => onSymbolChange(sym)}
+              className={`omni-chip font-mono rounded transition-colors shrink-0 ${expanded ? 'text-[13px] px-3 py-2.5 min-h-[44px]' : 'text-[11px] px-2.5 py-1.5 min-h-[34px]'}`}
+              style={{
+                background: symbol === sym ? 'var(--emerald)' : 'var(--panel2)',
+                color: symbol === sym ? '#05070a' : 'var(--textDim)',
+              }}
+            >
+              {symLabel(sym)}
+            </button>
+          ))}
+        </div>
+        {/* Timeframes + VP + Indicators + Full/Close */}
+        <div className="flex items-center gap-1.5 flex-wrap">
           {TIMEFRAMES.map(tf => (
-            <button key={tf} onClick={() => setTimeframe(tf)}
-              className="font-mono text-[10px] px-2 py-0.5 rounded"
-              style={{ background: timeframe === tf ? 'var(--panel2)' : 'transparent', color: timeframe === tf ? 'var(--emerald)' : 'var(--textFaint)', border: '1px solid var(--border)' }}>
+            <button
+              key={tf}
+              type="button"
+              onClick={() => setTimeframe(tf)}
+              className={`omni-chip font-mono rounded ${expanded ? 'text-[13px] px-3 py-2.5 min-h-[44px]' : 'text-[11px] px-2.5 py-1.5 min-h-[34px]'}`}
+              style={{
+                background: timeframe === tf ? 'var(--panel2)' : 'transparent',
+                color: timeframe === tf ? 'var(--emerald)' : 'var(--textFaint)',
+                border: '1px solid var(--border)',
+              }}
+            >
               {tf}
             </button>
           ))}
+          <button
+            type="button"
+            onClick={() => setIndicators(s => ({ ...s, vp: !s.vp }))}
+            className={`omni-chip font-mono rounded ${expanded ? 'text-[13px] px-3 py-2.5 min-h-[44px]' : 'text-[11px] px-2.5 py-1.5 min-h-[34px]'}`}
+            style={{
+              background: indicators.vp ? 'rgba(34,211,238,0.18)' : 'transparent',
+              color: indicators.vp ? '#22d3ee' : 'var(--textFaint)',
+              border: `1px solid ${indicators.vp ? '#22d3ee' : 'var(--border)'}`,
+            }}
+            title="Volume Profile"
+          >
+            VP
+          </button>
           <div className="relative" ref={indicatorMenuRef}>
-            <button onClick={() => setShowIndicatorMenu(v => !v)}
-              className="font-mono text-[10px] px-2 py-0.5 rounded flex items-center gap-1"
-              style={{ background: showIndicatorMenu ? 'var(--panel2)' : 'transparent', color: 'var(--textFaint)', border: '1px solid var(--border)' }}>
-              <SlidersHorizontal size={11} /> Indicators
+            <button
+              type="button"
+              onClick={() => setShowIndicatorMenu(v => !v)}
+              className={`omni-chip font-mono rounded flex items-center gap-1 ${expanded ? 'text-[13px] px-3 py-2.5 min-h-[44px]' : 'text-[11px] px-2.5 py-1.5 min-h-[34px]'}`}
+              style={{
+                background: showIndicatorMenu ? 'var(--panel2)' : 'transparent',
+                color: showIndicatorMenu ? 'var(--emerald)' : 'var(--textFaint)',
+                border: '1px solid var(--border)',
+              }}
+            >
+              <SlidersHorizontal size={expanded ? 16 : 14} />
+              {expanded ? 'Indicators' : 'Ind'}
             </button>
             {showIndicatorMenu && (
-              <div className="absolute z-20 mt-1 rounded p-2 space-y-1.5" style={{ background: 'var(--panel2)', border: '1px solid var(--border)', minWidth: 150 }}>
+              <div
+                className="absolute z-30 mt-1 left-0 rounded-lg p-3 space-y-2 shadow-lg"
+                style={{ background: 'var(--panel2)', border: '1px solid var(--border)', minWidth: 200 }}
+              >
                 {INDICATOR_DEFS.map(ind => (
-                  <label key={ind.key} className="flex items-center gap-2 font-mono text-[10px] cursor-pointer whitespace-nowrap" style={{ color: 'var(--textDim)' }}>
-                    <input type="checkbox" checked={indicators[ind.key]} onChange={() => setIndicators(s => ({ ...s, [ind.key]: !s[ind.key] }))} />
-                    <span className="w-2 h-2 rounded-full shrink-0" style={{ background: ind.color }} />
+                  <label
+                    key={ind.key}
+                    className="flex items-center gap-2.5 font-mono text-[13px] cursor-pointer whitespace-nowrap min-h-[40px]"
+                    style={{ color: 'var(--textDim)' }}
+                  >
+                    <input
+                      type="checkbox"
+                      className="w-4 h-4"
+                      checked={!!indicators[ind.key]}
+                      onChange={() => setIndicators(s => ({ ...s, [ind.key]: !s[ind.key] }))}
+                    />
+                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: ind.color }} />
                     {ind.label}
                   </label>
                 ))}
               </div>
             )}
           </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {ohlcReadout && (
-            <div className="font-mono text-[10px] flex gap-2" style={{ color: 'var(--textDim)' }}>
+          <div className="flex-1" />
+          {ohlcReadout && expanded && (
+            <div className="font-mono text-[11px] flex gap-2 shrink-0 hidden sm:flex" style={{ color: 'var(--textDim)' }}>
               <span>O <span style={{ color: 'var(--text)' }}>{fmtPrice(symbol, ohlcReadout.o)}</span></span>
               <span>H <span style={{ color: 'var(--emerald)' }}>{fmtPrice(symbol, ohlcReadout.h)}</span></span>
               <span>L <span style={{ color: 'var(--coral)' }}>{fmtPrice(symbol, ohlcReadout.l)}</span></span>
               <span>C <span style={{ color: 'var(--text)' }}>{fmtPrice(symbol, ohlcReadout.c)}</span></span>
             </div>
           )}
-          <button onClick={() => setExpanded(v => !v)} title={expanded ? 'Collapse' : 'Expand to full screen'}
-            className="font-mono text-[10px] p-1 rounded flex items-center"
-            style={{ color: 'var(--textFaint)', border: '1px solid var(--border)' }}>
-            {expanded ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
-          </button>
+          {expanded ? (
+            <button
+              type="button"
+              onClick={() => setExpanded(false)}
+              title="Close full chart"
+              className="font-mono px-3 py-2.5 rounded flex items-center gap-1.5 min-h-[44px] min-w-[44px] text-[12px] shrink-0"
+              style={{ color: 'var(--text)', border: '1px solid var(--border)', background: 'var(--panel2)' }}
+            >
+              <Minimize2 size={18} /> Close
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setExpanded(true)}
+              className="font-mono rounded flex items-center gap-1.5 text-[12px] px-3 py-2 min-h-[40px] min-w-[40px] shrink-0"
+              style={{ color: '#05070a', background: 'var(--emerald)', border: 'none', fontWeight: 700, boxShadow: '0 0 0 1px rgba(31,227,168,0.35)' }}
+              title="Expand chart full screen"
+            >
+              <Maximize2 size={18} strokeWidth={2.5} /> Full
+            </button>
+          )}
         </div>
       </div>
-      <div className={expanded ? 'relative flex-1' : 'relative h-[200px] md:h-[280px]'}>
-        {status === 'empty' && <div className="absolute inset-0 flex items-center justify-center"><WaitingForBackend height={180} label="No chart data yet — try H1 or wait a minute" /></div>}
-        {status === 'error' && <div className="absolute inset-0 flex items-center justify-center"><WaitingForBackend height={180} label="Chart temporarily unavailable — retrying…" /></div>}
-        {status === 'loading' && <div className="absolute inset-0 flex items-center justify-center"><WaitingForBackend height={180} label="Loading candles…" /></div>}
-        <div ref={containerRef} className="w-full h-full" style={{ opacity: status === 'ok' ? 1 : 0.15, minHeight: 280 }} />
+      <div className="omni-chart-canvas-wrap flex-1 min-h-0">
+        {status === 'empty' && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center">
+            <WaitingForBackend height={120} label="No chart data yet — try H1 or wait a minute" />
+          </div>
+        )}
+        {status === 'error' && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center">
+            <WaitingForBackend height={120} label="Chart temporarily unavailable — retrying…" />
+          </div>
+        )}
+        {status === 'loading' && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center">
+            <WaitingForBackend height={120} label="Loading candles…" />
+          </div>
+        )}
+        <div ref={containerRef} className="omni-chart-canvas" style={{ opacity: status === 'ok' ? 1 : 0.2 }} />
+        {/* Volume Profile overlay — left-side histogram locked to price scale */}
+        <canvas
+          ref={vpCanvasRef}
+          className="pointer-events-none absolute inset-0 z-[5]"
+          style={{ display: indicators.vp ? 'block' : 'none' }}
+          aria-hidden
+        />
       </div>
     </div>
   );
 }
 
 /* ── DASH ───────────────────────────────────────────────────────────── */
-function DashTab({ signals, accountBalance, journalStats, prices, quotes, changes, mode, outlook, now, levels }) {
+function DashTab({ signals, accountBalance, journalStats, prices, quotes, changes, mode, outlook, now, levels, analysisLive, socketLive, cryptoVolAlerts }) {
   const approved = signals.filter(s => s.gate?.status === 'approved' || s.gate?.status === 'APPROVED');
   const recent = signals.slice(0, 12);
   const [chartSymbol, setChartSymbol] = useState('XAUUSD');
@@ -1414,53 +2159,100 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
   const chartSignals = useMemo(() => signals.filter(s => s.symbol === chartSymbol), [signals, chartSymbol]);
 
   return (
-    <div className="p-2 md:p-3 space-y-2 max-w-[1400px] mx-auto w-full">
+    <div className="p-2 sm:p-3 space-y-2 w-full">
+      {/* Real-time status — compact on phone */}
+      <div className="omni-panel px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px] sm:text-[11px]" style={{ color: 'var(--textDim)' }}>
+        <span style={{ color: socketLive ? 'var(--emerald)' : 'var(--textFaint)' }}>{socketLive ? '● PUSH' : '○ POLL'}</span>
+        <span style={{ color: analysisLive ? 'var(--gold)' : 'var(--textFaint)' }}>
+          {analysisLive
+            ? `● SCAN ${analysisLive.symbol || ''} ${analysisLive.timeframe || ''}${analysisLive.regime ? ' · ' + analysisLive.regime : ''}`
+            : '○ SCAN —'}
+        </span>
+        <span className="hidden sm:inline" style={{ color: 'var(--textFaint)' }}>MT5 + Deriv · always on</span>
+      </div>
+      {Array.isArray(cryptoVolAlerts) && cryptoVolAlerts.length > 0 && (
+        <div className="omni-panel px-3 py-2 space-y-1">
+          <div className="font-mono text-[10px] uppercase" style={{ color: 'var(--gold)' }}>Volatility alerts · gold + crypto</div>
+          {cryptoVolAlerts.slice(0, 5).map((a, i) => (
+            <div key={i} className="font-mono text-[11px] flex flex-wrap gap-2" style={{ color: a.direction === 'UP' ? 'var(--emerald)' : 'var(--coral)' }}>
+              <span>{a.symbol}</span>
+              <span>{a.assetClass === 'gold' ? 'GOLD' : 'CRYPTO'}</span>
+              <span>{a.direction}</span>
+              <span>{a.absPct}% / {a.window}</span>
+              <span style={{ color: 'var(--textFaint)' }}>{a.severity}</span>
+            </div>
+          ))}
+        </div>
+      )}
       {/* LIVE TICKS FIRST — no scroll required */}
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_260px] gap-2">
-        <div className="omni-panel p-2 md:p-3 order-2 lg:order-1">
-          <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
-            <div className="flex gap-1 flex-wrap">
-              {SYMBOLS.map(sym => (
-                <button key={sym} onClick={() => setChartSymbol(sym)}
-                  className="font-mono text-[10px] px-2 py-1 rounded"
-                  style={{ background: chartSymbol === sym ? 'var(--emerald)' : 'var(--panel2)', color: chartSymbol === sym ? '#05070a' : 'var(--textDim)' }}>
-                  {symLabel(sym)}
-                </button>
-              ))}
-            </div>
-            <div className="font-mono text-[11px] flex gap-3 items-center">
-              {q?.bid != null && <span style={{ color: 'var(--coral)' }}>B {fmtPrice(chartSymbol, q.bid)}</span>}
-              {q?.ask != null && <span style={{ color: 'var(--emerald)' }}>A {fmtPrice(chartSymbol, q.ask)}</span>}
-              {q?.bid == null && <span style={{ color: 'var(--text)' }}>{fmtPrice(chartSymbol, q?.price ?? prices?.[chartSymbol])}</span>}
-              {q?.source === 'mt5_ea' && <Pill tone="up">MT5</Pill>}
-            </div>
+      <div className="omni-home-grid">
+        {/* Chart first — symbol/TF controls only inside Full chart (no duplicate chips here) */}
+        <div className="omni-panel p-2 md:p-3 order-1 lg:order-1">
+          <div className="flex items-center justify-between gap-2 mb-1 font-mono text-[11px]" style={{ color: 'var(--textDim)' }}>
+            <span>
+              Chart · <span style={{ color: 'var(--text)' }}>{symLabel(chartSymbol)}</span>
+              {q?.bid != null && q?.ask != null && (
+                <>
+                  {' '}
+                  <span style={{ color: 'var(--coral)' }}>{fmtPrice(chartSymbol, q.bid)}</span>
+                  {' / '}
+                  <span style={{ color: 'var(--emerald)' }}>{fmtPrice(chartSymbol, q.ask)}</span>
+                </>
+              )}
+            </span>
+            {q?.source === 'mt5_ea' && <Pill tone="up">MT5</Pill>}
           </div>
-          <LiveChart symbol={chartSymbol} quote={q} signals={chartSignals} levels={levels} />
+          <LiveChart symbol={chartSymbol} quote={q} signals={chartSignals} levels={levels} onSymbolChange={setChartSymbol} />
         </div>
 
-        <div className="omni-panel overflow-hidden order-1 lg:order-2 flex flex-col max-h-[320px] lg:max-h-[340px]">
-          <div className="px-3 py-1.5 border-b" style={{ borderColor: 'var(--border)' }}>
+        <div className="omni-panel overflow-hidden order-2 xl:order-2 flex flex-col max-h-[min(55vh,480px)] sm:max-h-[min(50vh,520px)] xl:max-h-[min(60vh,720px)] min-h-[280px]">
+          <div className="px-3 py-2 border-b" style={{ borderColor: 'var(--border)' }}>
             <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>Market Watch · live</span>
           </div>
-          <div className="overflow-y-auto omni-scroll flex-1">
-            <div className="grid grid-cols-[1fr_64px_64px] gap-1 px-2 py-1 font-mono text-[9px] uppercase" style={{ color: 'var(--textFaint)' }}>
-              <span>Symbol</span><span className="text-right">Bid</span><span className="text-right">Ask</span>
-            </div>
+          <div className="overflow-y-auto omni-scroll flex-1 min-w-0">
             {SYMBOLS.map(sym => {
               const qq = quotes?.[sym];
               const ch = changes?.[sym];
               const up = ch == null ? null : ch >= 0;
+              const bid = qq?.bid ?? qq?.price ?? prices?.[sym];
+              const ask = qq?.ask ?? qq?.price ?? prices?.[sym];
               return (
-                <button key={sym} type="button" onClick={() => setChartSymbol(sym)}
-                  className="omni-row w-full grid grid-cols-[1fr_64px_64px] gap-1 px-2 py-1.5 font-mono text-[11px] text-left border-b"
-                  style={{ borderColor: 'var(--border)', background: chartSymbol === sym ? 'var(--panel2)' : 'transparent' }}>
-                  <span>
-                    <span style={{ color: 'var(--text)' }}>{symLabel(sym)}</span>
-                    {qq?.source === 'mt5_ea' && <span className="ml-1 text-[8px]" style={{ color: 'var(--gold)' }}>L</span>}
-                    {ch != null && <div className="text-[9px]" style={{ color: up ? 'var(--emerald)' : 'var(--coral)' }}>{fmtPct(ch)}</div>}
-                  </span>
-                  <span className="text-right" style={{ color: 'var(--coral)' }}>{fmtPrice(sym, qq?.bid ?? qq?.price ?? prices?.[sym])}</span>
-                  <span className="text-right" style={{ color: 'var(--emerald)' }}>{fmtPrice(sym, qq?.ask ?? qq?.price ?? prices?.[sym])}</span>
+                <button
+                  key={sym}
+                  type="button"
+                  onClick={() => setChartSymbol(sym)}
+                  className="omni-row w-full px-3 py-2.5 font-mono text-left border-b min-w-0"
+                  style={{
+                    borderColor: 'var(--border)',
+                    background: chartSymbol === sym ? 'var(--panel2)' : 'transparent',
+                    minHeight: 52,
+                  }}
+                >
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <span className="text-[13px] font-semibold truncate" style={{ color: 'var(--text)' }}>
+                      {symLabel(sym)}
+                      {qq?.source === 'mt5_ea' && <span className="ml-1 text-[9px] font-normal" style={{ color: 'var(--gold)' }}>MT5</span>}
+                    </span>
+                    {ch != null && (
+                      <span className="text-[11px] shrink-0 tabular-nums" style={{ color: up ? 'var(--emerald)' : 'var(--coral)' }}>
+                        {fmtPct(ch)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="rounded px-2 py-1.5 min-w-0" style={{ background: 'rgba(255,84,112,0.08)' }}>
+                      <div className="text-[9px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>Buy · Bid</div>
+                      <div className="text-[12px] sm:text-[13px] tabular-nums font-semibold truncate" style={{ color: 'var(--coral)' }}>
+                        {fmtPrice(sym, bid)}
+                      </div>
+                    </div>
+                    <div className="rounded px-2 py-1.5 min-w-0" style={{ background: 'rgba(31,227,168,0.08)' }}>
+                      <div className="text-[9px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>Sell · Ask</div>
+                      <div className="text-[12px] sm:text-[13px] tabular-nums font-semibold truncate" style={{ color: 'var(--emerald)' }}>
+                        {fmtPrice(sym, ask)}
+                      </div>
+                    </div>
+                  </div>
                 </button>
               );
             })}
@@ -1478,9 +2270,9 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
             No signals yet. Live prices keep running — signals fire only when score, agents, and gates clear.
           </div>
         ) : (
-          <div className="divide-y max-h-[220px] overflow-y-auto omni-scroll" style={{ borderColor: 'var(--border)' }}>
+          <div className="divide-y max-h-[240px] overflow-y-auto omni-scroll" style={{ borderColor: 'var(--border)' }}>
             {recent.map(s => (
-              <div key={s.id} className="px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px]">
+              <div key={s.id} className="px-3 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[12px]">
                 <span className="font-semibold" style={{ color: 'var(--text)' }}>{symLabel(s.symbol)}</span>
                 <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
                 <span style={{ color: (s.action === 'BUY' || s.action === 'LONG') ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
@@ -1504,7 +2296,7 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
   );
 }
 
-function SignalsTab({ signals, prices, quotes, auditLog }) {
+function SignalsTab({ signals, prices, quotes, auditLog, analysisLive }) {
   const [expanded, setExpanded] = useState(null);
   const [desk, setDesk] = useState('ALL');
   const DESKS = {
@@ -1524,38 +2316,8 @@ function SignalsTab({ signals, prices, quotes, auditLog }) {
   const fired = checks.filter(e => e.fired);
 
   return (
-    <div className="p-4 space-y-3">
-      <div className="omni-panel p-3 font-mono text-[11px]" style={{ color: 'var(--textDim)' }}>
-      </div>
-
-      <div className="omni-panel p-3">
-        <SectionHeader icon={ScrollText} title="Gate checks" sub={`${nearMiss.length} near miss · ${fired.length} fired recently`} />
-        {checks.length === 0 ? (
-          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
-            No checks logged yet. Wait for analysis (needs candles from Deriv or MT5).
-          </div>
-        ) : (
-          <div className="space-y-1 max-h-56 overflow-y-auto omni-scroll">
-            {checks.map((e, i) => (
-              <div key={e.id || i} className="flex flex-wrap items-start gap-2 font-mono text-[10px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
-                <span style={{ color: 'var(--textFaint)' }} className="w-10 shrink-0">{timeAgo(e.timestamp || Date.now())}</span>
-                <span style={{ color: 'var(--text)' }} className="w-16 shrink-0">{e.symbol}</span>
-                {e.fired
-                  ? <span style={{ color: 'var(--emerald)' }}>FIRED</span>
-                  : <span style={{ color: e.nearMiss || Number(e.score) >= 50 ? 'var(--gold)' : 'var(--textFaint)' }}>{e.nearMiss || Number(e.score) >= 50 ? 'NEAR' : 'block'}</span>}
-                {e.score != null && <span style={{ color: 'var(--textDim)' }}>score {e.score}</span>}
-                <span style={{ color: 'var(--textDim)' }} className="min-w-0 break-words flex-1">
-                  {(Array.isArray(e.gatesFailed) && e.gatesFailed.length) ? `failed: ${e.gatesFailed.join(', ')}` : ''}
-                  {(Array.isArray(e.gatesPassed) && e.gatesPassed.length) ? ` · passed: ${e.gatesPassed.join(', ')}` : ''}
-                  {' · '}{(Array.isArray(e.reasons) ? e.reasons : []).join(', ') || 'checked'}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="flex items-center gap-2 flex-wrap">
+    <div className="p-2 sm:p-3 space-y-2 sm:space-y-3 w-full max-w-[100vw]">
+<div className="flex items-center gap-2 flex-wrap">
         <SectionHeader icon={Radio} title="Signal Desks" sub={`${filtered.length} signal(s) · MT5 or Deriv prices`} />
         <div className="ml-auto flex gap-1 flex-wrap">
           {Object.keys(DESKS).map(d => (
@@ -1595,33 +2357,51 @@ function SignalsTab({ signals, prices, quotes, auditLog }) {
       </div>
 
       <div className="omni-panel overflow-hidden">
-        <div className="grid grid-cols-[70px_46px_44px_44px_1fr_1fr_1fr_70px_50px] gap-2 px-3 py-2 font-mono text-[9px] uppercase tracking-wider border-b" style={{ color: 'var(--textFaint)', borderColor: 'var(--border)' }}>
-          <span>Symbol</span><span>TF</span><span>Dir</span><span>Grade</span><span>Entry</span><span>Stop</span><span>Targets</span><span>Gate</span><span>Age</span>
-        </div>
-        <div className="max-h-[520px] overflow-y-auto omni-scroll">
-          {filtered.length === 0 ? (
-            <div className="p-6 font-mono text-[11px] text-center" style={{ color: 'var(--textFaint)' }}>
-              No signals for this desk yet. The engine only fires when score ≥ min, agents agree, and risk gates pass — not on every tick.
+        <div className="omni-table-scroll">
+          <div className="omni-table-grid">
+            <div className="grid grid-cols-[70px_46px_44px_44px_1fr_1fr_1fr_70px_50px] gap-2 px-3 py-2 font-mono text-[9px] uppercase tracking-wider border-b" style={{ color: 'var(--textFaint)', borderColor: 'var(--border)' }}>
+              <span>Symbol</span><span>TF</span><span>Dir</span><span>Grade</span><span>Entry</span><span>Stop</span><span>Targets</span><span>Gate</span><span>Age</span>
             </div>
-          ) : filtered.map(s => (
-            <div key={s.id}>
-              <div onClick={() => setExpanded(expanded === s.id ? null : s.id)}
-                className="omni-row grid grid-cols-[70px_46px_44px_44px_1fr_1fr_1fr_70px_50px] gap-2 px-3 py-2 font-mono text-[11px] cursor-pointer border-b items-center"
-                style={{ borderColor: 'var(--border)' }}>
-                <span style={{ color: 'var(--text)' }}>{s.symbol}</span>
-                <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
-                <span style={{ color: s.action === 'BUY' ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
-                <span style={{ color: 'var(--gold)' }}>{gradeFor(s.score)}</span>
-                <span style={{ color: 'var(--textDim)' }}>{fmtPrice(s.symbol, s.entry)}</span>
-                <span style={{ color: 'var(--coral)' }}>{fmtPrice(s.symbol, s.stopLoss)}</span>
-                <span style={{ color: 'var(--emerald)' }}>{fmtPrice(s.symbol, s.targets[0])} / {fmtPrice(s.symbol, s.targets[1])}</span>
-                <Pill tone={s.gate.status === 'approved' ? 'up' : s.gate.status === 'gated' ? 'warn' : 'down'}>{s.gate.status}</Pill>
-                <span className="flex items-center gap-1" style={{ color: 'var(--textFaint)' }}>
-                  {timeAgo(s.timestamp)}<ChevronDown size={11} style={{ transform: expanded === s.id ? 'rotate(180deg)' : 'none' }} />
-                </span>
-              </div>
+            <div className="max-h-[min(520px,55vh)] overflow-y-auto omni-scroll">
+              {filtered.length === 0 ? (
+                <div className="p-6 font-mono text-[11px] text-center" style={{ color: 'var(--textFaint)' }}>
+                  No signals for this desk yet. The engine only fires when score ≥ min, agents agree, and risk gates pass — not on every tick.
+                </div>
+              ) : filtered.map(s => (
+                <div key={s.id}>
+                  <div onClick={() => setExpanded(expanded === s.id ? null : s.id)}
+                    className="omni-row grid grid-cols-[70px_46px_44px_44px_1fr_1fr_1fr_70px_50px] gap-2 px-3 py-2.5 font-mono text-[11px] cursor-pointer border-b items-center"
+                    style={{ borderColor: 'var(--border)' }}>
+                    <span style={{ color: 'var(--text)' }}>{s.symbol}</span>
+                    <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
+                    <span style={{ color: s.action === 'BUY' ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
+                    <span style={{ color: 'var(--gold)' }}>{gradeFor(s.score)}</span>
+                    <span style={{ color: 'var(--textDim)' }}>{fmtPrice(s.symbol, s.entry)}</span>
+                    <span style={{ color: 'var(--coral)' }}>{fmtPrice(s.symbol, s.stopLoss)}</span>
+                    <span style={{ color: 'var(--emerald)' }}>{fmtPrice(s.symbol, s.targets[0])} / {fmtPrice(s.symbol, s.targets[1])}</span>
+                    <Pill tone={s.gate.status === 'approved' ? 'up' : s.gate.status === 'gated' ? 'warn' : 'down'}>{s.gate.status}</Pill>
+                    <span className="flex items-center gap-1" style={{ color: 'var(--textFaint)' }}>
+                      {timeAgo(s.timestamp)}<ChevronDown size={11} style={{ transform: expanded === s.id ? 'rotate(180deg)' : 'none' }} />
+                    </span>
+                  </div>
               {expanded === s.id && (
-                <div className="px-4 py-3 border-b grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4" style={{ borderColor: 'var(--border)', background: '#080a0d' }}>
+                <div className="border-b" style={{ borderColor: 'var(--border)', background: '#080a0d' }}>
+                  {/* Identity strip always visible on expand — fixes mobile where table columns scroll away */}
+                  <div className="px-3 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b" style={{ borderColor: 'var(--border)', background: 'var(--panel2)' }}>
+                    <span className="font-mono text-[13px] font-semibold tracking-wide" style={{ color: 'var(--text)' }}>{s.symbol}</span>
+                    <span className="font-mono text-[11px] px-1.5 py-0.5 rounded" style={{ color: 'var(--textDim)', background: 'var(--panel)' }}>{s.timeframe}</span>
+                    <span className="font-mono text-[12px] font-semibold" style={{ color: (s.action === 'BUY' || s.action === 'LONG') ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
+                    <span className="font-mono text-[12px]" style={{ color: 'var(--gold)' }}>{gradeFor(s.score)} · {signalScore(s)}</span>
+                    <Pill tone={s.gate?.status === 'approved' ? 'up' : s.gate?.status === 'gated' ? 'warn' : 'down'}>{s.gate?.status || '—'}</Pill>
+                    <span className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>{timeAgo(s.timestamp)}</span>
+                    <div className="w-full flex flex-wrap gap-x-4 gap-y-0.5 font-mono text-[11px]">
+                      <span style={{ color: 'var(--textDim)' }}>Entry <b style={{ color: 'var(--text)' }}>{fmtPrice(s.symbol, s.entry)}</b></span>
+                      <span style={{ color: 'var(--textDim)' }}>SL <b style={{ color: 'var(--coral)' }}>{fmtPrice(s.symbol, s.stopLoss)}</b></span>
+                      <span style={{ color: 'var(--textDim)' }}>TP1 <b style={{ color: 'var(--emerald)' }}>{fmtPrice(s.symbol, s.targets?.[0])}</b></span>
+                      <span style={{ color: 'var(--textDim)' }}>TP2 <b style={{ color: 'var(--emerald)' }}>{fmtPrice(s.symbol, s.targets?.[1])}</b></span>
+                    </div>
+                  </div>
+                  <div className="px-4 py-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
                   <div>
                     <div className="font-mono text-[9px] uppercase mb-2" style={{ color: 'var(--textFaint)' }}>Agent Breakdown ({s.agreeCount}/8 aligned)</div>
                     <div className="space-y-1">
@@ -1685,17 +2465,48 @@ function SignalsTab({ signals, prices, quotes, auditLog }) {
                       ))}
                     </ul>
                   </div>
+                  </div>
                 </div>
               )}
             </div>
           ))}
+            </div>
+          </div>
         </div>
       </div>
+
+      <div className="omni-panel p-3">
+        <SectionHeader icon={ScrollText} title="Gate checks" sub={`${nearMiss.length} near miss · ${fired.length} fired recently`} />
+        {checks.length === 0 ? (
+          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
+            No checks logged yet. Wait for analysis (needs candles from Deriv or MT5).
+          </div>
+        ) : (
+          <div className="space-y-1 max-h-56 overflow-y-auto omni-scroll">
+            {checks.map((e, i) => (
+              <div key={e.id || i} className="flex flex-wrap items-start gap-2 font-mono text-[10px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
+                <span style={{ color: 'var(--textFaint)' }} className="w-10 shrink-0">{timeAgo(e.timestamp || Date.now())}</span>
+                <span style={{ color: 'var(--text)' }} className="w-16 shrink-0">{e.symbol}</span>
+                {e.fired
+                  ? <span style={{ color: 'var(--emerald)' }}>FIRED</span>
+                  : <span style={{ color: e.nearMiss || Number(e.score) >= 50 ? 'var(--gold)' : 'var(--textFaint)' }}>{e.nearMiss || Number(e.score) >= 50 ? 'NEAR' : 'block'}</span>}
+                {e.score != null && <span style={{ color: 'var(--textDim)' }}>score {e.score}</span>}
+                <span style={{ color: 'var(--textDim)' }} className="min-w-0 break-words flex-1">
+                  {(Array.isArray(e.gatesFailed) && e.gatesFailed.length) ? `failed: ${e.gatesFailed.join(', ')}` : ''}
+                  {(Array.isArray(e.gatesPassed) && e.gatesPassed.length) ? ` · passed: ${e.gatesPassed.join(', ')}` : ''}
+                  {' · '}{(Array.isArray(e.reasons) ? e.reasons : []).join(', ') || 'checked'}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      
     </div>
   );
 }
 
-/* ── INTEL ──────────────────────────────────────────────────────────── */
 function IntelTab({ now, outlook, mode, calendar }) {
   const live = mode === 'live' && outlook;
 
@@ -1747,7 +2558,7 @@ function IntelTab({ now, outlook, mode, calendar }) {
     : null;
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
       <div className="omni-panel p-4">
         <SectionHeader icon={Globe2} title="Market Outlook" sub={live ? 'live briefing · regime + session + calendar' : undefined} />
         {narrative ? (
@@ -1818,31 +2629,24 @@ function IntelTab({ now, outlook, mode, calendar }) {
       </div>
 
       <div className="omni-panel p-4">
-        <SectionHeader icon={Clock} title="Economic Calendar" sub="Forex Factory · high/medium impact" />
-        {(calendar && calendar.length) ? (
-          <div className="space-y-1.5 max-h-72 overflow-y-auto omni-scroll">
-            {calendar.slice(0, 40).map((e, i) => (
-              <div key={i} className="flex items-center gap-2 font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
+        <SectionHeader icon={Clock} title="Economic Calendar" sub="Forex Factory · this week · High first" />
+        {Array.isArray(calendar) && calendar.length > 0 ? (
+          <div className="space-y-1.5 max-h-80 overflow-y-auto omni-scroll">
+            {calendar.slice(0, 60).map((e, i) => (
+              <div key={`${e.name}-${e.time}-${i}`} className="flex items-center gap-2 font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
                 <Pill tone={String(e.impact).toLowerCase() === 'high' ? 'down' : String(e.impact).toLowerCase() === 'medium' ? 'warn' : 'neutral'}>{e.impact || '—'}</Pill>
-                <span className="flex-1" style={{ color: 'var(--textDim)' }}>{e.name}</span>
+                <span className="flex-1 min-w-0 truncate" style={{ color: 'var(--textDim)' }}>{e.name}</span>
                 <span style={{ color: 'var(--textFaint)' }}>{e.currency}</span>
-                <span style={{ color: 'var(--textFaint)' }}>{e.hoursAway != null ? `in ${e.hoursAway}h` : ''}</span>
+                <span className="shrink-0" style={{ color: 'var(--textFaint)' }}>
+                  {e.hoursAway != null ? (e.hoursAway < 0 ? `${Math.abs(e.hoursAway)}h ago` : `in ${e.hoursAway}h`) : ''}
+                </span>
               </div>
             ))}
-          </div>
-        ) : calendarRows === null ? <WaitingForBackend /> : calendarRows.length === 0 ? (
-          <div className="font-mono text-[11px] leading-relaxed" style={{ color: 'var(--textFaint)' }}>
-            Calendar still loading from Forex Factory…
           </div>
         ) : (
-          <div className="space-y-1.5">
-            {calendarRows.map((e, i) => (
-              <div key={i} className="flex items-center gap-2 font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
-                <Pill tone={e.impact === 'high' ? 'down' : e.impact === 'medium' ? 'warn' : 'neutral'}>{e.impact}</Pill>
-                <span className="flex-1" style={{ color: 'var(--textDim)' }}>{e.event}</span>
-                <span style={{ color: 'var(--textFaint)' }}>in {Math.floor(e.mins / 60)}h{e.mins % 60}m</span>
-              </div>
-            ))}
+          <div className="font-mono text-[11px] leading-relaxed space-y-1" style={{ color: 'var(--textFaint)' }}>
+            <div>No calendar rows yet.</div>
+            <div>Source: Forex Factory free feed. Opens after deploy + one successful /api/calendar.</div>
           </div>
         )}
       </div>
@@ -1854,43 +2658,135 @@ function IntelTab({ now, outlook, mode, calendar }) {
 function NewsTab({ news, mode }) {
   const live = mode === 'live' && Array.isArray(news);
   const [cat, setCat] = useState('all');
+  const [selected, setSelected] = useState(null);
   const CATS = [
-    { id: 'all', label: 'All' },
+    { id: 'all', label: 'All markets' },
+    { id: 'crypto', label: 'Crypto' },
     { id: 'forex', label: 'Forex' },
+    { id: 'macro', label: 'Macro / Fed' },
     { id: 'gold', label: 'Gold' },
     { id: 'oil', label: 'Oil' },
-    { id: 'dxy', label: 'Dollar' },
-    { id: 'crypto', label: 'Crypto' },
   ];
-  const filtered = !live || !Array.isArray(news) ? null : news.filter(n => {
-    if (cat === 'all') return true;
-    const c = (n.category || '').toLowerCase();
-    const h = `${n.headline || ''} ${n.summary || ''}`.toLowerCase();
-    if (cat === 'forex') return c === 'forex' || /forex|eur|gbp|jpy|fx |currency|ecb|fed|fomc|cpi|nfp/.test(h);
-    if (cat === 'gold') return c === 'gold' || /gold|xau|bullion/.test(h);
-    if (cat === 'oil') return c === 'oil' || /oil|opec|wti|brent|crude/.test(h);
-    if (cat === 'dxy') return c === 'dxy' || /dollar index|dxy|greenback/.test(h);
-    if (cat === 'crypto') return c === 'crypto' || /bitcoin|btc|ethereum|eth|crypto/.test(h);
-    return true;
-  });
+  const MARKET_RE = /bitcoin|btc|ethereum|eth|crypto|defi|stablecoin|solana|sec\b|etf|binance|coinbase|forex|fx\b|eurusd|gbpusd|usdjpy|currency|dollar|dxy|fed\b|fomc|ecb|boj|boe|cpi|nfp|inflation|interest rate|treasury|yield|gold|xau|oil|wti|brent|opec|nasdaq|s&p|liquidity|central bank|risk.?on|risk.?off|payroll/i;
+  const NOISE_RE = /celebrity|sports|football|nba|movie|netflix|recipe|horoscope|weather forecast|gossip/i;
+  const CRYPTO_RE = /bitcoin|btc|ethereum|eth|crypto|defi|stablecoin|solana|binance|coinbase|sec\b.*crypto|crypto.*etf/i;
+  const FOREX_RE = /forex|fx\b|eurusd|gbpusd|usdjpy|currency|dxy|dollar index|ecb|boj|boe/i;
+
+  const rankItem = (n) => {
+    const h = `${n.headline || ''} ${n.summary || ''} ${n.category || ''}`;
+    let r = 0;
+    if (CRYPTO_RE.test(h)) r += 10;
+    if (FOREX_RE.test(h)) r += 10;
+    if (/fed\b|fomc|cpi|nfp|inflation/i.test(h)) r += 4;
+    if (/gold|xau|oil|wti/i.test(h)) r += 2;
+    return r;
+  };
+
+  const filtered = !live || !Array.isArray(news) ? null : news
+    .filter(n => {
+      const h = `${n.headline || ''} ${n.summary || ''} ${n.category || ''}`;
+      if (NOISE_RE.test(h)) return false;
+      if (!MARKET_RE.test(h)) return false;
+      if (cat === 'all') return true;
+      const c = (n.category || '').toLowerCase();
+      const t = h.toLowerCase();
+      if (cat === 'crypto') return c === 'crypto' || CRYPTO_RE.test(t);
+      if (cat === 'forex') return c === 'forex' || FOREX_RE.test(t) || /eur|gbp|jpy|dollar/.test(t);
+      if (cat === 'macro') return /fed\b|fomc|ecb|boj|boe|cpi|nfp|inflation|interest rate|treasury|yield|central bank|payroll/.test(t);
+      if (cat === 'gold') return c === 'gold' || /gold|xau|bullion/.test(t);
+      if (cat === 'oil') return c === 'oil' || /oil|opec|wti|brent|crude/.test(t);
+      return true;
+    })
+    .slice()
+    .sort((a, b) => rankItem(b) - rankItem(a) || ((b.datetime || 0) - (a.datetime || 0)));
+
   const items = filtered;
-  const major = items && items.length ? items[0] : null;
-  const rest = items && items.length > 1 ? items.slice(1) : [];
+  const hasBody = (n) => {
+    const s = String(n?.summary || '').trim();
+    return s.length >= 40;
+  };
 
   const when = (dt) => {
     if (!dt) return '';
-    // support both seconds and milliseconds
     const ms = dt < 1e12 ? dt * 1000 : dt;
     return timeAgo(ms);
   };
 
+  const openExternal = (url) => {
+    if (!url) return;
+    try {
+      if (window.Telegram?.WebApp?.openLink) window.Telegram.WebApp.openLink(url);
+      else window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (_) {
+      try { window.open(url, '_blank', 'noopener,noreferrer'); } catch (__) {}
+    }
+  };
+
+  if (selected) {
+    const readable = hasBody(selected);
+    return (
+      <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
+        <button
+          type="button"
+          onClick={() => setSelected(null)}
+          className="omni-chip font-mono text-[12px] px-3 py-2 rounded min-h-[40px]"
+          style={{ color: 'var(--emerald)', border: '1px solid var(--border)', background: 'var(--panel2)' }}
+        >
+          ← Back to news
+        </button>
+        <div className="omni-panel p-4 space-y-3">
+          {selected.image ? (
+            <img
+              src={selected.image}
+              alt=""
+              className="w-full rounded object-cover max-h-48"
+              style={{ background: 'var(--panel2)' }}
+              onError={(e) => { e.currentTarget.style.display = 'none'; }}
+            />
+          ) : null}
+          <div className="font-mono text-[10px] uppercase" style={{ color: 'var(--textFaint)' }}>
+            {selected.source || 'Market wire'} · {when(selected.datetime)} ago
+            {selected.category ? ` · ${selected.category}` : ''}
+          </div>
+          <h2 className="text-[18px] font-semibold leading-snug" style={{ color: 'var(--text)' }}>
+            {selected.headline}
+          </h2>
+          <div className="text-[14px] leading-relaxed whitespace-pre-wrap" style={{ color: 'var(--textDim)' }}>
+            {readable
+              ? selected.summary
+              : 'Only a headline is available from this wire — open the source for the full article.'}
+          </div>
+          {selected.url ? (
+            <button
+              type="button"
+              onClick={() => openExternal(selected.url)}
+              className="omni-chip font-mono text-[12px] px-4 py-2.5 rounded min-h-[44px] w-full sm:w-auto"
+              style={{
+                color: readable ? 'var(--textDim)' : '#05070a',
+                background: readable ? 'var(--panel)' : 'var(--emerald)',
+                border: '1px solid var(--border)',
+                fontWeight: readable ? 500 : 700,
+              }}
+            >
+              {readable ? 'Open full article on source' : 'Read full article on source →'}
+            </button>
+          ) : (
+            <div className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>
+              No external link provided for this item.
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="p-4 space-y-3">
-      <SectionHeader icon={Newspaper} title="Market news" sub={live ? 'Financial + crypto headlines' : undefined} />
+    <div className="p-2 sm:p-3 space-y-2 sm:space-y-3 w-full max-w-[100vw]">
+      <SectionHeader icon={Newspaper} title="Market news" sub="Crypto & Forex first · in-app, source link if needed" />
       <div className="flex gap-1 flex-wrap">
         {CATS.map(c => (
           <button key={c.id} type="button" onClick={() => setCat(c.id)}
-            className="font-mono text-[10px] px-2 py-1 rounded uppercase"
+            className="font-mono text-[10px] px-2.5 py-1.5 rounded uppercase min-h-[32px]"
             style={{ background: cat === c.id ? 'var(--emerald)' : 'var(--panel2)', color: cat === c.id ? '#05070a' : 'var(--textDim)' }}>{c.label}</button>
         ))}
       </div>
@@ -1898,62 +2794,60 @@ function NewsTab({ news, mode }) {
       {items === null ? (
         <div className="omni-panel p-4"><WaitingForBackend height={200} /></div>
       ) : items.length === 0 ? (
-        <div className="omni-panel p-4 font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No news yet — wait a few seconds.</div>
+        <div className="omni-panel p-4 font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
+          No market-relevant headlines yet for this filter.
+        </div>
       ) : (
-        <>
-          {major && (
-            <a href={major.url || undefined} target={major.url ? '_blank' : undefined} rel="noreferrer"
-              className="omni-panel p-4 block" style={{ textDecoration: 'none', borderColor: 'var(--emerald)' }}>
-              <div className="font-mono text-[9px] uppercase mb-2" style={{ color: 'var(--emerald)' }}>Major story</div>
-              <div className="flex gap-4 items-start">
-                {major.image ? (
-                  <img src={major.image} alt="" className="rounded object-cover flex-shrink-0"
-                    style={{ width: 120, height: 80, background: 'var(--panel2)' }}
+        <div className="omni-panel overflow-hidden">
+          <div className="space-y-0 max-h-[min(70vh,640px)] overflow-y-auto omni-scroll">
+            {items.map((n, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => setSelected(n)}
+                className="omni-row w-full flex items-start gap-3 px-3 py-3 text-left border-b"
+                style={{ borderColor: 'var(--border)' }}
+              >
+                {n.image ? (
+                  <img src={n.image} alt="" loading="lazy" className="rounded object-cover flex-shrink-0"
+                    style={{ width: 64, height: 48, background: 'var(--panel2)' }}
                     onError={(e) => { e.currentTarget.style.display = 'none'; }} />
-                ) : null}
-                <div className="min-w-0 flex-1">
-                  <div className="text-[16px] font-semibold leading-snug" style={{ color: 'var(--text)' }}>{major.headline}</div>
-                  {major.summary ? <div className="text-[12px] mt-2 line-clamp-3" style={{ color: 'var(--textDim)' }}>{major.summary}</div> : null}
-                  <div className="font-mono text-[10px] mt-2 uppercase" style={{ color: 'var(--textFaint)' }}>
-                    {major.source || 'News'} · {when(major.datetime)} ago
+                ) : (
+                  <div className="flex items-center justify-center rounded flex-shrink-0" style={{ width: 64, height: 48, background: 'var(--panel2)' }}>
+                    <Newspaper size={16} style={{ color: 'var(--textFaint)' }} />
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
+                    {CRYPTO_RE.test(`${n.headline} ${n.category}`) && (
+                      <span className="font-mono text-[9px] px-1.5 py-0.5 rounded" style={{ color: '#f0b429', background: 'rgba(240,180,41,0.12)' }}>CRYPTO</span>
+                    )}
+                    {FOREX_RE.test(`${n.headline} ${n.category}`) && (
+                      <span className="font-mono text-[9px] px-1.5 py-0.5 rounded" style={{ color: '#5ea8ff', background: 'rgba(94,168,255,0.12)' }}>FOREX</span>
+                    )}
+                  </div>
+                  <div className="text-[13px] leading-snug" style={{ color: 'var(--text)' }}>{n.headline}</div>
+                  {n.summary ? (
+                    <div className="text-[11px] mt-1 line-clamp-2" style={{ color: 'var(--textDim)' }}>{n.summary}</div>
+                  ) : (
+                    <div className="text-[10px] mt-1 font-mono" style={{ color: 'var(--textFaint)' }}>Headline only — open source for full story</div>
+                  )}
+                  <div className="font-mono text-[9px] uppercase mt-1" style={{ color: 'var(--textFaint)' }}>
+                    {n.source || 'Wire'} · {when(n.datetime)} ago{n.category ? ` · ${n.category}` : ''}
                   </div>
                 </div>
-              </div>
-            </a>
-          )}
-
-          <div className="omni-panel p-4">
-            <div className="space-y-0.5 max-h-[520px] overflow-y-auto omni-scroll">
-              {rest.map((n, i) => (
-                <a key={i} href={n.url || undefined} target={n.url ? '_blank' : undefined} rel="noreferrer"
-                  className="omni-row flex items-start gap-3 px-2 py-2.5 rounded border-b" style={{ borderColor: 'var(--border)', textDecoration: 'none', cursor: n.url ? 'pointer' : 'default' }}>
-                  {n.image ? (
-                    <img src={n.image} alt="" loading="lazy" className="rounded object-cover flex-shrink-0"
-                      style={{ width: 64, height: 48, background: 'var(--panel2)' }}
-                      onError={(e) => { e.currentTarget.style.display = 'none'; }} />
-                  ) : (
-                    <div className="flex items-center justify-center rounded flex-shrink-0" style={{ width: 64, height: 48, background: 'var(--panel2)' }}>
-                      <Newspaper size={16} style={{ color: 'var(--textFaint)' }} />
-                    </div>
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[12px] leading-snug" style={{ color: 'var(--text)' }}>{n.headline}</div>
-                    <div className="font-mono text-[9px] uppercase mt-1" style={{ color: 'var(--textFaint)' }}>
-                      {n.source || 'News'} · {when(n.datetime)} ago
-                    </div>
-                  </div>
-                </a>
-              ))}
-            </div>
+                <ChevronRight size={16} className="shrink-0 mt-1" style={{ color: 'var(--textFaint)' }} />
+              </button>
+            ))}
           </div>
-        </>
+        </div>
       )}
     </div>
   );
 }
 
 /* ── MONITOR ────────────────────────────────────────────────────────── */
-function MonitorTab({ auditLog, feedHealth, uptimeSec, mode, fetchErrors }) {
+function MonitorTab({ auditLog, feedHealth, uptimeSec, mode, fetchErrors, analysisLive, socketLive }) {
   const liveByName = new Map();
   for (const f of (feedHealth || [])) {
     liveByName.set(f.name, f);
@@ -1985,21 +2879,7 @@ function MonitorTab({ auditLog, feedHealth, uptimeSec, mode, fetchErrors }) {
   const liveCount = feeds.filter(f => f.status === 'live').length;
 
   return (
-    <div className="p-4 space-y-4">
-      {activeErrors.length > 0 && (
-        <div className="omni-panel p-4" style={{ borderColor: 'var(--coral)' }}>
-          <SectionHeader icon={ShieldAlert} title="Problems" sub={`${activeErrors.length} API issue(s)`} />
-          <div className="space-y-1.5">
-            {activeErrors.map(([endpoint, message]) => (
-              <div key={endpoint} className="flex items-center gap-2 font-mono text-[11px]">
-                <span className="w-28 shrink-0" style={{ color: 'var(--text)' }}>/api/{endpoint}</span>
-                <span style={{ color: 'var(--coral)' }}>{String(message)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
+    <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
       <div className="omni-panel p-4">
         <SectionHeader
           icon={Database}
@@ -2080,7 +2960,7 @@ function HeatTab({ heatmapTiles, mode, sentiment }) {
 
   if (live) {
     return (
-      <div className="p-4 space-y-4">
+      <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
         {fg && (
           <div className="omni-panel p-4 flex items-center justify-between gap-4 flex-wrap">
             <div>
@@ -2102,7 +2982,7 @@ function HeatTab({ heatmapTiles, mode, sentiment }) {
           <p className="text-[11px] mb-3" style={{ color: 'var(--textFaint)' }}>
             Higher score = more interesting setup or stronger move. Needs live candles to fill in.
           </p>
-          {heatmapTiles.length === 0 ? (
+          {!heatmapTiles || heatmapTiles.length === 0 ? (
             <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
               Nothing to show yet. Heat fills in after the system has candle data and ranks each symbol.
             </div>
@@ -2140,7 +3020,7 @@ function HeatTab({ heatmapTiles, mode, sentiment }) {
   }
 
   return (
-    <div className="p-4">
+    <div className="p-2 sm:p-3 w-full max-w-[100vw]">
       <div className="omni-panel p-4">
         <SectionHeader icon={Flame} title="Market Heat Map" />
         <WaitingForBackend height={200} />
@@ -2149,13 +3029,220 @@ function HeatTab({ heatmapTiles, mode, sentiment }) {
   );
 }
 
+/* ── ANALYSIS (standalone advanced fractal layer) ───────────────────── */
+function AnalysisTab({ mode }) {
+  const live = mode === 'live';
+  const [board, setBoard] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+  const [ts, setTs] = useState(null);
+  const [selected, setSelected] = useState(null);
+
+  const load = useCallback(async () => {
+    if (!live) return;
+    setLoading(true);
+    setErr(null);
+    try {
+      const r = await omniFetch('/api/analysis?timeframes=H1,H4');
+      if (!r?.ok) throw new Error(r?.error || 'analysis failed');
+      setBoard(Array.isArray(r.board) ? r.board : []);
+      setTs(Date.now());
+    } catch (e) {
+      setErr(e.message || 'fetch error');
+    } finally {
+      setLoading(false);
+    }
+  }, [live]);
+
+  useEffect(() => {
+    load();
+    if (!live) return undefined;
+    const id = setInterval(load, 45000);
+    return () => clearInterval(id);
+  }, [load, live]);
+
+  if (!live) {
+    return (
+      <div className="p-2 sm:p-3 w-full max-w-[100vw]">
+        <div className="omni-panel p-4">
+          <SectionHeader icon={Layers} title="Advanced Analysis" />
+          <WaitingForBackend height={240} label="Standalone analysis needs a live backend + candle history" />
+        </div>
+      </div>
+    );
+  }
+
+  const playTone = (pb) => {
+    if (pb === 'TREND_FOLLOW') return 'up';
+    if (pb === 'MEAN_REVERT') return 'warn';
+    return 'neutral';
+  };
+  const alphaTone = (a) => {
+    if (a == null) return 'neutral';
+    if (a >= 0.58) return 'up';
+    if (a <= 0.42) return 'warn';
+    return 'neutral';
+  };
+
+  return (
+    <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
+      <div className="omni-panel p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+          <SectionHeader
+            icon={Layers}
+            title="Advanced Analysis"
+            sub="standalone · Hurst · DFA · FRAMA · Lyapunov — not wired to signals"
+          />
+          <button
+            type="button"
+            onClick={load}
+            disabled={loading}
+            className="omni-chip font-mono text-[11px] px-3 py-1.5 rounded"
+            style={{ background: 'var(--panel2)', color: loading ? 'var(--textFaint)' : 'var(--gold)', border: '1px solid var(--border)' }}
+          >
+            {loading ? 'Scanning…' : 'Refresh'}
+          </button>
+        </div>
+        <div className="font-mono text-[10px] mb-3" style={{ color: 'var(--textFaint)' }}>
+          Independent path-dependence engine. Does not score signals or size risk.
+          {ts ? ` · last update ${new Date(ts).toISOString().slice(11, 19)} UTC` : ''}
+        </div>
+        {err && (
+          <div className="font-mono text-[11px] mb-2" style={{ color: 'var(--coral)' }}>Error: {err}</div>
+        )}
+        {board.length === 0 && !loading ? (
+          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
+            No analysis yet — need enough H1/H4 candles per symbol.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {board.map((row) => {
+              const H = row.hurst?.H;
+              const dfa = row.dfa;
+              const frama = row.frama;
+              const lyap = row.lyapunov;
+              const open = selected === row.symbol;
+              return (
+                <div
+                  key={row.symbol}
+                  className="omni-row rounded-lg border"
+                  style={{ borderColor: 'var(--border)', background: 'var(--panel2)' }}
+                >
+                  <button
+                    type="button"
+                    className="w-full text-left p-3 flex flex-wrap items-center gap-2"
+                    onClick={() => setSelected(open ? null : row.symbol)}
+                  >
+                    <span className="font-display text-sm font-semibold tracking-wide" style={{ color: 'var(--text)' }}>
+                      {symLabel(row.symbol)}
+                    </span>
+                    <span className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>
+                      {row.timeframe} · {row.bars ?? '—'} bars
+                    </span>
+                    <Pill tone={playTone(row.playbook)}>{(row.playbook || 'STAND_ASIDE').replace(/_/g, ' ')}</Pill>
+                    {row.bias && row.bias !== 'NONE' && (
+                      <Pill tone={row.bias === 'DIRECTIONAL' ? 'up' : 'warn'}>{row.bias}</Pill>
+                    )}
+                    <span className="ml-auto font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>
+                      {open ? '▲' : '▼'}
+                    </span>
+                  </button>
+                  <div className="px-3 pb-3 grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] font-mono">
+                    <div>
+                      <div style={{ color: 'var(--textFaint)' }}>Hurst H</div>
+                      <div className="text-[13px] font-semibold" style={{ color: 'var(--gold)' }}>
+                        {H != null ? Number(H).toFixed(3) : '—'}
+                      </div>
+                      <div style={{ color: 'var(--textFaint)' }}>
+                        conf {row.hurst?.confidence != null ? `${Number(row.hurst.confidence).toFixed(0)}%` : '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ color: 'var(--textFaint)' }}>DFA α</div>
+                      <div className="text-[13px] font-semibold" style={{ color: dfa ? 'var(--emerald)' : 'var(--textFaint)' }}>
+                        {dfa?.alpha != null ? Number(dfa.alpha).toFixed(3) : '—'}
+                      </div>
+                      <div style={{ color: 'var(--textFaint)' }}>
+                        {dfa ? `R² ${Number(dfa.rSquared ?? 0).toFixed(2)} · conf ${Number(dfa.confidence).toFixed(0)}%` : '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ color: 'var(--textFaint)' }}>FRAMA D</div>
+                      <div className="text-[13px] font-semibold">
+                        {frama?.fractalDimension != null ? Number(frama.fractalDimension).toFixed(3) : '—'}
+                      </div>
+                      <div style={{ color: 'var(--textFaint)' }}>{frama?.speed || '—'}</div>
+                    </div>
+                    <div>
+                      <div style={{ color: 'var(--textFaint)' }}>Lyapunov λ</div>
+                      <div className="text-[13px] font-semibold" style={{ color: lyap?.chaotic ? 'var(--coral)' : 'var(--text)' }}>
+                        {lyap?.exponent != null ? Number(lyap.exponent).toFixed(4) : '—'}
+                      </div>
+                      <div style={{ color: 'var(--textFaint)' }}>{lyap?.chaotic ? 'CHAOTIC' : 'stable'}</div>
+                    </div>
+                  </div>
+                  {open && (
+                    <div className="px-3 pb-3 space-y-2 border-t" style={{ borderColor: 'var(--border)' }}>
+                      <div className="font-mono text-[10px] pt-2" style={{ color: 'var(--textFaint)' }}>
+                        {row.detail || row.label}
+                      </div>
+                      {dfa?.note && (
+                        <div className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>{dfa.note}</div>
+                      )}
+                      {frama?.note && (
+                        <div className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>{frama.note}</div>
+                      )}
+                      {lyap?.note && (
+                        <div className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>{lyap.note}</div>
+                      )}
+                      {row.multi && Object.keys(row.multi).length > 1 && (
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          {Object.entries(row.multi).map(([tf, m]) => (
+                            <span
+                              key={tf}
+                              className="font-mono text-[10px] px-2 py-1 rounded"
+                              style={{ background: 'var(--panel)', color: 'var(--textFaint)', border: '1px solid var(--border)' }}
+                            >
+                              {tf}: H={m.hurst?.H != null ? Number(m.hurst.H).toFixed(2) : '—'}
+                              {m.dfa?.alpha != null ? ` · α=${Number(m.dfa.alpha).toFixed(2)}` : ''}
+                              {' · '}{(m.playbook || '').replace(/_/g, ' ')}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        <Pill tone={alphaTone(dfa?.alpha)}>{dfa?.regime ? String(dfa.regime).replace(/_/g, ' ') : 'DFA —'}</Pill>
+                        <Pill tone="neutral">{row.hurst?.regime || 'R/S —'}</Pill>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="omni-panel p-4">
+        <SectionHeader icon={FlaskConical} title="About this layer" sub="fully decoupled from signal pipeline" />
+        <ul className="font-mono text-[10px] space-y-1" style={{ color: 'var(--textFaint)' }}>
+          <li>• Own endpoint <span style={{ color: 'var(--gold)' }}>/api/analysis</span> + module <span style={{ color: 'var(--gold)' }}>advanced-analysis.js</span></li>
+          <li>• R/S Hurst, hardened DFA (α + R²), FRAMA dimension/speed, Lyapunov λ</li>
+          <li>• Does not write to journals, risk engine, or signal scorer</li>
+          <li>• Refresh pulls a fresh board from candle stores only</li>
+        </ul>
+      </div>
+    </div>
+  );
+}
+
 /* ── VALID ──────────────────────────────────────────────────────────── */
-function ValidTab({ signals, journalStats, learningProfiles, mode }) {
+function ValidTab({ signals, journalStats, learningProfiles, mode, hurstBoard }) {
   const live = mode === 'live';
 
   if (!live) {
     return (
-      <div className="p-4">
+      <div className="p-2 sm:p-3 w-full max-w-[100vw]">
         <div className="omni-panel p-4">
           <SectionHeader icon={FlaskConical} title="Validation" />
           <WaitingForBackend height={240} />
@@ -2188,8 +3275,81 @@ function ValidTab({ signals, journalStats, learningProfiles, mode }) {
 
   const mcChartData = validated.slice(0, 20).reverse().map((s, i) => ({ label: `${s.symbol}#${i + 1}`, prob: s.validation.monteCarlo?.winProbability ?? 0 }));
 
+  const hurstTone = (pb) => {
+    if (pb === 'TREND_FOLLOW') return 'up';
+    if (pb === 'MEAN_REVERT') return 'warn';
+    return 'neutral';
+  };
+
   return (
-    <div className="p-4 space-y-4">
+    <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
+      {/* Dedicated Hurst analysis layer — not a trade signal */}
+      <div className="omni-panel p-3 sm:p-4">
+        <SectionHeader
+          icon={Activity}
+          title="Hurst analysis"
+          sub="regime playbook · separate from signal votes"
+        />
+        <p className="font-mono text-[10px] mb-3 leading-relaxed" style={{ color: 'var(--textFaint)' }}>
+          Path-dependence only. H&gt;0.55 trend-follow · H&lt;0.45 mean-revert (range fades) · ~0.5 stand aside.
+          Does not fire trades — use with structure at range edges or trend pullbacks.
+        </p>
+        {!Array.isArray(hurstBoard) || hurstBoard.length === 0 ? (
+          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
+            Waiting for candle history… Hurst board fills after H1/H4 bars load.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {hurstBoard.map((row) => (
+              <div
+                key={row.symbol}
+                className="omni-panel2 p-3 flex flex-col gap-1.5"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-[13px] font-semibold" style={{ color: 'var(--text)' }}>
+                    {typeof symLabel === 'function' ? symLabel(row.symbol) : row.symbol}
+                  </span>
+                  <span className="font-mono text-[10px]" style={{ color: 'var(--textDim)' }}>{row.timeframe || 'H1'}</span>
+                  <Pill tone={hurstTone(row.playbook)}>{row.playbook?.replace('_', ' ') || '—'}</Pill>
+                  {row.bias && row.bias !== 'NONE' && (
+                    <span className="font-mono text-[11px] font-semibold" style={{ color: row.bias === 'LONG' ? 'var(--emerald)' : 'var(--coral)' }}>
+                      {row.bias}
+                    </span>
+                  )}
+                  <span className="ml-auto font-mono text-[12px]" style={{ color: 'var(--gold)' }}>
+                    H={row.H != null ? Number(row.H).toFixed(3) : '—'}
+                  </span>
+                  {row.confidenceTier && (
+                    <span className="font-mono text-[9px] px-1.5 py-0.5 rounded uppercase"
+                      style={{
+                        color: row.confidenceTier === 'HIGH' ? 'var(--emerald)' : row.confidenceTier === 'MEDIUM' ? 'var(--gold)' : 'var(--textFaint)',
+                        border: '1px solid var(--border)',
+                      }}
+                    >{row.confidenceTier}</span>
+                  )}
+                </div>
+                <div className="font-mono text-[11px]" style={{ color: 'var(--textDim)' }}>
+                  {row.label || row.regime || '—'}
+                  {row.confidence != null ? ` · conf ${Math.round(row.confidence)}%` : ''}
+                </div>
+                <div className="text-[11px] leading-relaxed" style={{ color: 'var(--textFaint)' }}>
+                  {row.detail || row.note || ''}
+                </div>
+                {row.multi && (row.multi.H4 || row.multi.H1) && (
+                  <div className="flex flex-wrap gap-2 mt-0.5 font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>
+                    {['H1', 'H4'].map((tf) => row.multi[tf] && (
+                      <span key={tf}>
+                        {tf}: H={row.multi[tf].H != null ? Number(row.multi[tf].H).toFixed(2) : '—'} ({row.multi[tf].playbook || '—'})
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {!hasAnyValidContent && (
         <div className="omni-panel p-4">
           <SectionHeader icon={FlaskConical} title="Validation" sub="waits on live signals + closed outcomes" />
@@ -2280,7 +3440,7 @@ function TapeTab({ signals, prices, mode }) {
   const approved = useMemo(() => signals.filter(s => s.gate.status === 'approved').slice(0, 20), [signals]);
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
       <div className="flex items-center gap-4">
         <StatCard label="Approved Signals" value={approved.length} icon={Activity} />
         <StatCard label="Avg Score" value={approved.length ? Math.round(approved.reduce((a, s) => a + s.score, 0) / approved.length) : '—'} icon={GaugeIcon} accent="var(--blue)" />
@@ -2290,22 +3450,24 @@ function TapeTab({ signals, prices, mode }) {
         {mode !== 'live' ? <WaitingForBackend height={200} /> : approved.length === 0 ? (
           <div className="p-4 font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No approved signals yet.</div>
         ) : (
-          <>
-            <div className="grid grid-cols-[70px_46px_44px_1fr_60px] gap-2 px-3 py-2 font-mono text-[9px] uppercase tracking-wider border-b border-t" style={{ color: 'var(--textFaint)', borderColor: 'var(--border)' }}>
-              <span>Symbol</span><span>TF</span><span>Dir</span><span>Entry</span><span>Score</span>
+          <div className="omni-table-scroll">
+            <div className="omni-table-grid" style={{ minWidth: 360 }}>
+              <div className="grid grid-cols-[70px_46px_44px_1fr_60px] gap-2 px-3 py-2 font-mono text-[9px] uppercase tracking-wider border-b border-t" style={{ color: 'var(--textFaint)', borderColor: 'var(--border)' }}>
+                <span>Symbol</span><span>TF</span><span>Dir</span><span>Entry</span><span>Score</span>
+              </div>
+              <div className="max-h-96 overflow-y-auto omni-scroll">
+                {approved.map(s => (
+                  <div key={s.id} className="omni-row grid grid-cols-[70px_46px_44px_1fr_60px] gap-2 px-3 py-2.5 font-mono text-[11px] border-b items-center" style={{ borderColor: 'var(--border)' }}>
+                    <span style={{ color: 'var(--text)' }}>{s.symbol}</span>
+                    <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
+                    <span style={{ color: s.action === 'BUY' ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
+                    <span style={{ color: 'var(--textDim)' }}>{fmtPrice(s.symbol, s.entry)}</span>
+                    <span style={{ color: 'var(--gold)' }}>{s.score}</span>
+                  </div>
+                ))}
+              </div>
             </div>
-            <div className="max-h-96 overflow-y-auto omni-scroll">
-              {approved.map(s => (
-                <div key={s.id} className="omni-row grid grid-cols-[70px_46px_44px_1fr_60px] gap-2 px-3 py-2 font-mono text-[11px] border-b items-center" style={{ borderColor: 'var(--border)' }}>
-                  <span style={{ color: 'var(--text)' }}>{s.symbol}</span>
-                  <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
-                  <span style={{ color: s.action === 'BUY' ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
-                  <span style={{ color: 'var(--textDim)' }}>{fmtPrice(s.symbol, s.entry)}</span>
-                  <span style={{ color: 'var(--gold)' }}>{s.score}</span>
-                </div>
-              ))}
-            </div>
-          </>
+          </div>
         )}
       </div>
     </div>
@@ -2322,7 +3484,7 @@ function DeskTab({ signals, prices, quotes, changes, accountBalance, relativeStr
   }, [signals]);
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard label="Approved Queue" value={approved.length} icon={Activity} />
         <StatCard label="All Signals" value={signals.length} icon={Radio} />
@@ -2340,16 +3502,20 @@ function DeskTab({ signals, prices, quotes, changes, accountBalance, relativeStr
               <div>Empty queue means nothing cleared the gate yet — not a dead system.</div>
             </div>
           ) : (
-            <div className="max-h-72 overflow-y-auto omni-scroll">
-              {approved.map(s => (
-                <div key={s.id} className="omni-row grid grid-cols-[70px_40px_40px_1fr_1fr] gap-2 px-3 py-2 font-mono text-[11px] border-b" style={{ borderColor: 'var(--border)' }}>
-                  <span>{s.symbol}</span>
-                  <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
-                  <span style={{ color: s.action === 'BUY' || s.action === 'LONG' ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
-                  <span style={{ color: 'var(--textDim)' }}>{fmtPrice(s.symbol, s.entry)}</span>
-                  <span style={{ color: 'var(--gold)' }}>{s.score}</span>
+            <div className="omni-table-scroll">
+              <div className="omni-table-grid" style={{ minWidth: 340 }}>
+                <div className="max-h-72 overflow-y-auto omni-scroll">
+                  {approved.map(s => (
+                    <div key={s.id} className="omni-row grid grid-cols-[70px_40px_40px_1fr_1fr] gap-2 px-3 py-2.5 font-mono text-[11px] border-b" style={{ borderColor: 'var(--border)' }}>
+                      <span>{s.symbol}</span>
+                      <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
+                      <span style={{ color: s.action === 'BUY' || s.action === 'LONG' ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
+                      <span style={{ color: 'var(--textDim)' }}>{fmtPrice(s.symbol, s.entry)}</span>
+                      <span style={{ color: 'var(--gold)' }}>{s.score}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              </div>
             </div>
           )}
         </div>
@@ -2422,7 +3588,7 @@ function RiskTab({ prices, changes, accountBalance, relativeStrength, mode }) {
   const ranked = liveRanked || [...SYMBOLS].sort((a, b) => (changes[b] ?? 0) - (changes[a] ?? 0));
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="omni-panel p-4">
           <SectionHeader icon={GaugeIcon} title="Position Size Calculator" />
@@ -2499,17 +3665,246 @@ function RiskTab({ prices, changes, accountBalance, relativeStrength, mode }) {
   );
 }
 
+
+
+const PWA_DONE_KEY = 'omnicee_pwa_done';
+const PWA_DISMISS_KEY = 'omnicee_pwa_dismissed';
+
+function isStandalonePwa() {
+  try {
+    if (window.matchMedia('(display-mode: standalone)').matches) return true;
+    if (window.matchMedia('(display-mode: minimal-ui)').matches) return true;
+    if (window.navigator.standalone === true) return true; // iOS Safari
+  } catch (_) {}
+  return false;
+}
+
+function markPwaDone() {
+  try { localStorage.setItem(PWA_DONE_KEY, '1'); } catch (_) {}
+}
+
+function markPwaDismissed() {
+  try { localStorage.setItem(PWA_DISMISS_KEY, String(Date.now())); } catch (_) {}
+}
+
+function isPwaFinished() {
+  try {
+    // After user deletes the installed app they open the site in the browser again —
+    // clear stale "done" so Install can work once more.
+    if (!isStandalonePwa()) {
+      try { localStorage.removeItem(PWA_DONE_KEY); } catch (_) {}
+    } else {
+      return true;
+    }
+    // Only hide after explicit "Later" for this browser session period (7 days)
+    const dismissedAt = Number(localStorage.getItem(PWA_DISMISS_KEY) || 0);
+    if (dismissedAt && Date.now() - dismissedAt < 7 * 86400000) return true;
+  } catch (_) {}
+  return false;
+}
+
+function isMobileDevice() {
+  try {
+    if (navigator.userAgentData?.mobile) return true;
+  } catch (_) {}
+  const ua = navigator.userAgent || '';
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(ua)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+function isIosSafari() {
+  const ua = navigator.userAgent || '';
+  const iOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const webkit = /WebKit/.test(ua);
+  const notOther = !/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
+  return iOS && webkit && notOther;
+}
+
+/**
+ * PC Chrome/Edge: do not steal beforeinstallprompt — address-bar install icon stays.
+ * Phone after login: one-shot banner; after install or dismiss it never returns.
+ */
+function InstallBanner({ installEvt, onInstalled, loggedIn }) {
+  const [iosHelp, setIosHelp] = useState(false);
+  const [hidden, setHidden] = useState(() => isStandalonePwa() || isPwaFinished());
+
+  useEffect(() => {
+    if (isStandalonePwa()) {
+      markPwaDone();
+      setHidden(true);
+    }
+  }, []);
+
+  if (!loggedIn) return null;
+  if (hidden || isStandalonePwa() || isPwaFinished()) return null;
+
+  const finishForever = () => {
+    markPwaDone();
+    setHidden(true);
+    onInstalled?.();
+  };
+
+  const dismissForever = () => {
+    markPwaDismissed();
+    setHidden(true);
+  };
+
+  const onInstallClick = async () => {
+    if (installEvt?.prompt) {
+      try {
+        await installEvt.prompt();
+        const choice = await installEvt.userChoice;
+        // Accepted or dismissed browser UI — never nag again
+        if (choice?.outcome === 'accepted') finishForever();
+        else dismissForever();
+      } catch (_) {
+        dismissForever();
+      }
+      return;
+    }
+    setIosHelp(true);
+  };
+
+  return (
+    <div className="px-2 pt-2">
+      <div className="omni-panel px-3 py-2 flex flex-wrap items-center gap-2" style={{ borderColor: 'var(--emerald)' }}>
+        <Download size={14} style={{ color: 'var(--emerald)' }} />
+        <div className="flex-1 min-w-[140px] font-mono text-[11px]" style={{ color: 'var(--text)' }}>
+          Install OMNICEE on this device
+          <div className="text-[10px]" style={{ color: 'var(--textFaint)' }}>
+            {installEvt
+              ? 'Tap Install — works offline shell + home screen icon'
+              : isIosSafari()
+                ? 'iPhone: Share → Add to Home Screen'
+                : 'Chrome/Edge: Install button, or address-bar install icon, or menu → Install app'}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onInstallClick}
+          className="font-mono text-[10px] uppercase px-3 py-1.5 rounded font-semibold"
+          style={{ background: 'var(--emerald)', color: '#05070a' }}
+        >
+          {installEvt ? 'Install' : isIosSafari() ? 'How to add' : 'Install'}
+        </button>
+        <button
+          type="button"
+          onClick={dismissForever}
+          className="font-mono text-[10px] px-2 py-1 rounded"
+          style={{ color: 'var(--textFaint)', border: '1px solid var(--border)' }}
+        >
+          Done / Later
+        </button>
+      </div>
+      {iosHelp && (
+        <div className="omni-panel2 mt-1 px-3 py-2 font-mono text-[10px] space-y-1" style={{ color: 'var(--textDim)' }}>
+          <div style={{ color: 'var(--text)' }}>Desktop Chrome / Edge</div>
+          <div>1. Open the site in <b>Chrome</b> or <b>Edge</b> (not a private window)</div>
+          <div>2. Look for the <b>install icon</b> on the right side of the address bar</div>
+          <div>3. Or menu (⋮) → <b>Install OMNICEE</b> / <b>Apps → Install this site as an app</b></div>
+          <div>4. Stay on the page ~20 seconds after login, then try again</div>
+          <div className="pt-2" style={{ color: 'var(--text)' }}>Phone</div>
+          <div>iPhone Safari: Share → Add to Home Screen</div>
+          <div>Android Chrome: menu → Install app</div>
+          <button
+            type="button"
+            className="mt-2 font-mono text-[10px] px-2 py-1 rounded"
+            style={{ background: 'var(--emerald)', color: '#05070a' }}
+            onClick={finishForever}
+          >
+            I installed it — hide this
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+class AppErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    try { console.error('[OMNICEE] UI crash after login:', error, info); } catch (_) {}
+  }
+  render() {
+    if (this.state.error) {
+      const msg = this.state.error?.message || String(this.state.error);
+      return (
+        <div style={{ minHeight: '100vh', background: '#05070a', color: '#eef2f7', padding: 24, fontFamily: 'monospace' }}>
+          <div style={{ maxWidth: 520, margin: '40px auto', border: '1px solid #1c232d', borderRadius: 12, padding: 20, background: '#0b0f14' }}>
+            <div style={{ color: '#f0b429', marginBottom: 8, fontWeight: 700 }}>OMNICEE hit a display error</div>
+            <div style={{ color: '#8b9bb0', fontSize: 12, marginBottom: 12 }}>{msg}</div>
+            <button
+              type="button"
+              onClick={() => { this.setState({ error: null }); try { window.location.reload(); } catch (_) {} }}
+              style={{ background: '#1fe3a8', color: '#05070a', border: 0, padding: '8px 14px', borderRadius: 8, fontWeight: 700, cursor: 'pointer' }}
+            >
+              Reload dashboard
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 /* ── App shell ──────────────────────────────────────────────────────── */
 export default function OmniceeDashboard() {
-  const [activeTab, setActiveTab] = useState('DASH');
+  const [activeTab, setActiveTab] = useState(() => {
+    try {
+      const tab = new URLSearchParams(window.location.search).get('tab');
+      if (tab && ['DASH', 'SIGNALS', 'NEWS', 'VALID', 'MONITOR'].includes(tab)) return tab;
+    } catch (_) {}
+    return 'DASH';
+  });
   const [installEvt, setInstallEvt] = useState(null);
   const [user, setUser] = useState(() => getSession());
+  const [soundOn, setSoundOn] = useState(() => loadSoundPref());
+  const toggleSound = useCallback(() => {
+    setSoundOn(prev => {
+      const next = !prev;
+      saveSoundPref(next);
+      return next;
+    });
+  }, []);
   useEffect(() => {
-    const h = (e) => { e.preventDefault(); setInstallEvt(e); };
-    window.addEventListener('beforeinstallprompt', h);
-    return () => window.removeEventListener('beforeinstallprompt', h);
+    // If already running as installed app, never show install UI again
+    if (isStandalonePwa()) markPwaDone();
+
+    const onPrompt = (e) => {
+      // Capture so our Install button works after user deleted the app.
+      // Chrome still shows address-bar icon in many versions even with preventDefault.
+      e.preventDefault();
+      if (!isPwaFinished()) setInstallEvt(e);
+    };
+    const onInstalled = () => {
+      markPwaDone();
+      setInstallEvt(null);
+    };
+    window.addEventListener('beforeinstallprompt', onPrompt);
+    window.addEventListener('appinstalled', onInstalled);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onPrompt);
+      window.removeEventListener('appinstalled', onInstalled);
+    };
   }, []);
   const feed = useLiveFeed();
+
+  // MUST stay above any conditional return — React crashes (blank screen after login)
+  // if hook count changes between "logged out" and "logged in" renders.
+  const handleCommand = useCallback((raw) => {
+    const val = raw.toUpperCase();
+    const tab = TABS.find(t => t.key === val || t.label.toUpperCase() === val);
+    if (tab) { setActiveTab(tab.key); return; }
+    if (SYMBOLS.includes(val)) { setActiveTab('SIGNALS'); return; }
+  }, []);
 
   if (!user) {
     return (
@@ -2520,33 +3915,45 @@ export default function OmniceeDashboard() {
     );
   }
 
-  const handleCommand = useCallback((raw) => {
-    const val = raw.toUpperCase();
-    const tab = TABS.find(t => t.key === val || t.label.toUpperCase() === val);
-    if (tab) { setActiveTab(tab.key); return; }
-    if (SYMBOLS.includes(val)) { setActiveTab('SIGNALS'); return; }
-  }, []);
-
   return (
-    <div className="omni-root flex flex-col h-full min-h-[640px] w-full text-sm">
+    <AppErrorBoundary>
+    <div className="omni-root text-sm" style={{ background: 'var(--void, #05070a)', color: 'var(--text, #eef2f7)' }}>
       <ThemeStyle />
-      <TopBar now={feed.now} mode={feed.mode} socketLive={feed.socketLive} wakingBackend={feed.wakingBackend} onCommand={handleCommand} />
-      <TickerTape prices={feed.prices} changes={feed.changes} flash={feed.flash} quotes={feed.quotes} />
-      <div className="flex flex-col flex-1 min-h-0">
-        <div className="flex-1 overflow-y-auto omni-scroll">
-          {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} />}
-          {activeTab === 'SIGNALS' && <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} auditLog={feed.auditLog} />}
-          {activeTab === 'INTEL' && <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} calendar={feed.calendar} />}
-          {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}
-          {activeTab === 'DESK' && <DeskTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} stats={feed.stats} accountBalance={feed.accountBalance} relativeStrength={feed.relativeStrength} mode={feed.mode} />}
-          {activeTab === 'VALID' && <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} />}
-          {activeTab === 'MONITOR' && <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} fetchErrors={feed.fetchErrors} />}
+      <TopBar now={feed.now || Date.now()} mode={feed.mode || 'live'} socketLive={!!feed.socketLive} analysisLive={feed.analysisLive} wakingBackend={!!feed.wakingBackend} onCommand={handleCommand} soundOn={soundOn} onToggleSound={toggleSound} />
+      <InstallBanner installEvt={installEvt} loggedIn={!!user} onInstalled={() => setInstallEvt(null)} />
+      {feed.wakingBackend && (
+        <div className="px-4 py-2 font-mono text-[11px] border-b" style={{ borderColor: 'var(--border)', color: 'var(--gold)', background: 'var(--panel2)' }}>
+          Connecting to server… prices and signals appear when the backend is awake (can take up to a minute on free hosting).
         </div>
-        <div className="flex items-center justify-center gap-2 py-1 border-t font-mono text-[8px] uppercase tracking-wider" style={{ borderColor: 'var(--border)', color: 'var(--textFaint)' }}>
+      )}
+      <TickerTape prices={feed.prices || {}} changes={feed.changes || {}} flash={feed.flash || {}} quotes={feed.quotes || {}} />
+      <div className="flex flex-col flex-1 min-h-0" style={{ minHeight: 0 }}>
+        <div className="omni-main omni-scroll">
+          {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} analysisLive={feed.analysisLive} socketLive={feed.socketLive} cryptoVolAlerts={feed.cryptoVolAlerts} />}
+          {activeTab === 'SIGNALS' && (
+            <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} auditLog={feed.auditLog} analysisLive={feed.analysisLive} />
+          )}
+          {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}
+          {activeTab === 'VALID' && (
+            <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} hurstBoard={feed.hurstBoard} />
+          )}
+          {activeTab === 'ANALYSIS' && (
+            <AnalysisTab mode={feed.mode} />
+          )}
+          {activeTab === 'MONITOR' && (
+            <div className="space-y-2">
+              <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} fetchErrors={feed.fetchErrors} analysisLive={feed.analysisLive} socketLive={feed.socketLive} />
+              <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} calendar={feed.calendar} />
+              <DeskTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} stats={feed.stats} accountBalance={feed.accountBalance} relativeStrength={feed.relativeStrength} mode={feed.mode} />
+            </div>
+          )}
+        </div>
+        <div className="omni-hide-xs flex items-center justify-center gap-2 py-0.5 border-t font-mono text-[8px] uppercase tracking-wider" style={{ borderColor: 'var(--border)', color: 'var(--textFaint)' }}>
           <span>OMNICEE</span><span>·</span><span>Developed by James Yelbert</span>
         </div>
         <NavBar active={activeTab} onSelect={setActiveTab} />
       </div>
     </div>
+    </AppErrorBoundary>
   );
 }

@@ -17,6 +17,7 @@ const { createEmailAuthRouter, emailSessionMiddleware, requireEmailAuth, ensureA
 const { FinnhubFeed } = require('../feeds/finnhub-feed');
 const { YahooNewsFeed } = require('../feeds/yahoo-news-feed');
 const { ForexFactoryCalendar } = require('../feeds/forex-factory-calendar');
+const { FMPFeed } = require('../feeds/fmp-feed');
 const { FearGreedFeed } = require('../feeds/fear-greed-feed');
 const { CoinGeckoFeed } = require('../feeds/coingecko-feed');
 const { AdaptiveLearningEngine } = require('../signal-pipeline/adaptive-learning-engine');
@@ -34,6 +35,7 @@ if (!fs.existsSync(path.join(STATIC_ROOT, 'index.html'))) {
 const finnhub = new FinnhubFeed();
 const yahooNews = new YahooNewsFeed();
 const ffCalendar = new ForexFactoryCalendar();
+const fmpFeed = new FMPFeed();
 const fearGreed = new FearGreedFeed();
 const coinGecko = new CoinGeckoFeed();
 const learningEngine = new AdaptiveLearningEngine({ store: db });
@@ -55,6 +57,9 @@ function dashboardReadAuth(req, res, next) {
   const path = (req.path || req.url || '').split('?')[0];
   const publicPricePaths = new Set([
     '/api/market', '/api/candles', '/api/health', '/health',
+    '/api/calendar', '/api/news',
+    '/api/signals', '/api/audit-trail', '/api/outlook',
+    '/api/heatmap', '/api/stats', '/api/levels', '/api/watchlist',
   ]);
   if (req.method === 'GET' && publicPricePaths.has(path)) {
     req.telegramUser = { id: 'public-prices', username: 'public-prices' };
@@ -150,8 +155,13 @@ function createApp() {
     standardHeaders: true,
     legacyHeaders: false,
     skip: (req) => {
-      const p = req.path || '';
-      return p.startsWith('/api/ea/') || p.startsWith('/api/webhooks/') || p.startsWith('/api/auth/');
+      const p = (req.path || req.url || '').split('?')[0];
+      if (p.startsWith('/api/ea/') || p.startsWith('/api/webhooks/') || p.startsWith('/api/auth/')) return true;
+      // Static shell must never be rate-limited or Chrome cannot install the desktop app
+      if (p === '/sw.js' || p === '/manifest.json' || p === '/manifest.webmanifest') return true;
+      if (p.startsWith('/icons/') || p.startsWith('/assets/')) return true;
+      if (p === '/' || p === '/index.html') return true;
+      return false;
     },
   });
   app.use(publicLimiter);
@@ -234,11 +244,20 @@ function createApp() {
     if (!candles || !candles.length) {
       return res.json({ ok: true, symbol, timeframe, candles: [], note: 'No candle history yet — wait for Deriv/MT5.' });
     }
+    // FIX: prefer bid-based OHLC (bidOpen/bidHigh/bidLow/bidClose, only
+    // present on mt5_ea-sourced bars — see onMT5Tick in index.js) over
+    // the mid-based open/high/low/close every candle already carries.
+    // Mid is what the agents/signal pipeline correctly use and this does
+    // not change that — a chart built from mid can never visually match
+    // the bid/ask the ticker shows above it, on every symbol, always, by
+    // definition of what "mid" means. Falls back to mid for non-EA
+    // sources (Deriv/crypto) which don't carry a separate bid/ask.
     const out = candles.slice(-limit).map(c => {
       const raw = Number(c.timestamp ?? c.time);
       if (!Number.isFinite(raw)) return null;
       const time = Math.floor(raw > 1e12 ? raw / 1000 : raw);
-      const open = Number(c.open), high = Number(c.high), low = Number(c.low), close = Number(c.close);
+      const open = Number(c.bidOpen ?? c.open), high = Number(c.bidHigh ?? c.high),
+            low = Number(c.bidLow ?? c.low), close = Number(c.bidClose ?? c.close);
       if (![time, open, high, low, close].every(Number.isFinite)) return null;
       if (time < 1e8) return null;
       return { time, open, high, low, close, volume: Number(c.volume) || 0 };
@@ -282,31 +301,153 @@ function createApp() {
     res.json({ ok: true, outlook: { ...outlook, news } });
   });
 
-  app.get('/api/calendar', dashboardReadAuth, async (_req, res) => {
-    try {
-      const events = await ffCalendar.economicCalendar();
-      const now = Date.now();
-      const upcoming = (events || [])
-        .filter(e => Number.isFinite(e.time) && e.time >= now - 3600000)
-        .sort((a, b) => a.time - b.time)
-        .slice(0, 80)
-        .map(e => ({
-          name: e.name,
-          currency: e.currency,
-          time: e.time,
-          impact: e.impact,
-          forecast: e.forecast,
-          previous: e.previous,
-          source: e.source || 'forex-factory',
-          hoursAway: Math.round((e.time - now) / 3600000 * 10) / 10,
-        }));
-      res.json({ ok: true, events: upcoming, count: upcoming.length });
-    } catch (err) {
-      res.status(503).json({ ok: false, error: err.message, events: [] });
+      app.get('/api/calendar', dashboardReadAuth, async (_req, res) => {
+    const now = Date.now();
+    let events = [];
+    let sources = [];
+    let feedError = null;
+
+    const pushFf = async () => {
+      try {
+        const ff = await ffCalendar.economicCalendar();
+        if (Array.isArray(ff) && ff.length) {
+          events.push(...ff);
+          sources.push('forex-factory');
+        }
+      } catch (err) {
+        feedError = err.message;
+        console.warn('[API] FF calendar:', err.message);
+      }
+    };
+
+    const pushFinnhub = async () => {
+      try {
+        if (!finnhub.enabled()) return;
+        const from = new Date(now - 24 * 3600000).toISOString().slice(0, 10);
+        const to = new Date(now + 8 * 86400000).toISOString().slice(0, 10);
+        const fh = await finnhub.economicCalendar(from, to);
+        if (!Array.isArray(fh) || !fh.length) {
+          console.warn('[API] Finnhub calendar empty', from, to);
+          return;
+        }
+        const impactMap = (v) => {
+          if (v == null) return null;
+          if (typeof v === 'string') return v;
+          const n = Number(v);
+          if (n >= 3) return 'High';
+          if (n === 2) return 'Medium';
+          if (n === 1) return 'Low';
+          return String(v);
+        };
+        for (const e of fh) {
+          const rawTime = e.time || e.date || e.datetime;
+          let time = NaN;
+          if (typeof rawTime === 'number') time = rawTime < 1e12 ? rawTime * 1000 : rawTime;
+          else if (rawTime) time = new Date(rawTime).getTime();
+          if (!Number.isFinite(time)) continue;
+          events.push({
+            name: e.event || e.name || e.title || 'Economic Event',
+            currency: e.currency || e.country || 'USD',
+            time,
+            impact: impactMap(e.impact ?? e.importance),
+            forecast: e.estimate ?? e.forecast ?? null,
+            previous: e.prev ?? e.previous ?? null,
+            source: 'finnhub',
+          });
+        }
+        sources.push('finnhub');
+      } catch (err) {
+        console.warn('[API] Finnhub calendar:', err.message);
+        if (!feedError) feedError = err.message;
+      }
+    };
+
+    await pushFf();
+    if (events.length < 5) await pushFinnhub();
+
+    if (events.length < 5) {
+      try {
+        if (fmpFeed.enabled()) {
+          const from = new Date(now - 24 * 3600000).toISOString().slice(0, 10);
+          const to = new Date(now + 8 * 86400000).toISOString().slice(0, 10);
+          const rows = await fmpFeed.economicCalendar(from, to);
+          if (Array.isArray(rows) && rows.length) {
+            for (const e of rows) {
+              const time = e.date ? new Date(e.date).getTime() : NaN;
+              if (!Number.isFinite(time)) continue;
+              events.push({
+                name: e.event || e.title || 'Economic Event',
+                currency: e.currency || e.country || 'USD',
+                time,
+                impact: e.impact || null,
+                forecast: e.estimate ?? e.forecast ?? null,
+                previous: e.previous ?? e.prev ?? null,
+                source: 'fmp',
+              });
+            }
+            sources.push('fmp');
+          }
+        }
+      } catch (err) {
+        console.warn('[API] FMP calendar:', err.message);
+      }
     }
+
+    // Persist last good week in memory on the process (survives 429 for a while)
+    if (!global.__omniCalendarCache) global.__omniCalendarCache = { events: [], ts: 0 };
+    if (events.length) {
+      global.__omniCalendarCache = { events: [...events], ts: now };
+    } else if (global.__omniCalendarCache.events.length && now - global.__omniCalendarCache.ts < 7 * 86400000) {
+      events = global.__omniCalendarCache.events;
+      sources.push('memory-cache');
+    }
+
+    const seen = new Set();
+    const unique = [];
+    for (const e of events) {
+      if (!Number.isFinite(e.time)) continue;
+      const day = new Date(e.time).toISOString().slice(0, 10);
+      const k = `${String(e.name || '').toLowerCase()}|${e.currency}|${day}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      unique.push(e);
+    }
+
+    let upcoming = unique.filter(e => e.time >= now - 12 * 3600000);
+    if (!upcoming.length && unique.length) {
+      upcoming = [...unique].sort((a, b) => a.time - b.time).slice(0, 50);
+    }
+
+    const rank = (imp) => {
+      const i = String(imp || '').toLowerCase();
+      if (i === 'high' || i === '3') return 0;
+      if (i === 'medium' || i === '2') return 1;
+      return 2;
+    };
+    upcoming.sort((a, b) => rank(a.impact) - rank(b.impact) || a.time - b.time);
+
+    const mapped = upcoming.slice(0, 100).map(e => ({
+      name: e.name,
+      currency: e.currency,
+      time: e.time,
+      impact: e.impact,
+      forecast: e.forecast,
+      previous: e.previous,
+      source: e.source || 'calendar',
+      hoursAway: Math.round((e.time - now) / 3600000 * 10) / 10,
+    }));
+
+    res.json({
+      ok: true,
+      events: mapped,
+      count: mapped.length,
+      rawCount: unique.length,
+      sources,
+      feedError,
+    });
   });
 
-  app.get('/api/levels', dashboardReadAuth, (req, res) => {
+app.get('/api/levels', dashboardReadAuth, (req, res) => {
     const live = getEngines();
     const symbols = live.symbols || [];
     const stores = live.candleStores || {};
@@ -487,7 +628,7 @@ function createApp() {
 
     let news = [];
     try {
-      const y = await yahooNews.getNews({ limit: 40 });
+      const y = await yahooNews.getNews({ limit: 60 });
       if (Array.isArray(y)) news.push(...y.map(n => normalize(n, 'Yahoo Finance')));
     } catch (err) {
       console.warn('[API] Yahoo news failed:', err.message);
@@ -498,10 +639,12 @@ function createApp() {
         ? await finnhub.companyNews(symbol)
         : await finnhub.marketNews(req.query.category || 'general');
       if (!symbol && finnhub.enabled()) {
-        try {
-          const extra = await finnhub.marketNews('forex');
-          if (Array.isArray(extra)) fh = [...(Array.isArray(fh) ? fh : []), ...extra];
-        } catch (_) {}
+        for (const cat of ['forex', 'crypto', 'general']) {
+          try {
+            const extra = await finnhub.marketNews(cat);
+            if (Array.isArray(extra)) fh = [...(Array.isArray(fh) ? fh : []), ...extra];
+          } catch (_) {}
+        }
       }
       if (Array.isArray(fh)) {
         news.push(...fh.map(n => normalize({
@@ -519,15 +662,103 @@ function createApp() {
       console.warn('[API] Finnhub news failed:', err.message);
     }
 
+    // Strict market wire: crypto / FX / macro / commodities that move risk assets
+    const RELEVANT = /bitcoin|btc|ethereum|eth|crypto|defi|stablecoin|binance|coinbase|forex|fx\b|eurusd|gbpusd|usdjpy|currency|dollar|dxy|fed\b|fomc|ecb|boj|boe|cpi|nfp|inflation|interest rate|treasury|yield|gold|xau|oil|wti|brent|opec|nasdaq|s&p|central bank|payroll|etf|sec\b/i;
+    const NOISE = /celebrity|sports|football|nba|movie|netflix|recipe|horoscope|gossip|weather forecast/i;
     const seen = new Set();
     news = news.filter(n => {
       const k = String(n.headline || '').toLowerCase().slice(0, 60);
       if (!k || seen.has(k)) return false;
       seen.add(k);
-      return true;
-    }).sort((a, b) => (b.datetime || 0) - (a.datetime || 0)).slice(0, 40);
+      const text = `${n.headline || ''} ${n.summary || ''} ${n.category || ''}`;
+      if (NOISE.test(text)) return false;
+      return RELEVANT.test(text);
+    }).map(n => {
+      const text = `${n.headline || ''} ${n.summary || ''} ${n.category || ''}`;
+      let rank = 0;
+      if (/bitcoin|btc|ethereum|eth|crypto|solana|binance|coinbase/i.test(text)) rank += 10;
+      if (/forex|eurusd|gbpusd|usdjpy|\bfx\b|currency/i.test(text)) rank += 10;
+      if (/dxy|dollar|fed\b|fomc|ecb|cpi|nfp/i.test(text)) rank += 5;
+      if (/gold|xau|oil|wti/i.test(text)) rank += 3;
+      n._rank = rank;
+      return n;
+    }).sort((a, b) => (b._rank - a._rank) || ((b.datetime || 0) - (a.datetime || 0)))
+      .map(({ _rank, ...rest }) => rest)
+      .slice(0, 60);
 
     res.json({ ok: true, news, sources: ['yahoo', finnhub.enabled() ? 'finnhub' : null].filter(Boolean) });
+  });
+
+  // Hurst analysis layer — path-dependence regime board (not a trade signal)
+  app.get('/api/hurst', dashboardReadAuth, async (_req, res) => {
+    try {
+      const live = getEngines() || {};
+      let board = [];
+      if (live.hurstAnalysis?.getLastBoard) {
+        const last = live.hurstAnalysis.getLastBoard();
+        board = last.board || [];
+      }
+      if ((!board || !board.length) && live.hurstAnalysis?.buildBoard && live.candleStores) {
+        const symbols = Object.keys(live.candleStores || {});
+        board = live.hurstAnalysis.buildBoard(live.candleStores, symbols);
+      }
+      // On-demand from fractal agent stores if still empty
+      if ((!board || !board.length) && live.candleStores) {
+        try {
+          const { buildHurstBoard } = require('../signal-pipeline/hurst-analysis');
+          board = buildHurstBoard(live.candleStores, Object.keys(live.candleStores), ['H1', 'H4']);
+        } catch (_) {}
+      }
+      res.json({ ok: true, layer: 'hurst_analysis', board: board || [], note: 'Analysis only — does not fire trades' });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  // Standalone advanced analysis (Hurst + DFA + FRAMA + Lyapunov) — not wired to signals
+  app.get('/api/analysis', dashboardReadAuth, async (req, res) => {
+    try {
+      const live = getEngines() || {};
+      const { buildAdvancedBoard, analyzeSeries } = require('../signal-pipeline/advanced-analysis');
+      const tfParam = String(req.query.timeframes || 'H1,H4');
+      const timeframes = tfParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+      const symbolQ = String(req.query.symbol || '').toUpperCase().trim();
+
+      if (symbolQ && live.candleStores?.[symbolQ]) {
+        const byTf = live.candleStores[symbolQ];
+        const tfs = {};
+        for (const tf of timeframes) {
+          if (byTf[tf]?.length) tfs[tf] = analyzeSeries(byTf[tf], { symbol: symbolQ, timeframe: tf });
+        }
+        const primary = tfs[timeframes[0]] || Object.values(tfs)[0] || null;
+        return res.json({
+          ok: true,
+          layer: 'advanced_analysis',
+          standalone: true,
+          symbol: symbolQ,
+          result: primary,
+          multi: tfs,
+          note: 'Standalone advanced analysis — independent of signal pipeline',
+        });
+      }
+
+      let symbols = Object.keys(live.candleStores || {});
+      if (req.query.symbols) {
+        symbols = String(req.query.symbols).split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+      }
+      const board = live.candleStores
+        ? buildAdvancedBoard(live.candleStores, symbols, timeframes.length ? timeframes : ['H1', 'H4'])
+        : [];
+      res.json({
+        ok: true,
+        layer: 'advanced_analysis',
+        standalone: true,
+        board,
+        note: 'Standalone advanced analysis — independent of signal pipeline / Hurst engine',
+      });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
   });
 
   app.get('/api/sentiment', dashboardReadAuth, async (_req, res) => {
@@ -761,6 +992,28 @@ function createApp() {
     });
   });
 
+    // Service worker must never be cached by the browser for 24h —
+  // otherwise installed PWAs keep an old SW and never auto-update.
+  app.get('/sw.js', (req, res, next) => {
+    res.set({
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+      'Service-Worker-Allowed': '/',
+      'Content-Type': 'application/javascript; charset=utf-8',
+    });
+    res.sendFile(path.join(STATIC_ROOT, 'sw.js'), (err) => { if (err) next(); });
+  });
+
+  // Web App Manifest — correct MIME helps Chrome/Edge install eligibility
+  app.get(['/manifest.json', '/manifest.webmanifest'], (req, res, next) => {
+    const file = req.path.endsWith('.webmanifest')
+      ? path.join(STATIC_ROOT, 'manifest.webmanifest')
+      : path.join(STATIC_ROOT, 'manifest.json');
+    res.type('application/manifest+json');
+    res.sendFile(file, (err) => { if (err) next(); });
+  });
+
   app.use(express.static(STATIC_ROOT, {
     etag: true,
     maxAge: process.env.NODE_ENV === 'production' ? '5m' : 0,
@@ -865,6 +1118,7 @@ function startServer(config = {}) {
   forward('risk_update', 'risk');
   forward('stats_update', 'stats');
   forward('regime_update', 'regime', payload => db.saveTelemetry({ type: 'regime_update', ...payload }));
+  forward('hurst_update', 'hurst', payload => db.saveTelemetry({ type: 'hurst_update', ...(payload || {}) }));
   forward('telemetry_update', 'telemetry', db.saveTelemetry);
   // FIX: myfxbook/openinsider events previously only reached Telegram — now relayed to the live dashboard as well (see index.js wsBus.emit('intel', ...)).
   forward('intel', 'intel', payload => db.saveTelemetry({ type: 'intel_' + payload.kind, ...payload }));
@@ -872,6 +1126,7 @@ function startServer(config = {}) {
   // Data Integrity Monitor — feed/staleness health, so the dashboard shows a warning banner instead of the trader only finding out a feed died when signals quietly stop arriving.
   forward('feed_health', 'feed_health');
   forward('abnormal_market', 'abnormal_market', payload => db.saveTelemetry({ type: 'abnormal_market', ...payload }));
+  forward('crypto_volatility_alert', 'crypto_volatility_alert', payload => db.saveTelemetry({ type: 'crypto_volatility_alert', ...payload }));
   // FIX: BybitFeed emits liquidation_cascade (real risk event — large forced liquidations in a short window) and index.js relays it onto wsBus, but it was never added to this forward() whitelist — it...
   forward('liquidation_cascade', 'liquidation_cascade', payload => db.saveTelemetry({ type: 'liquidation_cascade', ...payload }));
   // FIX: balance_update was emitted (real data — /api/ea/balance receives the MT5 EA's actual account balance/equity/margin) but had no forward() entry, so it silently never reached any connected browser.

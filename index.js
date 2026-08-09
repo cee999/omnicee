@@ -26,7 +26,7 @@ function requireEnv(name, fallback) {
 const BOT_TOKEN       = requireEnv('TELEGRAM_BOT_TOKEN', '');
 const CHAT_IDS        = (requireEnv('TELEGRAM_CHAT_IDS', '') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
-const SYMBOLS         = (requireEnv('SYMBOLS', 'EURUSD,GBPUSD,USDJPY,XAUUSD,USOIL,UUP,BTCUSDT,ETHUSDT') || '')
+const SYMBOLS         = (requireEnv('SYMBOLS', 'XAUUSD,BTCUSDT,ETHUSDT,EURUSD,GBPUSD,USDJPY,USOIL,UUP') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
 const TIMEFRAMES_STR  = (requireEnv('TIMEFRAMES', 'H1,H4') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
@@ -83,6 +83,7 @@ const { WalkForwardOptimizer }= loadModule('./signal-pipeline/walk-forward-optim
 const { EnsembleEngine }     = loadModule('./signal-pipeline/ensemble-engine',    'EnsembleEngine')    || {};
 const { MicrostructureAgent }= loadModule('./agents/microstructure-agent',        'MicrostructureAgent') || {};
 const { FractalAgent }       = loadModule('./agents/fractal-agent',               'FractalAgent')      || {};
+const { HurstAnalysisEngine }= loadModule('./signal-pipeline/hurst-analysis',    'HurstAnalysisEngine') || {};
 const { DrawdownGuard }      = loadModule('./risk-engine/drawdown-guard',        'DrawdownGuard')     || {};
 const { RiskEngine }         = loadModule('./risk-engine/position-sizer',        'RiskEngine')        || {};
 const { SessionFilter }      = loadModule('./risk-engine/session-filter',        'SessionFilter')     || {};
@@ -98,6 +99,7 @@ const { FinnhubFeed }        = loadModule('./feeds/finnhub-feed',               
 const { FMPFeed }            = loadModule('./feeds/fmp-feed',                    'FMPFeed')           || {};
 const { ForexFactoryCalendar } = loadModule('./feeds/forex-factory-calendar',   'ForexFactoryCalendar') || {};
 const { DerivFeed }            = loadModule('./feeds/deriv-feed',               'DerivFeed')            || {};
+const { CryptoVolatilityAlert } = loadModule('./feeds/crypto-volatility-alert', 'CryptoVolatilityAlert') || {};
 const { CFTCCotFeed }        = loadModule('./feeds/cftc-cot-feed',               'CFTCCotFeed')       || {};
 const { COTReportParser }    = loadModule('./feeds/cot-report-parser',           'COTReportParser')   || {};
 const { OpportunityRanker }  = loadModule('./signal-pipeline/opportunity-ranker', 'OpportunityRanker') || {};
@@ -119,6 +121,13 @@ const conflictResolver = ConflictResolverClass ? new ConflictResolverClass() : n
 const trapDetector        = TrapDetector        ? new TrapDetector()        : null;
 const compressionDetector = CompressionDetector ? new CompressionDetector() : null;
 const abnormalMarketDetector = AbnormalMarketDetector ? new AbnormalMarketDetector() : null;
+const cryptoVolAlert = CryptoVolatilityAlert
+  ? new CryptoVolatilityAlert({
+      symbols: (SYMBOLS || []).filter(s =>
+        /USDT$|USDC$|BTC|ETH|XAUUSD|^GOLD$/i.test(s)
+      ),
+    })
+  : null;
 const timeCycleEngine     = TimeCycleEngine     ? new TimeCycleEngine()     : null;
 const strategySelector    = StrategySelector    ? new StrategySelector()    : null;
 const candleIntelligence  = CandleIntelligence  ? new CandleIntelligence()  : null;
@@ -142,6 +151,116 @@ const agentPool = {};
 const lastVotes = {};
 
 const inFlight = new Set();
+/** Live analysis throttle state */
+const lastAnalysisAt = new Map();   // key → last run ms
+const lastAnalysisScore = new Map(); // key → last final score (0–100)
+const lastTickAt = new Map();        // symbol → last accepted tick ms
+const LIVE_ANALYSIS_INTERVAL_MS = Number(process.env.ANALYSIS_INTERVAL_MS || 45000);
+const ADAPTIVE_THROTTLE = process.env.ADAPTIVE_THROTTLE !== 'false'; // default ON
+
+/**
+ * Adaptive throttle interval (ms) per symbol:timeframe.
+ * Fast when: high volatility, killzone session, near minScore, active ticks.
+ * Slow when: quiet range, off-hours, cold start with thin data, system busy.
+ */
+function getAdaptiveAnalysisIntervalMs(symbol, timeframe) {
+  const key = `${symbol}:${timeframe}`;
+  // Floor / ceiling (env overrides)
+  const floorMs = Number(process.env.LIVE_ANALYSIS_MIN_MS || 8000);   // never faster than 8s
+  const ceilMs  = Number(process.env.LIVE_ANALYSIS_MAX_MS || 120000); // never slower than 2m
+
+  if (!ADAPTIVE_THROTTLE) {
+    return Number(process.env.LIVE_ANALYSIS_MIN_MS || 20000);
+  }
+
+  let ms = 30000; // baseline 30s
+
+  // 1) Session quality (UTC)
+  const utcHour = new Date().getUTCHours();
+  const utcDay = new Date().getUTCDay();
+  const isWeekend = utcDay === 0 || utcDay === 6;
+  const isCrypto = /USDT|USDC|BTC$|ETH$/.test(symbol);
+  if (utcHour >= 13 && utcHour < 16) ms *= 0.55;       // London/NY overlap — hottest
+  else if (utcHour >= 8 && utcHour < 13) ms *= 0.7;    // London
+  else if (utcHour >= 16 && utcHour < 21) ms *= 0.75;  // NY
+  else if (utcHour >= 0 && utcHour < 8) ms *= 1.25;    // Asia
+  else ms *= 1.5;                                       // thin / rollover
+  if (isWeekend && !isCrypto) ms *= 1.6;              // FX weekend dead
+
+  // 2) Realized volatility from last ~20 bars (range/close)
+  const candles = candleStores[symbol]?.[timeframe];
+  if (candles && candles.length >= 10) {
+    const slice = candles.slice(-20);
+    let sum = 0;
+    for (const c of slice) {
+      const mid = (Number(c.high) + Number(c.low)) / 2 || Number(c.close) || 0;
+      if (mid > 0) sum += (Number(c.high) - Number(c.low)) / mid;
+    }
+    const avgRange = sum / slice.length;
+    if (avgRange > 0.004) ms *= 0.5;       // very active
+    else if (avgRange > 0.002) ms *= 0.7;  // active
+    else if (avgRange < 0.0006) ms *= 1.5; // quiet
+  }
+
+  // 3) Near-miss: last score close to fire threshold → check more often
+  const score = lastAnalysisScore.get(key);
+  if (score != null) {
+    const gap = MIN_SCORE - score;
+    if (score >= MIN_SCORE) ms *= 0.6;          // already firing zone — stay tight
+    else if (gap <= 8) ms *= 0.55;              // very near miss
+    else if (gap <= 15) ms *= 0.75;             // near miss
+    else if (score < 30) ms *= 1.2;             // cold / no setup
+  }
+
+  // 4) Tick velocity: fresh ticks → slightly faster
+  const tickAge = Date.now() - (lastTickAt.get(symbol) || 0);
+  if (tickAge < 3000) ms *= 0.85;
+  else if (tickAge > 60000) ms *= 1.3; // stale feed
+
+  // 5) System load: many in-flight analyses → back off
+  if (inFlight.size >= 4) ms *= 1.5;
+  else if (inFlight.size >= 2) ms *= 1.15;
+
+  // 6) Reason boost applied by caller via multiplier on return — clamp here
+  ms = Math.max(floorMs, Math.min(ceilMs, Math.round(ms)));
+  return ms;
+}
+
+/**
+ * Schedule analysis like a live chart: on ticks + heartbeat, with adaptive gaps.
+ */
+function scheduleLiveAnalysis(symbol, reason = 'tick') {
+  if (!SYMBOLS.includes(symbol)) return;
+  if (reason === 'tick' || reason === 'mt5_ea' || reason === 'deriv') {
+    lastTickAt.set(symbol, Date.now());
+  }
+  for (const tf of TIMEFRAMES_STR) {
+    const key = `${symbol}:${tf}`;
+    const n = candleStores[symbol]?.[tf]?.length || 0;
+    const minBars = SIGNAL_SOFT_GATES ? 40 : 50;
+    if (n < minBars) continue;
+    if (inFlight.has(key)) continue;
+
+    let needMs = getAdaptiveAnalysisIntervalMs(symbol, tf);
+    // Event urgency
+    if (reason === 'boot' || reason === 'seed') needMs = Math.min(needMs, 5000);
+    if (reason === 'close' || reason === 'bar_close') needMs = Math.min(needMs, 8000);
+    if (reason === 'heartbeat') {
+      // heartbeat only runs if overdue relative to adaptive interval
+    }
+
+    const last = lastAnalysisAt.get(key) || 0;
+    if (Date.now() - last < needMs) continue;
+
+    lastAnalysisAt.set(key, Date.now());
+    setImmediate(() => {
+      runAnalysisCycle(symbol, tf).catch(e =>
+        log.warn(`live analysis [${key}] (${reason}): ${e.message}`)
+      );
+    });
+  }
+}
+
 
 function initAgentsForSymbol(symbol) {
   agentPool[symbol] = {
@@ -185,8 +304,18 @@ async function runAnalysisCycle(symbol, timeframe) {
 
   try {
     const candles = candleStores[symbol]?.[timeframe];
-    if (!candles || candles.length < 50) {
-      log.debug(`${key}: not enough candles (${candles?.length || 0}/50) — waiting`);
+    const minBars = SIGNAL_SOFT_GATES ? 40 : 50;
+    if (!candles || candles.length < minBars) {
+      log.debug(`${key}: not enough candles (${candles?.length || 0}/${minBars}) — waiting`);
+      try {
+        auditTrail?.record?.({
+          symbol, timeframe, signalFired: false,
+          blockedReason: `need_${minBars}_candles_have_${candles?.length || 0}`,
+          score: 0,
+          reasons: [`candles ${candles?.length || 0}/${minBars}`],
+          gatesFailed: ['candle_history'],
+        });
+      } catch (_) {}
       return;
     }
 
@@ -208,6 +337,17 @@ async function runAnalysisCycle(symbol, timeframe) {
     if (!agents) return;
 
     log.info(`[Analysis] ${key} — ${candles.length} candles`);
+    if (wsBus) {
+      try {
+        wsBus.emit('telemetry_update', {
+          type: 'analysis_live',
+          symbol,
+          timeframe,
+          candles: candles.length,
+          timestamp: Date.now(),
+        });
+      } catch (_) {}
+    }
 
     const [smcResult, mtfResult, momResult, volumeResult, microResult, fractalResult] = await Promise.all([
       agents.smc?.analyze(candles)
@@ -274,6 +414,16 @@ async function runAnalysisCycle(symbol, timeframe) {
 
     if (wsBus) {
       wsBus.emit('regime_update', { symbol, timeframe, ...regime });
+    }
+
+    // Hurst analysis layer — independent of signal scoring / agent votes
+    if (hurstAnalysis && candleStores) {
+      try {
+        const board = hurstAnalysis.buildBoard(candleStores, SYMBOLS);
+        if (wsBus) wsBus.emit('hurst_update', { board, ts: Date.now() });
+      } catch (e) {
+        log.debug(`Hurst board: ${e.message}`);
+      }
     }
 
     // FIX: institutionalRiskManager was instantiated + connected but never fed live data — setRegime()/updateLiquidity() had zero call sites, so its regime-aware Kelly multiplier and liquidity check were...
@@ -355,6 +505,12 @@ async function runAnalysisCycle(symbol, timeframe) {
       currentPrice,
       timestamp: Date.now(),
     });
+
+    // Feed adaptive throttle: near-miss scores → shorter intervals next time
+    try {
+      const sc = signal?.score?.final ?? (typeof signal?.score === 'number' ? signal.score : 0);
+      lastAnalysisScore.set(key, Number(sc) || 0);
+    } catch (_) {}
 
     if (opportunityRanker) {
       opportunityRanker.update(symbol, {
@@ -1083,7 +1239,7 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
   });
 
   if (isClosed) {
-    setImmediate(() => runAnalysisCycle(symbol, timeframe));
+    setImmediate(() => { lastAnalysisAt.delete(`${symbol}:${timeframe}`); scheduleLiveAnalysis(symbol, 'bar_close'); });
   }
 }
 
@@ -1122,6 +1278,41 @@ function onLivePrice(symbol, price, { change = null, bias = null, source = 'cand
   const b = Number.isFinite(bid) ? bid : (prev?.bid ?? null);
   const a = Number.isFinite(ask) ? ask : (prev?.ask ?? null);
   lastPriceBySymbol[symbol] = { price, bid: b, ask: a, source, rank, ts: now };
+
+  // Always-on analysis: same spirit as live chart — rescore while ticks flow
+  try { scheduleLiveAnalysis(symbol, source); } catch (_) {}
+
+  // Crypto volatility alerts (BTC/ETH short-window % moves)
+  if (cryptoVolAlert && cryptoVolAlert.watches(symbol)) {
+    try {
+      const alert = cryptoVolAlert.onPrice(symbol, price, now);
+      if (alert && wsBus) {
+        const channel = alert.assetClass === 'gold' ? 'gold_volatility_alert' : 'crypto_volatility_alert';
+        wsBus.emit('crypto_volatility_alert', alert); // UI listens on one channel
+        wsBus.emit(channel, alert);
+        wsBus.emit('telemetry_update', { type: alert.type, ...alert });
+        log.warn(`[VolAlert] ${alert.message}`);
+        if (dispatcher?.sendMessage && (alert.severity === 'high' || alert.severity === 'severe')) {
+          const title = alert.assetClass === 'gold' ? 'Gold volatility' : 'Crypto volatility';
+          dispatcher.sendMessage(
+            `⚡ *${title}*\n${alert.symbol} ${alert.direction} ${alert.absPct}% / ${alert.window}\nPrice ${alert.price}`
+          ).catch(() => {});
+        }
+        try {
+          auditTrail?.record?.({
+            symbol, timeframe: alert.window, signalFired: false,
+            blockedReason: `vol_${alert.assetClass}_${alert.direction}_${alert.absPct}pct`,
+            score: alert.absPct,
+            reasons: [alert.message],
+            gatesFailed: [],
+            gatesPassed: ['volatility_watch'],
+          });
+        } catch (_) {}
+      }
+    } catch (e) {
+      log.debug(`cryptoVolAlert: ${e.message}`);
+    }
+  }
 
   if (executionEngine?.onPrice) {
     try { executionEngine.onPrice(symbol, price, null); }
@@ -1174,6 +1365,21 @@ function onMT5Tick(symbol, price, { bid, ask, timestamp } = {}) {
       mt5CandleBuilders[key] = {
         timestamp: bucketStart, open: price, high: price, low: price, close: price,
         volume: 0, bid, ask, source: 'mt5_ea',
+        // FIX: chart-vs-ticker mismatch — candleStores' OHLC here is built
+        // from `price`, which api/server.js's /api/ea/prices computes as
+        // (bid+ask)/2 (mid), a deliberate choice for technical analysis
+        // (keeps indicators clean of spread noise) that stays correct and
+        // unchanged for the agents. But the ticker/header display bid and
+        // ask as two separate numbers, and mid sits between them by
+        // definition — so the chart's close could never equal either
+        // number the user is actually looking at above it, on every
+        // symbol, all the time, not just occasionally. MT5 terminals plot
+        // bid for exactly this reason. Track bid's own O/H/L/C alongside
+        // the existing mid-based fields (additive, nothing here changes
+        // what candleStores' open/high/low/close mean or what the agents
+        // read) so /api/candles can serve bid-accurate bars without
+        // touching signal generation's price basis at all.
+        bidOpen: bid, bidHigh: bid, bidLow: bid, bidClose: bid,
       };
     } else {
       prev.high = Math.max(prev.high, price);
@@ -1181,6 +1387,12 @@ function onMT5Tick(symbol, price, { bid, ask, timestamp } = {}) {
       prev.close = price;
       prev.bid = bid;
       prev.ask = ask;
+      if (Number.isFinite(bid)) {
+        if (prev.bidOpen == null) prev.bidOpen = bid;
+        prev.bidHigh = prev.bidHigh != null ? Math.max(prev.bidHigh, bid) : bid;
+        prev.bidLow = prev.bidLow != null ? Math.min(prev.bidLow, bid) : bid;
+        prev.bidClose = bid;
+      }
     }
 
     try { onCandle({ symbol, timeframe: tf, candle: { ...mt5CandleBuilders[key] }, isClosed: false }); }
@@ -1190,7 +1402,7 @@ function onMT5Tick(symbol, price, { bid, ask, timestamp } = {}) {
   onLivePrice(symbol, price, { source: 'mt5_ea', bid, ask });
 }
 
-let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, institutionalGates,
+let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, hurstAnalysis, institutionalGates,
     adaptiveLearning, drawdownGuard, riskEngine, sessionFilter, correlationFilter, memory,
     monteCarlo, bayesianEng, statValidator, walkForward, ensembleEng,
     signalMonitor, institutionalRiskManager, myfxbookFeed, openInsiderFeed,
@@ -1334,6 +1546,10 @@ function buildSingletons() {
 
   if (RegimeEngine) {
     regimeEngine = new RegimeEngine({ lookback: 120 });
+  if (HurstAnalysisEngine) {
+    hurstAnalysis = new HurstAnalysisEngine({ timeframes: ['H1', 'H4'] });
+    log.info('Hurst analysis layer online (separate from signal votes)');
+  }
     log.info('RegimeEngine created');
   }
 
@@ -1360,9 +1576,11 @@ function buildSingletons() {
   if (InstitutionalGates) {
     institutionalGates = new InstitutionalGates({
       minScore: MIN_SCORE,
-      minRR: 1.5,
+      minRR: SIGNAL_SOFT_GATES ? 1.2 : 1.5,
       maxRiskPct: Math.min(RISK_PCT, 2.0),
-      minRegimeTradeability: 50,
+      minRegimeTradeability: SIGNAL_SOFT_GATES ? 35 : 50,
+      requireEnsemble: !SIGNAL_SOFT_GATES,
+      minAgentConsensus: SIGNAL_SOFT_GATES ? 0.35 : 0.5,
     });
     log.info('InstitutionalGates created');
   }
@@ -1643,7 +1861,7 @@ function buildSingletons() {
       drawdownGuard, sessionFilter, riskEngine, institutionalRiskManager,
       opportunityRanker, relativeStrength, dataIntegrityMonitor, executionEngine,
       auditTrail, symbolManager, cotParser, memory,
-      regimeEngine, candleStores, symbols: SYMBOLS,
+      regimeEngine, hurstAnalysis, candleStores, symbols: SYMBOLS,
       onLivePrice, onMT5Tick,
       lastPriceBySymbol,
     });
@@ -1671,15 +1889,18 @@ function buildFeeds() {
       }
       onLivePrice(symbol, price, { source: 'deriv', change, bid, ask });
       try {
-        if (typeof onMT5Tick === 'function') {
-        }
-        for (const tf of ['M5', 'H1']) {
+        for (const tf of TIMEFRAMES_STR) {
           if (!candleStores[symbol]) candleStores[symbol] = {};
           const arr = candleStores[symbol][tf] || (candleStores[symbol][tf] = []);
-          const ms = tf === 'M5' ? 300000 : 3600000;
+          const ms = ({ M1: 60e3, M5: 300e3, M15: 900e3, H1: 3600e3, H4: 14400e3, D1: 86400e3 })[tf] || 3600e3;
           const bucket = Math.floor(Date.now() / ms) * ms;
           const lastBar = arr[arr.length - 1];
           if (!lastBar || lastBar.timestamp !== bucket) {
+            if (lastBar && lastBar.isClosed === false) {
+              lastBar.isClosed = true;
+              // Closed bar → analysis (same path as MT5)
+              try { onCandle({ symbol, timeframe: tf, candle: { ...lastBar }, isClosed: true }); } catch (_) {}
+            }
             arr.push({ open: price, high: price, low: price, close: price, volume: 0, timestamp: bucket, isClosed: false, source: 'deriv' });
             if (arr.length > 500) arr.splice(0, arr.length - 500);
           } else {
@@ -1700,6 +1921,10 @@ function buildFeeds() {
       if (candles.length > (prev.length * 0.5) || prev.length < 40) {
         candleStores[symbol][timeframe] = candles.slice(-500);
         log.info(`Deriv candles: ${symbol} ${timeframe} ${candles.length} bars`);
+        // CRITICAL: history seed must run analysis — isClosed path only fires on live bar close
+        if (TIMEFRAMES_STR.includes(timeframe) && candles.length >= (SIGNAL_SOFT_GATES ? 40 : 50)) {
+          setImmediate(() => { lastAnalysisAt.delete(`${symbol}:${timeframe}`); scheduleLiveAnalysis(symbol, 'bar_close'); });
+        }
       }
     });
     derivFeed.on('connected', () => log.info(`DerivFeed connected (app_id=${process.env.DERIV_APP_ID || '1089'}) — ticks + OHLC; MT5 overrides when online`));
@@ -1788,6 +2013,21 @@ async function main() {
   }
 
   const feeds = buildFeeds();
+  // Always-on analysis loop (chart-like): keeps checking while server is up
+  setInterval(() => {
+    for (const symbol of SYMBOLS) {
+      scheduleLiveAnalysis(symbol, 'heartbeat');
+    }
+  }, LIVE_ANALYSIS_INTERVAL_MS);
+  // Kick once shortly after boot so first Deriv seed is scored quickly
+  setTimeout(() => {
+    for (const symbol of SYMBOLS) scheduleLiveAnalysis(symbol, 'boot');
+  // boot-analysis-kick: again at 45s and 90s once candles exist from MT5/Deriv
+  setTimeout(() => { for (const s of SYMBOLS) scheduleLiveAnalysis(s, 'boot'); }, 45000);
+  setTimeout(() => { for (const s of SYMBOLS) scheduleLiveAnalysis(s, 'boot'); }, 90000);
+  }, 15000);
+  log.info(`Live analysis: adaptive throttle ${ADAPTIVE_THROTTLE ? 'ON' : 'OFF'} · heartbeat ${LIVE_ANALYSIS_INTERVAL_MS/1000}s · symbols ${SYMBOLS.join(',')}`);
+
   const keepUrl = process.env.KEEPALIVE_URL || process.env.RENDER_EXTERNAL_URL;
   if (keepUrl) {
     setInterval(() => {
@@ -1808,12 +2048,22 @@ async function main() {
   let connected = 0;
   for (const f of feeds) {
     try {
-      await f.instance.connect();
+      if (typeof f.instance.connect === 'function') {
+        await f.instance.connect();
+      } else if (typeof f.instance.start === 'function') {
+        f.instance.start();
+      }
       f.seed?.();
       log.info(`${f.name} connected`);
       connected++;
     } catch (err) {
-      log.error(`${f.name} connection failed: ${err.message}`);
+      // Deriv may already be started in buildFeeds(); do not treat as fatal
+      if (typeof f.instance.isConnected === 'function' && f.instance.isConnected()) {
+        log.info(`${f.name} already live`);
+        connected++;
+      } else {
+        log.error(`${f.name} connection failed: ${err.message}`);
+      }
     }
   }
 

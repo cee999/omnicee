@@ -96,57 +96,172 @@ class RSAnalysis {
   }
 }
 
+/**
+ * Hardened Detrended Fluctuation Analysis (DFA).
+ * Improvements over basic linear DFA:
+ *  - Dynamic logarithmic scale selection based on series length
+ *  - Minimum segment count and scale-span guards
+ *  - Linear + optional quadratic local detrending (order=1|2)
+ *  - R² of the log-log fit used for confidence (not just scale count)
+ *  - Outlier-resistant F(s) via discarding near-zero segments
+ *  - Explicit alpha bands aligned with Hurst interpretation
+ */
 class DFAnalysis {
-  static analyze(values) {
+  static analyze(values, opts = {}) {
     const n = values.length;
-    if (n < 50) return { alpha: 0.5, confidence: 0, note: 'Insufficient data' };
-
-    const mean = avg(values);
-    const integrated = [];
-    let sum = 0;
-    for (const v of values) {
-      sum += (v - mean);
-      integrated.push(sum);
+    if (n < 50) {
+      return {
+        alpha: 0.5,
+        rSquared: 0,
+        confidence: 0,
+        regime: 'INSUFFICIENT',
+        note: 'Insufficient data for DFA (need ≥50 returns)',
+        scalesUsed: 0,
+      };
     }
 
-    const scales = [8, 12, 16, 20, 30, 40, 50].filter(s => s <= Math.floor(n / 4));
-    if (scales.length < 3) return { alpha: 0.5, confidence: 0, note: 'Insufficient scales' };
+    const order = opts.order === 2 ? 2 : 1; // linear default; quadratic optional
+    const minScale = Math.max(8, opts.minScale || 8);
+    const maxScale = Math.min(Math.floor(n / 4), opts.maxScale || Math.floor(n / 4));
+    if (maxScale < minScale * 2) {
+      return {
+        alpha: 0.5,
+        rSquared: 0,
+        confidence: 0,
+        regime: 'INSUFFICIENT',
+        note: 'Series too short for meaningful DFA scales',
+        scalesUsed: 0,
+      };
+    }
+
+    // Integrated (profile) series
+    const mean = avg(values);
+    const integrated = new Array(n);
+    let sum = 0;
+    for (let i = 0; i < n; i++) {
+      sum += values[i] - mean;
+      integrated[i] = sum;
+    }
+
+    // Log-spaced scales with enough points for a stable fit
+    const scales = [];
+    let s = minScale;
+    const growth = 1.35;
+    while (s <= maxScale) {
+      scales.push(Math.floor(s));
+      s *= growth;
+    }
+    // Deduplicate after flooring
+    const uniqueScales = [...new Set(scales)].filter(sc => sc >= minScale && sc <= maxScale);
+    if (uniqueScales.length < 4) {
+      return {
+        alpha: 0.5,
+        rSquared: 0,
+        confidence: 0,
+        regime: 'INSUFFICIENT',
+        note: 'Too few valid scales for DFA regression',
+        scalesUsed: uniqueScales.length,
+      };
+    }
 
     const logScales = [];
     const logF = [];
 
-    for (const s of scales) {
-      const nSegments = Math.floor(n / s);
+    for (const sc of uniqueScales) {
+      const nSegments = Math.floor(n / sc);
+      if (nSegments < 4) continue; // need enough segments for stable F(s)
+
       let totalFluctuation = 0;
+      let validSegs = 0;
 
       for (let seg = 0; seg < nSegments; seg++) {
-        const segment = integrated.slice(seg * s, (seg + 1) * s);
+        const start = seg * sc;
+        const segment = integrated.slice(start, start + sc);
+        if (segment.length < sc) continue;
 
-        const xM = (s - 1) / 2;
-        const yM = avg(segment);
-        let num = 0, den = 0;
-        for (let i = 0; i < s; i++) {
-          num += (i - xM) * (segment[i] - yM);
-          den += (i - xM) ** 2;
+        // Local polynomial detrend (order 1 or 2)
+        let residualVar = 0;
+        if (order === 1) {
+          const xM = (sc - 1) / 2;
+          const yM = avg(segment);
+          let num = 0, den = 0;
+          for (let i = 0; i < sc; i++) {
+            num += (i - xM) * (segment[i] - yM);
+            den += (i - xM) ** 2;
+          }
+          const slope = den ? num / den : 0;
+          const intercept = yM - slope * xM;
+          for (let i = 0; i < sc; i++) {
+            const trend = intercept + slope * i;
+            residualVar += (segment[i] - trend) ** 2;
+          }
+        } else {
+          // Quadratic least-squares (x, x²)
+          // Solve normal equations for a + b x + c x²
+          let Sx = 0, Sx2 = 0, Sx3 = 0, Sx4 = 0, Sy = 0, Sxy = 0, Sx2y = 0;
+          for (let i = 0; i < sc; i++) {
+            const x = i;
+            const y = segment[i];
+            const x2 = x * x;
+            Sx += x;
+            Sx2 += x2;
+            Sx3 += x2 * x;
+            Sx4 += x2 * x2;
+            Sy += y;
+            Sxy += x * y;
+            Sx2y += x2 * y;
+          }
+          // 3x3 system; use Cramer's / elimination
+          const det =
+            sc * (Sx2 * Sx4 - Sx3 * Sx3) -
+            Sx * (Sx * Sx4 - Sx3 * Sx2) +
+            Sx2 * (Sx * Sx3 - Sx2 * Sx2);
+          if (Math.abs(det) < 1e-12) continue;
+          const a =
+            (Sy * (Sx2 * Sx4 - Sx3 * Sx3) -
+              Sx * (Sxy * Sx4 - Sx3 * Sx2y) +
+              Sx2 * (Sxy * Sx3 - Sx2 * Sx2y)) / det;
+          const b =
+            (sc * (Sxy * Sx4 - Sx3 * Sx2y) -
+              Sy * (Sx * Sx4 - Sx3 * Sx2) +
+              Sx2 * (Sx * Sx2y - Sxy * Sx2)) / det;
+          const c =
+            (sc * (Sx2 * Sx2y - Sxy * Sx3) -
+              Sx * (Sx * Sx2y - Sxy * Sx2) +
+              Sy * (Sx * Sx3 - Sx2 * Sx2)) / det;
+          for (let i = 0; i < sc; i++) {
+            const trend = a + b * i + c * i * i;
+            residualVar += (segment[i] - trend) ** 2;
+          }
         }
-        const slope = den ? num / den : 0;
-        const intercept = yM - slope * xM;
 
-        let detrendedVar = 0;
-        for (let i = 0; i < s; i++) {
-          const trend = intercept + slope * i;
-          detrendedVar += (segment[i] - trend) ** 2;
+        const segVar = residualVar / sc;
+        if (segVar > 1e-18) {
+          totalFluctuation += segVar;
+          validSegs++;
         }
-        totalFluctuation += detrendedVar / s;
       }
 
-      const F = Math.sqrt(totalFluctuation / nSegments);
-      if (F > 0) {
-        logScales.push(Math.log(s));
+      if (validSegs < 3) continue;
+      const F = Math.sqrt(totalFluctuation / validSegs);
+      if (F > 0 && Number.isFinite(F)) {
+        logScales.push(Math.log(sc));
         logF.push(Math.log(F));
       }
     }
 
+    if (logScales.length < 3) {
+      return {
+        alpha: 0.5,
+        rSquared: 0,
+        confidence: 0,
+        regime: 'INSUFFICIENT',
+        note: 'DFA regression failed (too few valid F(s) points)',
+        scalesUsed: logScales.length,
+      };
+    }
+
+    // Linear regression log F ~ alpha * log s
     const xMean = avg(logScales);
     const yMean = avg(logF);
     let num = 0, den = 0;
@@ -156,11 +271,31 @@ class DFAnalysis {
     }
     const alpha = den ? num / den : 0.5;
 
+    // R² for confidence
+    const fitted = logScales.map(x => yMean + alpha * (x - xMean));
+    const ssTot = logF.reduce((s, y) => s + (y - yMean) ** 2, 0);
+    const ssRes = logF.reduce((s, y, i) => s + (y - fitted[i]) ** 2, 0);
+    const rSquared = ssTot > 0 ? Math.max(0, 1 - ssRes / ssTot) : 0;
+
+    // Confidence combines fit quality (R²) + number of scales
+    const scaleScore = Math.min(1, logScales.length / 8);
+    const confidence = round(Math.min(100, rSquared * 85 + scaleScore * 15), 1);
+
+    let regime = 'RANDOM';
+    if (alpha >= 0.58) regime = 'LONG_RANGE_CORRELATED';
+    else if (alpha <= 0.42) regime = 'ANTI_CORRELATED';
+
     return {
       alpha: round(alpha, 4),
-      regime: alpha > 0.6 ? 'LONG_RANGE_CORRELATED' : alpha < 0.4 ? 'ANTI_CORRELATED' : 'RANDOM',
-      confidence: round(Math.min(100, logScales.length * 15), 1),
-      note: `DFA α=${round(alpha, 3)} — ${alpha > 0.6 ? 'long-range dependence' : alpha < 0.4 ? 'anti-persistent' : 'near random'}`,
+      rSquared: round(rSquared, 4),
+      confidence,
+      regime,
+      scalesUsed: logScales.length,
+      order,
+      note: `DFA α=${round(alpha, 3)} (R²=${round(rSquared, 2)}) — ${
+        alpha >= 0.58 ? 'long-range dependence / persistent' :
+        alpha <= 0.42 ? 'anti-persistent / mean-reverting' : 'near random-walk'
+      }`,
     };
   }
 }
@@ -395,4 +530,4 @@ class FractalAgent extends EventEmitter {
   }
 }
 
-module.exports = { FractalAgent };
+module.exports = { FractalAgent, RSAnalysis, DFAnalysis };
