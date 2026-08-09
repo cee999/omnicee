@@ -1,0 +1,62 @@
+name: Validate web-only notification migration
+
+on:
+  push:
+    branches:
+      - refactor/web-only-notifications
+
+permissions:
+  contents: write
+
+jobs:
+  migrate-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply Telegram purge
+        run: python3 .github/purge-telegram.py
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+
+      - name: Validate JavaScript
+        run: |
+          node --check index.js
+          node --check api/server.js
+          node --check api/web-auth.js
+          node --check api/web-notifier.js
+          node --check signal-pipeline/manual-mode.js
+
+      - name: Validate web client
+        working-directory: webapp-react
+        run: |
+          npm install --ignore-scripts
+          npm run build
+
+      - name: Verify Telegram is gone
+        run: |
+          if grep -Rni --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=build 'telegram' .; then
+            echo 'Telegram references remain.'
+            exit 1
+          fi
+
+      - name: Commit migration
+        run: |
+          git config user.name 'OMNICEE Production Bot'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No migration changes.'
+            exit 0
+          fi
+          git commit -m 'refactor: purge Telegram and switch to web notifications'
+          git push origin HEAD:refactor/web-only-notifications
