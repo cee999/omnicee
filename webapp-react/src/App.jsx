@@ -2633,7 +2633,7 @@ function IntelTab({ now, outlook, mode, calendar }) {
 function NewsTab({ news, mode }) {
   const live = mode === 'live' && Array.isArray(news);
   const [cat, setCat] = useState('all');
-  const [selected, setSelected] = useState(null); // in-app reader — never leave the app
+  const [selected, setSelected] = useState(null);
   const CATS = [
     { id: 'all', label: 'All markets' },
     { id: 'crypto', label: 'Crypto' },
@@ -2642,24 +2642,44 @@ function NewsTab({ news, mode }) {
     { id: 'gold', label: 'Gold' },
     { id: 'oil', label: 'Oil' },
   ];
-  const MARKET_RE = /bitcoin|btc|ethereum|eth|crypto|defi|stablecoin|sec\b|etf|binance|coinbase|forex|fx\b|eurusd|gbpusd|usdjpy|currency|dollar|dxy|fed\b|fomc|ecb|boj|boe|cpi|nfp|inflation|interest rate|treasury|yield|gold|xau|oil|wti|brent|opec|nasdaq|s&p|liquidity|central bank|risk.?on|risk.?off|payroll/i;
+  const MARKET_RE = /bitcoin|btc|ethereum|eth|crypto|defi|stablecoin|solana|sec\b|etf|binance|coinbase|forex|fx\b|eurusd|gbpusd|usdjpy|currency|dollar|dxy|fed\b|fomc|ecb|boj|boe|cpi|nfp|inflation|interest rate|treasury|yield|gold|xau|oil|wti|brent|opec|nasdaq|s&p|liquidity|central bank|risk.?on|risk.?off|payroll/i;
   const NOISE_RE = /celebrity|sports|football|nba|movie|netflix|recipe|horoscope|weather forecast|gossip/i;
+  const CRYPTO_RE = /bitcoin|btc|ethereum|eth|crypto|defi|stablecoin|solana|binance|coinbase|sec\b.*crypto|crypto.*etf/i;
+  const FOREX_RE = /forex|fx\b|eurusd|gbpusd|usdjpy|currency|dxy|dollar index|ecb|boj|boe/i;
 
-  const filtered = !live || !Array.isArray(news) ? null : news.filter(n => {
+  const rankItem = (n) => {
     const h = `${n.headline || ''} ${n.summary || ''} ${n.category || ''}`;
-    if (NOISE_RE.test(h)) return false;
-    if (!MARKET_RE.test(h)) return false;
-    if (cat === 'all') return true;
-    const c = (n.category || '').toLowerCase();
-    const t = h.toLowerCase();
-    if (cat === 'crypto') return c === 'crypto' || /bitcoin|btc|ethereum|eth|crypto|defi|stablecoin|sec\b|etf|binance|coinbase/.test(t);
-    if (cat === 'forex') return c === 'forex' || /forex|fx\b|eur|gbp|jpy|currency|dxy|dollar/.test(t);
-    if (cat === 'macro') return /fed\b|fomc|ecb|boj|boe|cpi|nfp|inflation|interest rate|treasury|yield|central bank|payroll/.test(t);
-    if (cat === 'gold') return c === 'gold' || /gold|xau|bullion/.test(t);
-    if (cat === 'oil') return c === 'oil' || /oil|opec|wti|brent|crude/.test(t);
-    return true;
-  });
+    let r = 0;
+    if (CRYPTO_RE.test(h)) r += 10;
+    if (FOREX_RE.test(h)) r += 10;
+    if (/fed\b|fomc|cpi|nfp|inflation/i.test(h)) r += 4;
+    if (/gold|xau|oil|wti/i.test(h)) r += 2;
+    return r;
+  };
+
+  const filtered = !live || !Array.isArray(news) ? null : news
+    .filter(n => {
+      const h = `${n.headline || ''} ${n.summary || ''} ${n.category || ''}`;
+      if (NOISE_RE.test(h)) return false;
+      if (!MARKET_RE.test(h)) return false;
+      if (cat === 'all') return true;
+      const c = (n.category || '').toLowerCase();
+      const t = h.toLowerCase();
+      if (cat === 'crypto') return c === 'crypto' || CRYPTO_RE.test(t);
+      if (cat === 'forex') return c === 'forex' || FOREX_RE.test(t) || /eur|gbp|jpy|dollar/.test(t);
+      if (cat === 'macro') return /fed\b|fomc|ecb|boj|boe|cpi|nfp|inflation|interest rate|treasury|yield|central bank|payroll/.test(t);
+      if (cat === 'gold') return c === 'gold' || /gold|xau|bullion/.test(t);
+      if (cat === 'oil') return c === 'oil' || /oil|opec|wti|brent|crude/.test(t);
+      return true;
+    })
+    .slice()
+    .sort((a, b) => rankItem(b) - rankItem(a) || ((b.datetime || 0) - (a.datetime || 0)));
+
   const items = filtered;
+  const hasBody = (n) => {
+    const s = String(n?.summary || '').trim();
+    return s.length >= 40;
+  };
 
   const when = (dt) => {
     if (!dt) return '';
@@ -2667,7 +2687,18 @@ function NewsTab({ news, mode }) {
     return timeAgo(ms);
   };
 
+  const openExternal = (url) => {
+    if (!url) return;
+    try {
+      if (window.Telegram?.WebApp?.openLink) window.Telegram.WebApp.openLink(url);
+      else window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (_) {
+      try { window.open(url, '_blank', 'noopener,noreferrer'); } catch (__) {}
+    }
+  };
+
   if (selected) {
+    const readable = hasBody(selected);
     return (
       <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
         <button
@@ -2696,13 +2727,29 @@ function NewsTab({ news, mode }) {
             {selected.headline}
           </h2>
           <div className="text-[14px] leading-relaxed whitespace-pre-wrap" style={{ color: 'var(--textDim)' }}>
-            {selected.summary
-              || selected.headline
-              || 'Full article text is not provided by the wire. Headline and source summary only.'}
+            {readable
+              ? selected.summary
+              : 'Only a headline is available from this wire — open the source for the full article.'}
           </div>
-          <div className="font-mono text-[10px] pt-2 border-t" style={{ color: 'var(--textFaint)', borderColor: 'var(--border)' }}>
-            Read inside OMNICEE — external sites are not opened from this tab.
-          </div>
+          {selected.url ? (
+            <button
+              type="button"
+              onClick={() => openExternal(selected.url)}
+              className="omni-chip font-mono text-[12px] px-4 py-2.5 rounded min-h-[44px] w-full sm:w-auto"
+              style={{
+                color: readable ? 'var(--textDim)' : '#05070a',
+                background: readable ? 'var(--panel)' : 'var(--emerald)',
+                border: '1px solid var(--border)',
+                fontWeight: readable ? 500 : 700,
+              }}
+            >
+              {readable ? 'Open full article on source' : 'Read full article on source →'}
+            </button>
+          ) : (
+            <div className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>
+              No external link provided for this item.
+            </div>
+          )}
         </div>
       </div>
     );
@@ -2710,7 +2757,7 @@ function NewsTab({ news, mode }) {
 
   return (
     <div className="p-2 sm:p-3 space-y-2 sm:space-y-3 w-full max-w-[100vw]">
-      <SectionHeader icon={Newspaper} title="Market news" sub="Crypto · Forex · Macro only — opens in-app" />
+      <SectionHeader icon={Newspaper} title="Market news" sub="Crypto & Forex first · in-app, source link if needed" />
       <div className="flex gap-1 flex-wrap">
         {CATS.map(c => (
           <button key={c.id} type="button" onClick={() => setCat(c.id)}
@@ -2746,10 +2793,20 @@ function NewsTab({ news, mode }) {
                   </div>
                 )}
                 <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
+                    {CRYPTO_RE.test(`${n.headline} ${n.category}`) && (
+                      <span className="font-mono text-[9px] px-1.5 py-0.5 rounded" style={{ color: '#f0b429', background: 'rgba(240,180,41,0.12)' }}>CRYPTO</span>
+                    )}
+                    {FOREX_RE.test(`${n.headline} ${n.category}`) && (
+                      <span className="font-mono text-[9px] px-1.5 py-0.5 rounded" style={{ color: '#5ea8ff', background: 'rgba(94,168,255,0.12)' }}>FOREX</span>
+                    )}
+                  </div>
                   <div className="text-[13px] leading-snug" style={{ color: 'var(--text)' }}>{n.headline}</div>
                   {n.summary ? (
                     <div className="text-[11px] mt-1 line-clamp-2" style={{ color: 'var(--textDim)' }}>{n.summary}</div>
-                  ) : null}
+                  ) : (
+                    <div className="text-[10px] mt-1 font-mono" style={{ color: 'var(--textFaint)' }}>Headline only — open source for full story</div>
+                  )}
                   <div className="font-mono text-[9px] uppercase mt-1" style={{ color: 'var(--textFaint)' }}>
                     {n.source || 'Wire'} · {when(n.datetime)} ago{n.category ? ` · ${n.category}` : ''}
                   </div>

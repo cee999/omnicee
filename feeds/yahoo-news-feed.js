@@ -5,8 +5,20 @@ const https = require('https');
 const UA = 'Mozilla/5.0 (compatible; OMNICEE/1.0; +https://github.com/cee999/omnicee)';
 
 const TOPICS = [
-  // Forex & policy
+  // Crypto (priority — more queries = more crypto headlines)
+  'bitcoin BTC price',
+  'bitcoin ETF BTC',
+  'ethereum ETH price',
+  'crypto market bitcoin ethereum',
+  'crypto regulation SEC binance coinbase',
+  'solana SOL crypto',
+  'stablecoin USDT USDC',
+  'crypto exchange trading volume',
+  // Forex (priority)
   'forex market EURUSD GBPUSD',
+  'EURUSD euro dollar forex',
+  'GBPUSD pound dollar FX',
+  'USDJPY yen dollar forex',
   'US dollar index DXY FX',
   'Federal Reserve interest rate decision',
   'ECB interest rate euro',
@@ -14,15 +26,10 @@ const TOPICS = [
   'Bank of Japan yen intervention',
   'US CPI inflation NFP jobs report',
   'FOMC minutes treasury yields',
-  // Metals / energy (macro FX drivers)
+  // Metals / energy (FX & risk drivers)
   'gold price XAUUSD Fed',
   'crude oil WTI OPEC inventory',
-  // Crypto markets
-  'bitcoin BTC price ETF',
-  'ethereum ETH crypto market',
-  'crypto regulation SEC exchange',
-  // Cross-asset finance
-  'stock market futures S&P Nasdaq',
+  // Light cross-asset only (lower weight later)
   'bond yields treasury dollar',
 ];
 
@@ -112,17 +119,20 @@ class YahooNewsFeed {
     const scored = merged.map(item => {
       const text = `${item.headline} ${item.summary || ''} ${item.category || ''}`;
       let score = 0;
-      if (RELEVANT.test(text)) score += 5;
-      if (/forex|EURUSD|GBPUSD|USDJPY|FX\b/i.test(text)) score += 3;
-      if (/bitcoin|ethereum|crypto|BTC|ETH/i.test(text)) score += 3;
-      if (/Fed|FOMC|ECB|CPI|NFP|inflation|interest rate/i.test(text)) score += 3;
-      if (/gold|oil|DXY|dollar index/i.test(text)) score += 2;
-      // recency boost
+      if (RELEVANT.test(text)) score += 4;
+      // Crypto & forex weighted highest
+      if (/bitcoin|btc|ethereum|eth|crypto|solana|stablecoin|binance|coinbase|sec\b.*crypto|crypto.*etf/i.test(text)) score += 8;
+      if (/forex|eurusd|gbpusd|usdjpy|\bfx\b|currency pair/i.test(text)) score += 8;
+      if (/dxy|dollar index|greenback/i.test(text)) score += 5;
+      if (/fed\b|fomc|ecb|boj|boe|cpi|nfp|inflation|interest rate/i.test(text)) score += 4;
+      if (/gold|xau|oil|wti|brent|opec/i.test(text)) score += 3;
+      // Penalize pure equity/general unless FX/crypto also present
+      if (/\b(s&p|nasdaq|dow jones|stock market)\b/i.test(text) && !/forex|crypto|bitcoin|btc|dollar|fed\b/i.test(text)) score -= 4;
       const ageH = (Date.now() - (item.datetime || 0)) / 3600000;
       if (ageH < 6) score += 2;
       else if (ageH < 24) score += 1;
       return { ...item, _rel: score };
-    }).filter(item => item._rel >= 3); // drop non-market gossip
+    }).filter(item => item._rel >= 5); // stricter: prefer real crypto/FX
     scored.sort((a, b) => (b._rel - a._rel) || ((b.datetime || 0) - (a.datetime || 0)));
     const out = scored.map(({ _rel, ...rest }) => rest);
     this._cache = out;

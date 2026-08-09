@@ -628,7 +628,7 @@ app.get('/api/levels', dashboardReadAuth, (req, res) => {
 
     let news = [];
     try {
-      const y = await yahooNews.getNews({ limit: 40 });
+      const y = await yahooNews.getNews({ limit: 60 });
       if (Array.isArray(y)) news.push(...y.map(n => normalize(n, 'Yahoo Finance')));
     } catch (err) {
       console.warn('[API] Yahoo news failed:', err.message);
@@ -639,10 +639,12 @@ app.get('/api/levels', dashboardReadAuth, (req, res) => {
         ? await finnhub.companyNews(symbol)
         : await finnhub.marketNews(req.query.category || 'general');
       if (!symbol && finnhub.enabled()) {
-        try {
-          const extra = await finnhub.marketNews('forex');
-          if (Array.isArray(extra)) fh = [...(Array.isArray(fh) ? fh : []), ...extra];
-        } catch (_) {}
+        for (const cat of ['forex', 'crypto', 'general']) {
+          try {
+            const extra = await finnhub.marketNews(cat);
+            if (Array.isArray(extra)) fh = [...(Array.isArray(fh) ? fh : []), ...extra];
+          } catch (_) {}
+        }
       }
       if (Array.isArray(fh)) {
         news.push(...fh.map(n => normalize({
@@ -671,7 +673,18 @@ app.get('/api/levels', dashboardReadAuth, (req, res) => {
       const text = `${n.headline || ''} ${n.summary || ''} ${n.category || ''}`;
       if (NOISE.test(text)) return false;
       return RELEVANT.test(text);
-    }).sort((a, b) => (b.datetime || 0) - (a.datetime || 0)).slice(0, 50);
+    }).map(n => {
+      const text = `${n.headline || ''} ${n.summary || ''} ${n.category || ''}`;
+      let rank = 0;
+      if (/bitcoin|btc|ethereum|eth|crypto|solana|binance|coinbase/i.test(text)) rank += 10;
+      if (/forex|eurusd|gbpusd|usdjpy|\bfx\b|currency/i.test(text)) rank += 10;
+      if (/dxy|dollar|fed\b|fomc|ecb|cpi|nfp/i.test(text)) rank += 5;
+      if (/gold|xau|oil|wti/i.test(text)) rank += 3;
+      n._rank = rank;
+      return n;
+    }).sort((a, b) => (b._rank - a._rank) || ((b.datetime || 0) - (a.datetime || 0)))
+      .map(({ _rank, ...rest }) => rest)
+      .slice(0, 60);
 
     res.json({ ok: true, news, sources: ['yahoo', finnhub.enabled() ? 'finnhub' : null].filter(Boolean) });
   });
