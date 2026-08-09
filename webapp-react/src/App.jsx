@@ -3111,6 +3111,14 @@ function ValidTab({ signals, journalStats, learningProfiles, mode, hurstBoard })
                   <span className="ml-auto font-mono text-[12px]" style={{ color: 'var(--gold)' }}>
                     H={row.H != null ? Number(row.H).toFixed(3) : '—'}
                   </span>
+                  {row.confidenceTier && (
+                    <span className="font-mono text-[9px] px-1.5 py-0.5 rounded uppercase"
+                      style={{
+                        color: row.confidenceTier === 'HIGH' ? 'var(--emerald)' : row.confidenceTier === 'MEDIUM' ? 'var(--gold)' : 'var(--textFaint)',
+                        border: '1px solid var(--border)',
+                      }}
+                    >{row.confidenceTier}</span>
+                  )}
                 </div>
                 <div className="font-mono text-[11px]" style={{ color: 'var(--textDim)' }}>
                   {row.label || row.regime || '—'}
