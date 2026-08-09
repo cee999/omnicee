@@ -783,6 +783,15 @@ function createApp() {
     });
   });
 
+    // Web App Manifest — correct MIME helps Chrome/Edge install eligibility
+  app.get(['/manifest.json', '/manifest.webmanifest'], (req, res, next) => {
+    const file = req.path.endsWith('.webmanifest')
+      ? path.join(STATIC_ROOT, 'manifest.webmanifest')
+      : path.join(STATIC_ROOT, 'manifest.json');
+    res.type('application/manifest+json');
+    res.sendFile(file, (err) => { if (err) next(); });
+  });
+
   app.use(express.static(STATIC_ROOT, {
     etag: true,
     maxAge: process.env.NODE_ENV === 'production' ? '5m' : 0,

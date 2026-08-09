@@ -2728,7 +2728,13 @@ function InstallBanner({ installEvt, onInstalled, loggedIn }) {
 
 /* ── App shell ──────────────────────────────────────────────────────── */
 export default function OmniceeDashboard() {
-  const [activeTab, setActiveTab] = useState('DASH');
+  const [activeTab, setActiveTab] = useState(() => {
+    try {
+      const tab = new URLSearchParams(window.location.search).get('tab');
+      if (tab && ['DASH', 'SIGNALS', 'NEWS', 'MONITOR'].includes(tab)) return tab;
+    } catch (_) {}
+    return 'DASH';
+  });
   const [installEvt, setInstallEvt] = useState(null);
   const [user, setUser] = useState(() => getSession());
   useEffect(() => {
