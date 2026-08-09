@@ -298,10 +298,6 @@ function ThemeStyle() {
           min-height: clamp(240px, 48vh, 520px);
           height: clamp(240px, 48vh, 520px);
         }
-        /* Hide duplicate symbol row inside collapsed chart — parent DashTab already has symbols */
-        .omni-chart-shell:not(.is-expanded) .omni-chart-syms-inline {
-          display: none !important;
-        }
         /* Larger row hit targets on phone */
         .omni-row { min-height: 44px; }
         /* Signal cards alternative (used when we switch layout) */
@@ -1996,101 +1992,106 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
         paddingBottom: 'max(12px, env(safe-area-inset-bottom, 0px))',
       } : undefined}
     >
-      {/* Controls ONLY in expanded mode — collapsed is a clean preview + Full button */}
-      {expanded ? (
-        <div className="shrink-0 pb-2 mb-1 border-b space-y-2" style={{ borderColor: 'var(--border)' }}>
-          {/* Symbols — only here, not on collapsed chart */}
-          <div className="flex gap-1.5 items-center overflow-x-auto omni-scroll" style={{ WebkitOverflowScrolling: 'touch' }}>
-            {typeof onSymbolChange === 'function' && SYMBOLS.map(sym => (
-              <button
-                key={sym}
-                type="button"
-                onClick={() => onSymbolChange(sym)}
-                className="omni-chip font-mono rounded transition-colors shrink-0 text-[13px] px-3 py-2.5 min-h-[44px]"
-                style={{
-                  background: symbol === sym ? 'var(--emerald)' : 'var(--panel2)',
-                  color: symbol === sym ? '#05070a' : 'var(--textDim)',
-                }}
-              >
-                {symLabel(sym)}
-              </button>
-            ))}
-          </div>
-          {/* Timeframes + Indicators + close */}
-          <div className="flex items-center gap-1.5 flex-wrap">
-            {TIMEFRAMES.map(tf => (
-              <button
-                key={tf}
-                type="button"
-                onClick={() => setTimeframe(tf)}
-                className="omni-chip font-mono rounded text-[13px] px-3 py-2.5 min-h-[44px]"
-                style={{
-                  background: timeframe === tf ? 'var(--panel2)' : 'transparent',
-                  color: timeframe === tf ? 'var(--emerald)' : 'var(--textFaint)',
-                  border: '1px solid var(--border)',
-                }}
-              >
-                {tf}
-              </button>
-            ))}
+      {/* Symbols + timeframes always visible (preview AND full). Indicators + VP in both. */}
+      <div
+        className={`shrink-0 space-y-1.5 ${expanded ? 'pb-2 mb-1 border-b' : 'mb-1.5'}`}
+        style={expanded ? { borderColor: 'var(--border)' } : undefined}
+      >
+        {/* Symbol chips — horizontal scroll on phones */}
+        <div className="flex gap-1.5 items-center overflow-x-auto omni-scroll" style={{ WebkitOverflowScrolling: 'touch' }}>
+          {typeof onSymbolChange === 'function' && SYMBOLS.map(sym => (
             <button
+              key={sym}
               type="button"
-              onClick={() => setIndicators(s => ({ ...s, vp: !s.vp }))}
-              className="omni-chip font-mono rounded text-[13px] px-3 py-2.5 min-h-[44px]"
+              onClick={() => onSymbolChange(sym)}
+              className={`omni-chip font-mono rounded transition-colors shrink-0 ${expanded ? 'text-[13px] px-3 py-2.5 min-h-[44px]' : 'text-[11px] px-2.5 py-1.5 min-h-[34px]'}`}
               style={{
-                background: indicators.vp ? 'rgba(34,211,238,0.18)' : 'transparent',
-                color: indicators.vp ? '#22d3ee' : 'var(--textFaint)',
-                border: `1px solid ${indicators.vp ? '#22d3ee' : 'var(--border)'}`,
+                background: symbol === sym ? 'var(--emerald)' : 'var(--panel2)',
+                color: symbol === sym ? '#05070a' : 'var(--textDim)',
               }}
             >
-              VP
+              {symLabel(sym)}
             </button>
-            <div className="relative" ref={indicatorMenuRef}>
-              <button
-                type="button"
-                onClick={() => setShowIndicatorMenu(v => !v)}
-                className="omni-chip font-mono rounded flex items-center gap-1.5 text-[13px] px-3 py-2.5 min-h-[44px]"
-                style={{
-                  background: showIndicatorMenu ? 'var(--panel2)' : 'transparent',
-                  color: showIndicatorMenu ? 'var(--emerald)' : 'var(--textFaint)',
-                  border: '1px solid var(--border)',
-                }}
+          ))}
+        </div>
+        {/* Timeframes + VP + Indicators + Full/Close */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {TIMEFRAMES.map(tf => (
+            <button
+              key={tf}
+              type="button"
+              onClick={() => setTimeframe(tf)}
+              className={`omni-chip font-mono rounded ${expanded ? 'text-[13px] px-3 py-2.5 min-h-[44px]' : 'text-[11px] px-2.5 py-1.5 min-h-[34px]'}`}
+              style={{
+                background: timeframe === tf ? 'var(--panel2)' : 'transparent',
+                color: timeframe === tf ? 'var(--emerald)' : 'var(--textFaint)',
+                border: '1px solid var(--border)',
+              }}
+            >
+              {tf}
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => setIndicators(s => ({ ...s, vp: !s.vp }))}
+            className={`omni-chip font-mono rounded ${expanded ? 'text-[13px] px-3 py-2.5 min-h-[44px]' : 'text-[11px] px-2.5 py-1.5 min-h-[34px]'}`}
+            style={{
+              background: indicators.vp ? 'rgba(34,211,238,0.18)' : 'transparent',
+              color: indicators.vp ? '#22d3ee' : 'var(--textFaint)',
+              border: `1px solid ${indicators.vp ? '#22d3ee' : 'var(--border)'}`,
+            }}
+            title="Volume Profile"
+          >
+            VP
+          </button>
+          <div className="relative" ref={indicatorMenuRef}>
+            <button
+              type="button"
+              onClick={() => setShowIndicatorMenu(v => !v)}
+              className={`omni-chip font-mono rounded flex items-center gap-1 ${expanded ? 'text-[13px] px-3 py-2.5 min-h-[44px]' : 'text-[11px] px-2.5 py-1.5 min-h-[34px]'}`}
+              style={{
+                background: showIndicatorMenu ? 'var(--panel2)' : 'transparent',
+                color: showIndicatorMenu ? 'var(--emerald)' : 'var(--textFaint)',
+                border: '1px solid var(--border)',
+              }}
+            >
+              <SlidersHorizontal size={expanded ? 16 : 14} />
+              {expanded ? 'Indicators' : 'Ind'}
+            </button>
+            {showIndicatorMenu && (
+              <div
+                className="absolute z-30 mt-1 left-0 rounded-lg p-3 space-y-2 shadow-lg"
+                style={{ background: 'var(--panel2)', border: '1px solid var(--border)', minWidth: 200 }}
               >
-                <SlidersHorizontal size={16} /> Indicators
-              </button>
-              {showIndicatorMenu && (
-                <div
-                  className="absolute z-30 mt-1 left-0 rounded-lg p-3 space-y-2 shadow-lg"
-                  style={{ background: 'var(--panel2)', border: '1px solid var(--border)', minWidth: 200 }}
-                >
-                  {INDICATOR_DEFS.map(ind => (
-                    <label
-                      key={ind.key}
-                      className="flex items-center gap-2.5 font-mono text-[13px] cursor-pointer whitespace-nowrap min-h-[40px]"
-                      style={{ color: 'var(--textDim)' }}
-                    >
-                      <input
-                        type="checkbox"
-                        className="w-4 h-4"
-                        checked={!!indicators[ind.key]}
-                        onChange={() => setIndicators(s => ({ ...s, [ind.key]: !s[ind.key] }))}
-                      />
-                      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: ind.color }} />
-                      {ind.label}
-                    </label>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="flex-1" />
-            {ohlcReadout && (
-              <div className="font-mono text-[11px] flex gap-2 shrink-0 hidden sm:flex" style={{ color: 'var(--textDim)' }}>
-                <span>O <span style={{ color: 'var(--text)' }}>{fmtPrice(symbol, ohlcReadout.o)}</span></span>
-                <span>H <span style={{ color: 'var(--emerald)' }}>{fmtPrice(symbol, ohlcReadout.h)}</span></span>
-                <span>L <span style={{ color: 'var(--coral)' }}>{fmtPrice(symbol, ohlcReadout.l)}</span></span>
-                <span>C <span style={{ color: 'var(--text)' }}>{fmtPrice(symbol, ohlcReadout.c)}</span></span>
+                {INDICATOR_DEFS.map(ind => (
+                  <label
+                    key={ind.key}
+                    className="flex items-center gap-2.5 font-mono text-[13px] cursor-pointer whitespace-nowrap min-h-[40px]"
+                    style={{ color: 'var(--textDim)' }}
+                  >
+                    <input
+                      type="checkbox"
+                      className="w-4 h-4"
+                      checked={!!indicators[ind.key]}
+                      onChange={() => setIndicators(s => ({ ...s, [ind.key]: !s[ind.key] }))}
+                    />
+                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: ind.color }} />
+                    {ind.label}
+                  </label>
+                ))}
               </div>
             )}
+          </div>
+          <div className="flex-1" />
+          {ohlcReadout && expanded && (
+            <div className="font-mono text-[11px] flex gap-2 shrink-0 hidden sm:flex" style={{ color: 'var(--textDim)' }}>
+              <span>O <span style={{ color: 'var(--text)' }}>{fmtPrice(symbol, ohlcReadout.o)}</span></span>
+              <span>H <span style={{ color: 'var(--emerald)' }}>{fmtPrice(symbol, ohlcReadout.h)}</span></span>
+              <span>L <span style={{ color: 'var(--coral)' }}>{fmtPrice(symbol, ohlcReadout.l)}</span></span>
+              <span>C <span style={{ color: 'var(--text)' }}>{fmtPrice(symbol, ohlcReadout.c)}</span></span>
+            </div>
+          )}
+          {expanded ? (
             <button
               type="button"
               onClick={() => setExpanded(false)}
@@ -2100,31 +2101,18 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
             >
               <Minimize2 size={16} /> Close
             </button>
-          </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setExpanded(true)}
+              className="omni-chip font-mono rounded flex items-center gap-1.5 text-[12px] px-3 py-1.5 min-h-[34px] shrink-0"
+              style={{ color: '#05070a', background: 'var(--emerald)', border: 'none', fontWeight: 600 }}
+            >
+              <Maximize2 size={14} /> Full
+            </button>
+          )}
         </div>
-      ) : (
-        /* Collapsed: preview only — no symbol/TF/indicator controls (those live in Full) */
-        <div className="flex items-center justify-between gap-2 mb-1.5 shrink-0">
-          <div className="font-mono text-[12px] flex items-center gap-2 min-w-0">
-            <span style={{ color: 'var(--text)' }} className="font-semibold">{symLabel(symbol)}</span>
-            <span style={{ color: 'var(--textFaint)' }}>·</span>
-            <span style={{ color: 'var(--textDim)' }}>{timeframe}</span>
-            {ohlcReadout && (
-              <span className="truncate" style={{ color: 'var(--textFaint)' }}>
-                {fmtPrice(symbol, ohlcReadout.c)}
-              </span>
-            )}
-          </div>
-          <button
-            type="button"
-            onClick={() => setExpanded(true)}
-            className="omni-chip font-mono rounded flex items-center gap-1.5 text-[12px] px-3 py-2 min-h-[40px] shrink-0"
-            style={{ color: '#05070a', background: 'var(--emerald)', border: 'none', fontWeight: 600 }}
-          >
-            <Maximize2 size={16} /> Full chart
-          </button>
-        </div>
-      )}
+      </div>
       <div className="omni-chart-canvas-wrap flex-1 min-h-0">
         {status === 'empty' && (
           <div className="absolute inset-0 z-10 flex items-center justify-center">
@@ -2194,7 +2182,7 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
         <div className="omni-panel p-2 md:p-3 order-1 lg:order-1">
           <div className="flex items-center justify-between gap-2 mb-1 font-mono text-[11px]" style={{ color: 'var(--textDim)' }}>
             <span>
-              <span style={{ color: 'var(--text)' }}>{symLabel(chartSymbol)}</span>
+              Chart · <span style={{ color: 'var(--text)' }}>{symLabel(chartSymbol)}</span>
               {q?.bid != null && q?.ask != null && (
                 <>
                   {' '}
@@ -2205,7 +2193,6 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
               )}
             </span>
             {q?.source === 'mt5_ea' && <Pill tone="up">MT5</Pill>}
-            <span style={{ color: 'var(--textFaint)' }}>Tap Full chart to switch symbol · TF · indicators</span>
           </div>
           <LiveChart symbol={chartSymbol} quote={q} signals={chartSignals} levels={levels} onSymbolChange={setChartSymbol} />
         </div>
