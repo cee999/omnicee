@@ -374,10 +374,14 @@ async function runAnalysisCycle(symbol, timeframe) {
     }
 
     if (!signal || signal.action === 'WAIT') {
-      log.debug(`${key}: score=${signal?.score?.final || 0} — no signal`);
+      const sc = signal?.score?.final ?? 0;
+      const why = signal?.waitReason || signal?.reason || signal?.note || 'no_signal_or_wait';
+      // This used to be log.debug — invisible unless LOG_LEVEL=debug is set,
+      // which it isn't by default. Since the overwhelming majority of
+      // analysis cycles end here, that meant close to zero signal-pipeline
+      // activity was ever actually visible in production logs.
+      log.info(`${key}: WAIT — score=${sc} — ${why}`);
       if (auditTrail) {
-        const sc = signal?.score?.final ?? 0;
-        const why = signal?.waitReason || signal?.reason || signal?.note || 'no_signal_or_wait';
         auditTrail.record({
           symbol, timeframe, signalFired: false,
           blockedReason: why,
@@ -637,7 +641,7 @@ async function runAnalysisCycle(symbol, timeframe) {
         };
       }
 
-      log.info(`[ENSEMBLE] ${symbol} ${timeframe}: score=${ensembleResult.ensembleScore} approved=${ensembleResult.approved} layers=${ensembleResult.approvedLayers}/${ensembleResult.layerCount}`);
+      log.info(`[ENSEMBLE] ${symbol} ${timeframe}: score=${ensembleResult.ensembleScore} approved=${ensembleResult.approved} layers=${ensembleResult.approvedLayers}/${ensembleResult.layerCount}${ensembleResult.hardRejections?.length ? ` | vetoed by: ${ensembleResult.hardRejections.join(', ')}` : ''}`);
     }
 
     const gate = institutionalGates?.evaluate
