@@ -155,6 +155,7 @@ const inFlight = new Set();
 const lastAnalysisAt = new Map();   // key → last run ms
 const lastAnalysisScore = new Map(); // key → last final score (0–100)
 const lastTickAt = new Map();        // symbol → last accepted tick ms
+let engineReadyEmitted = false;
 const LIVE_ANALYSIS_INTERVAL_MS = Number(process.env.ANALYSIS_INTERVAL_MS || 45000);
 const ADAPTIVE_THROTTLE = process.env.ADAPTIVE_THROTTLE !== 'false'; // default ON
 
@@ -1301,6 +1302,15 @@ function onLivePrice(symbol, price, { change = null, bias = null, source = 'cand
   // Always-on analysis: same spirit as live chart — rescore while ticks flow
   try { scheduleLiveAnalysis(symbol, source); } catch (_) {}
 
+  // Emit a one-time engine readiness signal so clients know the trading
+  // engine has started receiving live ticks and can flip out of "waking".
+  if (!engineReadyEmitted) {
+    engineReadyEmitted = true;
+    try {
+      if (wsBus) wsBus.emit('engine_ready', { ts: Date.now(), symbol, source });
+    } catch (_) {}
+  }
+
   // Crypto volatility alerts (BTC/ETH short-window % moves)
   if (cryptoVolAlert && cryptoVolAlert.watches(symbol)) {
     try {
@@ -1960,7 +1970,7 @@ function buildFeeds() {
   if (dataIntegrityMonitor && finnhubFeed?.enabled?.()) {
     dataIntegrityMonitor.registerFeed('Finnhub', finnhubFeed, fxSymbols.length ? fxSymbols : SYMBOLS);
   }
-  if (dataIntegrityMonitor && alphaVantageFeed) {
+  if (dataIntegrityMonitor && alphaVantageFeed?.enabled?.()) {
     dataIntegrityMonitor.registerFeed('Alpha Vantage', alphaVantageFeed, []);
   }
   if (dataIntegrityMonitor && fmpFeed?.enabled?.()) {
@@ -2038,13 +2048,13 @@ async function main() {
       scheduleLiveAnalysis(symbol, 'heartbeat');
     }
   }, LIVE_ANALYSIS_INTERVAL_MS);
-  // Kick once shortly after boot so first Deriv seed is scored quickly
-  setTimeout(() => {
+  const triggerBootAnalysis = () => {
     for (const symbol of SYMBOLS) scheduleLiveAnalysis(symbol, 'boot');
-  // boot-analysis-kick: again at 45s and 90s once candles exist from MT5/Deriv
-  setTimeout(() => { for (const s of SYMBOLS) scheduleLiveAnalysis(s, 'boot'); }, 45000);
-  setTimeout(() => { for (const s of SYMBOLS) scheduleLiveAnalysis(s, 'boot'); }, 90000);
-  }, 15000);
+  };
+  triggerBootAnalysis();
+  setTimeout(triggerBootAnalysis, 5000);
+  setTimeout(triggerBootAnalysis, 15000);
+  setTimeout(triggerBootAnalysis, 30000);
   log.info(`Live analysis: adaptive throttle ${ADAPTIVE_THROTTLE ? 'ON' : 'OFF'} · heartbeat ${LIVE_ANALYSIS_INTERVAL_MS/1000}s · symbols ${SYMBOLS.join(',')}`);
 
   const keepUrl = process.env.KEEPALIVE_URL || process.env.RENDER_EXTERNAL_URL;
@@ -2064,8 +2074,7 @@ async function main() {
   } catch (e) { log.warn(`re-publish engines: ${e.message}`); }
   setupShutdown(feeds);
 
-  let connected = 0;
-  for (const f of feeds) {
+  const connectTasks = feeds.map(async (f) => {
     try {
       if (typeof f.instance.connect === 'function') {
         await f.instance.connect();
@@ -2074,17 +2083,19 @@ async function main() {
       }
       f.seed?.();
       log.info(`${f.name} connected`);
-      connected++;
+      return true;
     } catch (err) {
       // Deriv may already be started in buildFeeds(); do not treat as fatal
       if (typeof f.instance.isConnected === 'function' && f.instance.isConnected()) {
         log.info(`${f.name} already live`);
-        connected++;
-      } else {
-        log.error(`${f.name} connection failed: ${err.message}`);
+        return true;
       }
+      log.error(`${f.name} connection failed: ${err.message}`);
+      return false;
     }
-  }
+  });
+  const connectResults = await Promise.all(connectTasks);
+  const connected = connectResults.filter(Boolean).length;
 
   if (myfxbookFeed) {
     try {

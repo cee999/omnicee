@@ -42,6 +42,7 @@ class DerivFeed extends EventEmitter {
     this._lastQuote = new Map();
     this._lastTickAt = 0;
     this._pendingHistory = [];
+    this._pendingHistorySet = new Set();
     this._invalidSymbols = new Set();
     this._historyBusy = false;
     this._pingTimer = null;
@@ -55,11 +56,17 @@ class DerivFeed extends EventEmitter {
 
   /** Alias so index.js main() `await feed.connect()` works (same as start). */
   async connect() {
+    if (this._connected && this._ws?.readyState === WebSocket.OPEN) {
+      return this;
+    }
     this.start();
     return this;
   }
 
   start() {
+    if (this._connected && this._ws?.readyState === WebSocket.OPEN && !this._stopped) {
+      return;
+    }
     this._stopped = false;
     this._connect();
     this._watchTimer = setInterval(() => {
@@ -100,6 +107,25 @@ class DerivFeed extends EventEmitter {
       this._reconnectTimer = null;
       this._connect();
     }, 2000);
+  }
+
+  _historyJobKey(job) {
+    return `${job.deriv}:${job.timeframe}`;
+  }
+
+  _queueHistoryJob(job) {
+    const key = this._historyJobKey(job);
+    if (this._invalidSymbols.has(job.deriv) || this._pendingHistorySet.has(key)) return;
+    this._pendingHistorySet.add(key);
+    this._pendingHistory.push(job);
+  }
+
+  _removePendingHistoryForDeriv(deriv) {
+    this._pendingHistory = this._pendingHistory.filter((job) => {
+      const keep = job.deriv !== deriv;
+      if (!keep) this._pendingHistorySet.delete(this._historyJobKey(job));
+      return keep;
+    });
   }
 
   _connect() {
@@ -175,7 +201,7 @@ class DerivFeed extends EventEmitter {
       const d = DERIV_MAP[omni];
       if (!d || this._invalidSymbols.has(d)) continue;
       for (const spec of CANDLE_REQS) {
-        this._pendingHistory.push({ omni, deriv: d, ...spec });
+        this._queueHistoryJob({ omni, deriv: d, ...spec });
       }
     }
     this._drainHistory();
@@ -185,7 +211,16 @@ class DerivFeed extends EventEmitter {
     if (this._historyBusy || !this._pendingHistory.length) return;
     if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return;
     this._historyBusy = true;
-    const job = this._pendingHistory.shift();
+    let job = this._pendingHistory.shift();
+    while (job && this._invalidSymbols.has(job.deriv)) {
+      this._pendingHistorySet.delete(this._historyJobKey(job));
+      job = this._pendingHistory.shift();
+    }
+    if (!job) {
+      this._historyBusy = false;
+      return;
+    }
+    this._pendingHistorySet.delete(this._historyJobKey(job));
     this._send({
       ticks_history: job.deriv,
       adjust_start_time: 1,
@@ -207,6 +242,7 @@ class DerivFeed extends EventEmitter {
       const invalidSymbol = msg.echo_req?.ticks || msg.echo_req?.ticks_history;
       if (msg.error.code === 'InvalidSymbol' && invalidSymbol) {
         this._invalidSymbols.add(invalidSymbol);
+        this._removePendingHistoryForDeriv(invalidSymbol);
       }
       this.emit('error', new Error(errMsg));
       return;

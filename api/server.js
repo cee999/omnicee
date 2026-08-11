@@ -1167,6 +1167,7 @@ function startServer(config = {}) {
   forward('watchlist_update', 'watchlist');
   // Data Integrity Monitor — feed/staleness health, so the dashboard shows a warning banner instead of the trader only finding out a feed died when signals quietly stop arriving.
   forward('feed_health', 'feed_health');
+  forward('engine_ready', 'engine_ready');
   forward('abnormal_market', 'abnormal_market', payload => db.saveTelemetry({ type: 'abnormal_market', ...payload }));
   forward('crypto_volatility_alert', 'crypto_volatility_alert', payload => db.saveTelemetry({ type: 'crypto_volatility_alert', ...payload }));
   // FIX: BybitFeed emits liquidation_cascade (real risk event — large forced liquidations in a short window) and index.js relays it onto wsBus, but it was never added to this forward() whitelist — it...

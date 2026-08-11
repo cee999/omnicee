@@ -1053,10 +1053,24 @@ function useLiveFeed() {
         path: '/socket.io',
         auth: { appToken: APP_TOKEN || undefined, initData: getTelegramInitData() || undefined },
         transports: ['websocket', 'polling'],
+        reconnection: true,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 500,
+        reconnectionDelayMin: 500,
+        reconnectionDelayMax: 5000,
+        randomizationFactor: 0.2,
+        timeout: 10000,
       });
 
       socket.on('connect', () => { if (!cancelled) setSocketLive(true); });
       socket.on('disconnect', () => { if (!cancelled) setSocketLive(false); });
+      socket.on('connect_error', () => { if (!cancelled) setSocketLive(false); });
+      socket.on('reconnect_attempt', () => { if (!cancelled) setSocketLive(false); });
+      socket.on('engine_ready', () => { if (!cancelled) setWakingBackend(false); });
+      socket.on('reconnect_error', () => { if (!cancelled) setSocketLive(false); });
+      socket.on('reconnect_failed', () => { if (!cancelled) setSocketLive(false); });
+      socket.on('reconnect_error', () => { if (!cancelled) setSocketLive(false); });
+      socket.on('reconnect_failed', () => { if (!cancelled) setSocketLive(false); });
 
       socket.on('market', payload => {
         if (cancelled || !payload?.symbol || payload.price == null || !(payload.symbol in BASE_PRICE)) return;
