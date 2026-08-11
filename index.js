@@ -1428,8 +1428,9 @@ function onMT5Tick(symbol, price, { bid, ask, timestamp } = {}) {
         try { onCandle({ symbol, timeframe: tf, candle: { ...prev }, isClosed: true }); }
         catch (e) { log.warn(`onMT5Tick close [${symbol} ${tf}]: ${e.message}`); }
       }
+      const baseOpen = Number.isFinite(bid) ? bid : price;
       mt5CandleBuilders[key] = {
-        timestamp: bucketStart, open: price, high: price, low: price, close: price,
+        timestamp: bucketStart, open: baseOpen, high: baseOpen, low: baseOpen, close: baseOpen,
         volume: 0, bid, ask, source: 'mt5_ea',
         // FIX: chart-vs-ticker mismatch — candleStores' OHLC here is built
         // from `price`, which api/server.js's /api/ea/prices computes as
@@ -1448,9 +1449,19 @@ function onMT5Tick(symbol, price, { bid, ask, timestamp } = {}) {
         bidOpen: bid, bidHigh: bid, bidLow: bid, bidClose: bid,
       };
     } else {
-      prev.high = Math.max(prev.high, price);
-      prev.low = Math.min(prev.low, price);
-      prev.close = price;
+      // Prefer bid when available and sane (avoid large instantaneous spread artifacts)
+      let tickVal = Number.isFinite(bid) ? bid : price;
+      try {
+        const base = Number(price) || 0;
+        const diff = Math.abs((Number(bid) || base) - base);
+        if (base > 0 && diff / base > 0.02) {
+          // spread >2% of mid — treat as anomalous and stick to mid for OHLC
+          tickVal = price;
+        }
+      } catch (_) { tickVal = Number.isFinite(bid) ? bid : price; }
+      prev.high = Math.max(prev.high, tickVal);
+      prev.low = Math.min(prev.low, tickVal);
+      prev.close = tickVal;
       prev.bid = bid;
       prev.ask = ask;
       if (Number.isFinite(bid)) {
