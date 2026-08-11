@@ -1,143 +1,209 @@
-# OMNICEE — AI Trading Assistant
+# OMNICEE
 
-OMNICEE is a trading decision-support system. It can enforce risk gates, store outcomes, learn from failed setup fingerprints, and alert you, but it cannot guarantee accuracy or eliminate market risk. Run it in paper mode first and only risk money after audited out-of-sample performance.
+**Institutional-style AI trading decision-support system**  
+Developed by **James Yelbert**
 
-## Quick Start
+Live: [omnicee.onrender.com](https://omnicee.onrender.com) · Repo: [github.com/cee999/omnicee](https://github.com/cee999/omnicee)
+
+OMNICEE aggregates multi-agent confluence, session/risk gates, broker-grade prices (MetaTrader 5 / Exness), economic calendar, and adaptive learning into one desk-style web app. It is **decision support**, not a guarantee of profit. Markets are risky — paper-trade first.
+
+---
+
+## What it does
+
+| Area | Capability |
+|------|------------|
+| **Signals** | Multi-agent ensemble (SMC, MTF, microstructure, fractal, momentum, volume/OI, sentiment, pattern) with score gates and conflict resolution |
+| **Risk** | Position sizing, drawdown circuit breaker, session filter, correlation / intermarket checks |
+| **Prices** | Prefer live **MT5 EA** bid/ask (Exness); fallbacks only when the EA is offline |
+| **Intel** | Session briefing (“What to expect”), regime/tradeability, COT positioning, economic calendar |
+| **News** | Multi-source forex / gold / oil / crypto-focused headlines |
+| **Auth** | Email one-time code login (Resend or SMTP); sessions persist on device |
+| **Execution bridge** | MT5 EA pushes prices + balance; polls **approved** signals only |
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  webapp-react (Vite)  — desk UI, PWA-installable             │
+└────────────────────────────┬────────────────────────────────┘
+                             │ REST + Socket.IO
+┌────────────────────────────▼────────────────────────────────┐
+│  start-all.js                                                │
+│    ├─ api/server.js   REST, Socket.IO, static UI, EA routes │
+│    └─ index.js        signal engine, agents, risk, feeds    │
+└────────────────────────────┬────────────────────────────────┘
+                             │
+        ┌────────────────────┼────────────────────┐
+        ▼                    ▼                    ▼
+   MongoDB Atlas      MT5 OmniceeEA.mq5      External feeds
+   signals/sessions   prices + optional      Finnhub, calendar,
+   users/outcomes     approved execution     news, COT, …
+```
+
+**Single Render service** builds the React app and runs API + engine in one process (`node start-all.js`).
+
+---
+
+## Repository layout
+
+```
+agents/              Multi-agent scorers (SMC, MTF, microstructure, …)
+api/                 Express + Socket.IO server, email OTP auth
+feeds/               Market data, news, calendar, COT, …
+mt5/OmniceeEA.mq5    MetaTrader 5 bridge (prices + approved trades)
+orchestrator/        Conflict resolution, audit, scheduling
+risk-engine/         Drawdown, session filter, sizing, intermarket
+signal-pipeline/     Scoring, regime, outlook, gates, learning
+webapp-react/        Production frontend (Vite + React)
+index.js             Signal / trading engine entry
+start-all.js         Boots API then engine
+render.yaml          Render Blueprint
+.env.example         All environment variables documented
+```
+
+---
+
+## Quick start (local)
 
 ```bash
-# 1. Copy env template
+git clone https://github.com/cee999/omnicee.git
+cd omnicee
 cp .env.example .env
+# Edit .env — at minimum MONGODB_URI; for full desk also EA_SECRET, feed keys
 
-# 2. Fill in your values in .env (at minimum: TELEGRAM_BOT_TOKEN, SYMBOLS)
-nano .env
-
-# 3. Install dependencies
 npm install
+npm --prefix webapp-react install
+npm --prefix webapp-react run build
 
-# 4. Run smoke test (no API keys needed)
-npm test
-
-# 5. Start the system
-# FIX: `npm start` alone only runs index.js (the trading/signal engine) —
-# it opens no HTTP port at all, so there is no web app, no Mini App, and no
-# REST API to hit. index.js and api/server.js share live data through an
-# in-memory EventEmitter, which only works if both run in the same process
-# — use start:all (or pm2:start / the Render blueprint, which do the same
-# thing) for anything that needs the web app or Telegram Mini App.
-npm run start:all
+node start-all.js
+# → http://localhost:3001  (or PORT)
 ```
 
-## Directory Structure
-
-```
-omnicee/
-├── index.js                  ← MAIN ENTRY POINT — boot everything here
-├── package.json
-├── .env.example              ← Copy to .env and fill in keys
-│
-├── agents/                   ← 5 specialized signal agents
-│   ├── smc-agent.js          ← Smart Money Concepts (OB, FVG, BOS, sweeps)
-│   ├── mtf-agent.js          ← Multi-timeframe alignment + HTF bias
-│   ├── momentum-agent.js     ← RSI, MACD, EMA stack, VWAP, Ichimoku, BB
-│   ├── sentiment-agent.js    ← News NLP, COT, Fear/Greed
-│   └── pattern-agent.js      ← Wyckoff, harmonics, classic patterns
-│
-├── orchestrator/
-│   ├── conflict-resolver.js  ← Agent vote arbitration (weighted majority)
-│   ├── memory-manager.js     ← Signal history + stats (in-memory → Redis → PG)
-│   └── task-planner.js       ← Full orchestrator (alternative to index.js)
-│
-├── signal-pipeline/
-│   ├── signal-scorer.js      ← Weighted confluence scorer (75+ = fire)
-│   ├── sl-tp-engine.js       ← Structure-based SL + multi-TP
-│   ├── entry-optimizer.js    ← OTE/FVG/OB zone refinement
-│   ├── alert-dispatcher.js   ← Telegram bot delivery
-│   └── manual-mode.js        ← Position tracker + journal
-│
-├── risk-engine/
-│   ├── position-sizer.js     ← ATR/Kelly/Fixed sizing (class: RiskEngine)
-│   ├── drawdown-guard.js     ← Circuit breaker (daily/DD/streak limits)
-│   ├── session-filter.js     ← Killzone + liquidity quality gates
-│   └── correlation.js        ← Portfolio correlation checker
-│
-├── feeds/
-│   ├── binance-ws.js         ← Crypto: BTC, ETH real-time OHLCV
-│   ├── bybit-ws.js           ← Crypto: perps, funding, OI
-│   ├── twelve-data.js        ← Forex + commodities: XAUUSD, EURUSD, etc.
-│   └── news-feed.js          ← Headlines, sentiment, COT
-│
-└── test/
-    └── smoke-test.js         ← Verifies all modules load + pipeline runs
-```
-
-## Signal Flow
-
-```
-BinanceFeed/TwelveData
-       ↓ candle closed
-  onCandle() [index.js]
-       ↓
-  [SMC + MTF + Momentum + Volume/OI] — parallel
-       ↓
-  ConflictResolver.resolve()
-       ↓
-  SignalScorer.score() — minimum 75/100 to fire
-       ↓
-  RegimeEngine + EntryOptimizer + SLTPEngine + RiskEngine
-       ↓
-  AdaptiveLearningEngine checks prior losing fingerprints
-       ↓
-  InstitutionalGates approves/rejects
-       ↓
-  MongoDB Atlas + Socket.IO Mini App + Telegram alerts
-```
-
-## Production Layers Added
-
-- Express REST API at `api/server.js`.
-- Socket.IO live transport at `/socket.io`.
-- Telegram Mini App init-data validation in `api/telegram-auth.js`.
-- MongoDB Atlas persistence in `db.js` with TTL indexes for free-tier control.
-- Adaptive trade-outcome learning in `signal-pipeline/adaptive-learning-engine.js`.
-- Finnhub adapter in `feeds/finnhub-feed.js`.
-- PM2 process file in `ecosystem.config.js`.
-- Nginx/Let’s Encrypt reverse-proxy template in `deploy/nginx.omnicee.conf`.
-- Modern matrix-based Mini App UI in `webapp/index.html`.
-
-## Mini App Deployment
-
-1. Put secrets in `.env`, not source. URL-encode special characters in MongoDB passwords, for example `@` becomes `%40`.
-2. Run locally with `npm run start:all`, then open `http://localhost:3001/`.
-3. For Telegram production, deploy behind HTTPS and set the Mini App URL in BotFather to your public `https://your-domain.com/`.
-4. The same URL is also a real installable PWA (`webapp/manifest.json` + `webapp/sw.js`) — open it in a browser (not inside Telegram) and use the browser's "Install" / "Add to Home Screen" prompt for a standalone app icon outside Telegram. Only the static shell is cached offline; signals/prices/risk data always require a live connection by design.
-5. On a VPS, use:
+Smoke test (no keys required for basic syntax path):
 
 ```bash
-npm install -g pm2
-npm run pm2:start
-sudo cp deploy/nginx.omnicee.conf /etc/nginx/sites-available/omnicee
-sudo ln -s /etc/nginx/sites-available/omnicee /etc/nginx/sites-enabled/omnicee
-sudo certbot --nginx -d your-domain.com
+npm test
 ```
 
-## Learning Loop
+---
 
-When you mark a signal as WIN, BREAKEVEN, or LOSS in the Mini App, OMNICEE stores the setup fingerprint in MongoDB. Future signals with the same fingerprint receive an adaptive penalty, warning, or hard block when historical outcomes are poor.
+## Production (Render)
 
-## Environment Variables
+1. Connect this repo; use **Blueprint** (`render.yaml`) or a single **Web Service**.
+2. **Build:**  
+   `npm ci --omit=dev && npm --prefix webapp-react ci --include=dev && VITE_APP_TOKEN=$APP_ACCESS_TOKEN npm --prefix webapp-react run build`
+3. **Start:** `node start-all.js`
+4. **Health:** `GET /health`
 
-See `.env.example` for full list. Minimum needed:
+### Required environment
 
-| Variable | Description |
-|---|---|
-| `TELEGRAM_BOT_TOKEN` | From @BotFather |
-| `TELEGRAM_CHAT_IDS` | Your Telegram user/group ID(s) |
-| `SYMBOLS` | e.g. `BTCUSDT,XAUUSD,EURUSD` |
-| `TWELVE_DATA_API_KEY` | Required for forex/commodities |
+| Variable | Purpose |
+|----------|---------|
+| `MONGODB_URI` | MongoDB Atlas connection string |
+| `MONGODB_DB` | Database name (default `omnicee_db`) |
+| `EA_SECRET` | Shared secret for MT5 EA (`/api/ea/*`) |
+| `SYMBOLS` | Comma list, e.g. `BTCUSDT,ETHUSDT,XAUUSD,USOIL,UUP,EURUSD,GBPUSD,USDJPY` |
 
-## Notes
+### Email login (friends / web)
 
-- **No Redis/PostgreSQL needed to start** — MemoryManager falls back to in-memory automatically
-- `XAUUSD`, `EURUSD`, `GBPUSD` require `TWELVE_DATA_API_KEY`
-- `BTCUSDT`, `ETHUSDT` use Binance WebSocket (no key needed for public streams)
-- `MIN_SIGNAL_SCORE=75` means Grade B+ only fires. Lower to `65` to see more signals during testing.
+| Variable | Purpose |
+|----------|---------|
+| `EMAIL_AUTH_REQUIRED` | `true` to require login on the dashboard |
+| `RESEND_API_KEY` | Resend.com API key (recommended) |
+| `EMAIL_FROM` | Must be valid: `OMNICEE <onboarding@resend.dev>` or `email@domain.com` — **no extra quotes** |
+
+SMTP alternative: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`.
+
+Flow: user enters email → 6-digit code (10 min TTL) → session token (~30 days on that device).
+
+### Useful optional keys
+
+- `APP_ACCESS_TOKEN` — alternate API token; baked into the UI build as `VITE_APP_TOKEN`
+- `FINNHUB_API_KEY`, `FMP_API_KEY`, `ALPHA_VANTAGE_API_KEY` — news / calendar / macro
+- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_IDS` — alerts / Mini App
+- `MIN_SIGNAL_SCORE`, `RISK_PCT_PER_TRADE`, `MAX_DAILY_LOSS_PCT`, `MAX_DRAWDOWN_PCT` — risk / quality bar
+- `BROKER_PRICE_HOLD_MS` — how long MT5 ticks stay authoritative over weaker sources
+
+Full list: [`.env.example`](.env.example).
+
+---
+
+## MetaTrader 5 / Exness bridge
+
+File: [`mt5/OmniceeEA.mq5`](mt5/OmniceeEA.mq5)
+
+1. Copy into `MQL5/Experts`, compile (0 errors).
+2. **Tools → Options → Expert Advisors:** allow WebRequest for your server URL (e.g. `https://omnicee.onrender.com`).
+3. Attach to **one** chart. Inputs:
+   - `InpServerURL` = public HTTPS origin  
+   - `InpEASecret` = same as Render `EA_SECRET`
+4. EA:
+   - Pushes **bid/ask** on a timer (`/api/ea/prices`)
+   - Syncs **balance** (`/api/ea/balance`)
+   - Polls **approved** signals only (`/api/ea/signals`) and can place trades with SL/TP
+
+Symbol map (Exness-style suffixes) is inside `MapSymbol()` — adjust if your broker names differ. `UUP` is shown as **DXY** in the UI when used as dollar proxy.
+
+---
+
+## Web app (desk)
+
+Tabs (typical):
+
+- **Home** — live chart, market watch (broker ticks when EA is live), market voice + S/R, recent signals  
+- **Signals** — filtered book by desk (Gold / FX / Oil / DXY / Crypto)  
+- **Intel** — What to expect (session + briefing), regime, COT, economic calendar  
+- **News** — multi-source, topic filters  
+- **Desk / Valid / Monitor** — book tools, validation/learning, feed health  
+
+Install: mobile browser → **Add to Home Screen**; desktop Chrome/Edge → install icon in the address bar.
+
+---
+
+## Signal path (high level)
+
+1. Feeds + optional MT5 ticks update candles / quotes.  
+2. Agents score direction and confidence.  
+3. **Signal scorer** applies weights, adverse-selection / regime-aware penalties.  
+4. **Conflict resolver** + institutional gates + session / drawdown checks.  
+5. Approved signals persist (MongoDB), stream to UI, optional Telegram, and EA poll.  
+6. Outcomes feed adaptive learning profiles over time.
+
+Default symbols include major FX, gold, oil, dollar proxy (`UUP`), and major crypto pairs — override with `SYMBOLS`.
+
+---
+
+## Security notes
+
+- Never commit real `.env` or live `EA_SECRET` / API keys.  
+- Set `EA_SECRET` in production; without it, EA routes may be open.  
+- Prefer `EMAIL_AUTH_REQUIRED=true` when sharing the URL with friends.  
+- Resend `EMAIL_FROM` must be a real address format or sends fail with HTTP 422.
+
+---
+
+## Scripts
+
+| Command | Action |
+|---------|--------|
+| `node start-all.js` | Production-style: API + engine |
+| `npm start` | Engine only (`index.js`) — no HTTP UI |
+| `npm run start:api` | API only |
+| `npm test` | Smoke tests |
+| `npm run build --prefix webapp-react` | Build UI into `webapp-react/dist` |
+
+---
+
+## Disclaimer
+
+OMNICEE does not guarantee profits. Past signals and backtests do not predict future results. You are solely responsible for trading decisions and broker compliance. Use at your own risk.
+
+---
+
+## License & author
+
+Developed by **James Yelbert**.  
+Repository: https://github.com/cee999/omnicee  
