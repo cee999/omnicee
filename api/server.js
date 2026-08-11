@@ -47,6 +47,18 @@ const MARKET_SNAPSHOT_CACHE = new Map();
 
 let serverState = null;
 
+// Load persisted market snapshot cache (fast startup fallback for cold boot)
+try {
+  const persist = require('../lib/persist');
+  const rows = persist.loadMarket();
+  if (Array.isArray(rows)) {
+    for (const r of rows) {
+      if (r && r.symbol) MARKET_SNAPSHOT_CACHE.set(String(r.symbol).toUpperCase(), r);
+    }
+    console.info('[API] loaded persisted market snapshot cache:', MARKET_SNAPSHOT_CACHE.size, 'rows');
+  }
+} catch (e) { /* best-effort */ }
+
 function dashboardReadAuth(req, res, next) {
   if (req.emailSession?.email) {
     req.authMethod = 'email';
@@ -1168,6 +1180,16 @@ function startServer(config = {}) {
   // Data Integrity Monitor — feed/staleness health, so the dashboard shows a warning banner instead of the trader only finding out a feed died when signals quietly stop arriving.
   forward('feed_health', 'feed_health');
   forward('engine_ready', 'engine_ready');
+  // Persist market snapshot cache periodically to disk so cold boots have data
+  try {
+    const persist = require('../lib/persist');
+    setInterval(() => {
+      try {
+        const rows = [...MARKET_SNAPSHOT_CACHE.values()].slice(0, 200);
+        persist.saveMarket(rows);
+      } catch (_) {}
+    }, 15 * 1000);
+  } catch (_) {}
   forward('abnormal_market', 'abnormal_market', payload => db.saveTelemetry({ type: 'abnormal_market', ...payload }));
   forward('crypto_volatility_alert', 'crypto_volatility_alert', payload => db.saveTelemetry({ type: 'crypto_volatility_alert', ...payload }));
   // FIX: BybitFeed emits liquidation_cascade (real risk event — large forced liquidations in a short window) and index.js relays it onto wsBus, but it was never added to this forward() whitelist — it...

@@ -156,6 +156,25 @@ const lastAnalysisAt = new Map();   // key → last run ms
 const lastAnalysisScore = new Map(); // key → last final score (0–100)
 const lastTickAt = new Map();        // symbol → last accepted tick ms
 let engineReadyEmitted = false;
+
+// Load persisted candles + last-market cache so cold-starts have immediate data
+try {
+  const persist = require('./lib/persist');
+  const persisted = persist.loadCandles();
+  if (persisted && typeof persisted === 'object') {
+    // persisted expected shape: { candleStores: { symbol: { tf: [...] } }, lastPrices: { symbol: { price, bid, ask, source, ts } } }
+    if (persisted.candleStores) {
+      Object.assign(candleStores, persisted.candleStores);
+      log.info('Loaded persisted candleStores — symbols:', Object.keys(persisted.candleStores).length);
+    }
+    if (persisted.lastPrices) {
+      for (const [s, v] of Object.entries(persisted.lastPrices)) {
+        lastPriceBySymbol[s] = v;
+      }
+      log.info('Loaded persisted last prices — symbols:', Object.keys(persisted.lastPrices).length);
+    }
+  }
+} catch (e) { log.debug('No persisted state loaded'); }
 const LIVE_ANALYSIS_INTERVAL_MS = Number(process.env.ANALYSIS_INTERVAL_MS || 45000);
 const ADAPTIVE_THROTTLE = process.env.ADAPTIVE_THROTTLE !== 'false'; // default ON
 
@@ -1310,6 +1329,18 @@ function onLivePrice(symbol, price, { change = null, bias = null, source = 'cand
       if (wsBus) wsBus.emit('engine_ready', { ts: Date.now(), symbol, source });
     } catch (_) {}
   }
+  // persist a lightweight snapshot to disk so restarts have immediate data
+  try {
+    const persist = require('./lib/persist');
+    persist.saveCandles({ candleStores, lastPrices: lastPriceBySymbol });
+  } catch (_) {}
+  // keep cache fresh periodically
+  try {
+    const persist = require('./lib/persist');
+    setInterval(() => {
+      try { persist.saveCandles({ candleStores, lastPrices: lastPriceBySymbol }); } catch (_) {}
+    }, 15 * 1000);
+  } catch (_) {}
 
   // Crypto volatility alerts (BTC/ETH short-window % moves)
   if (cryptoVolAlert && cryptoVolAlert.watches(symbol)) {
