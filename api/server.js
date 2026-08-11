@@ -150,6 +150,18 @@ function createApp() {
   app.use(compression());
   app.use(express.json({ limit: '512kb' }));
   app.use(emailSessionMiddleware(db));
+
+  // Cache status endpoint: reports persisted market and candle cache info.
+  app.get('/api/cache/status', async (req, res) => {
+    try {
+      const persist = require('../lib/persist');
+      const market = persist.loadMarket();
+      const candles = persist.loadCandles();
+      return res.json({ ok: true, market: market ? { ts: market.ts, rows: (market.rows||[]).length } : null, candles: candles ? { ts: candles.ts || null, symbols: Object.keys(candles.candleStores || {}).length } : null });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message });
+    }
+  });
   // FIX: publicLimiter below deliberately skips everything under /api/auth/ (see its `skip` function) — that's correct, a dashboard-read budget is the wrong shape for login endpoints — but nothing ever...
   const authLimiter = rateLimit({
     windowMs: 60 * 1000,

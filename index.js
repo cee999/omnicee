@@ -156,6 +156,8 @@ const lastAnalysisAt = new Map();   // key → last run ms
 const lastAnalysisScore = new Map(); // key → last final score (0–100)
 const lastTickAt = new Map();        // symbol → last accepted tick ms
 let engineReadyEmitted = false;
+let bootStartAt = Date.now();
+const BOOT_GRACE_MS = Number(process.env.BOOT_GRACE_MS || 60000); // first 60s: relaxed requirements
 
 // Load persisted candles + last-market cache so cold-starts have immediate data
 try {
@@ -257,7 +259,11 @@ function scheduleLiveAnalysis(symbol, reason = 'tick') {
   for (const tf of TIMEFRAMES_STR) {
     const key = `${symbol}:${tf}`;
     const n = candleStores[symbol]?.[tf]?.length || 0;
-    const minBars = SIGNAL_SOFT_GATES ? 40 : 50;
+    let minBars = SIGNAL_SOFT_GATES ? 40 : 50;
+    // During initial boot grace period, allow fewer bars so signals can seed faster
+    if (reason === 'boot' && (Date.now() - bootStartAt) < BOOT_GRACE_MS) {
+      minBars = Math.min(8, minBars);
+    }
     if (n < minBars) continue;
     if (inFlight.has(key)) continue;
 
