@@ -2253,8 +2253,99 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
   );
 }
 
+/* ── WHAT TO EXPECT (session / today / this week) ──────────────────────
+ * Session context, regime, and COT-extreme data were already computed by
+ * MarketOutlookBuilder and existed — buried as a single 220-char
+ * truncated line inside MarketVoice's ticker. This surfaces the same
+ * data as three clearly labeled sections instead of prose someone has
+ * to read past the ellipsis to get anything from. "This Week" pulls
+ * from the calendar prop (the actual /api/calendar data — outlook
+ * deliberately doesn't carry calendar; see market-outlook.js's note
+ * field) since that's the correct source, not a new one.
+ */
+function WhatToExpect({ outlook, calendar, now, mode }) {
+  const live = mode === 'live' && outlook;
+  if (!live) return null;
+
+  // FIX: adopted MarketOutlookBuilder.sessionInfo()'s canonical shape
+  // ({name, note, utcHour, label}) after a concurrent session built the
+  // same session-context idea independently, with better session
+  // boundaries (splits London/NY overlap from plain NY) and a genuinely
+  // useful human-readable .note instead of a bare liquidity adjective.
+  const session = outlook.session || { name: 'Off-hours', utcHour: new Date(now).getUTCHours(), note: '', label: 'Off-hours' };
+
+  const symbols = outlook.symbols || [];
+  const withRegime = symbols.filter(s => s.regime && s.regime !== 'UNKNOWN');
+  const ranked = [...withRegime].sort((a, b) => (Number(b.tradeability) || 0) - (Number(a.tradeability) || 0));
+  const best = ranked[0];
+  const gated = symbols.filter(s => s.sessionStatus && s.sessionStatus !== 'CLEAR');
+  const extremes = symbols.filter(s => s.institutionalPositioning?.isExtreme);
+
+  const weekEvents = (calendar || [])
+    .filter(e => Number.isFinite(e.time) && e.time > now && e.time < now + 7 * 86400000)
+    .filter(e => String(e.impact || '').toLowerCase() !== 'low')
+    .sort((a, b) => a.time - b.time)
+    .slice(0, 5);
+
+  const fmtCountdown = (ms) => {
+    const h = ms / 3600000;
+    if (h < 1) return `${Math.round(ms / 60000)}m`;
+    if (h < 24) return `${h.toFixed(1)}h`;
+    return `${Math.round(h / 24)}d`;
+  };
+
+  return (
+    <div className="omni-panel p-3">
+      <SectionHeader icon={Globe2} title="What to Expect" sub="session · today · this week" />
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-1">
+        <div>
+          <div className="font-mono text-[9px] uppercase tracking-wider mb-1.5" style={{ color: 'var(--textFaint)' }}>This Session</div>
+          <div className="text-[13px] font-medium mb-1" style={{ color: 'var(--text)' }}>{session.name}</div>
+          <div className="font-mono text-[10px]" style={{ color: 'var(--textDim)' }}>
+            {String(session.utcHour).padStart(2, '0')}:00 UTC{session.note ? ` — ${session.note}` : ''}
+          </div>
+        </div>
+
+        <div>
+          <div className="font-mono text-[9px] uppercase tracking-wider mb-1.5" style={{ color: 'var(--textFaint)' }}>Today</div>
+          {best ? (
+            <>
+              <div className="text-[13px] font-medium mb-1" style={{ color: 'var(--text)' }}>
+                Focus: {best.symbol} <span style={{ color: 'var(--textDim)', fontWeight: 400 }}>({best.regime})</span>
+              </div>
+              <div className="font-mono text-[10px]" style={{ color: 'var(--textDim)' }}>
+                {gated.length > 0 ? `${gated.length} symbol${gated.length > 1 ? 's' : ''} session-gated` : 'No session gates active'}
+                {extremes.length > 0 && ` · ${extremes.length} COT extreme`}
+              </div>
+            </>
+          ) : (
+            <div className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>No regime scores yet — waiting on OHLC candles.</div>
+          )}
+        </div>
+
+        <div>
+          <div className="font-mono text-[9px] uppercase tracking-wider mb-1.5" style={{ color: 'var(--textFaint)' }}>This Week</div>
+          {weekEvents.length > 0 ? (
+            <div className="space-y-1">
+              {weekEvents.map((e, i) => (
+                <div key={i} className="font-mono text-[10px] flex items-center gap-1.5" style={{ color: 'var(--textDim)' }}>
+                  <span style={{ color: String(e.impact).toLowerCase() === 'high' ? 'var(--coral)' : 'var(--gold)' }}>●</span>
+                  <span className="truncate" style={{ color: 'var(--text)' }}>{e.name}</span>
+                  <span style={{ color: 'var(--textFaint)', flexShrink: 0 }}>in {fmtCountdown(e.time - now)}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>No high/medium-impact events in the next 7 days.</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── DASH ───────────────────────────────────────────────────────────── */
-function DashTab({ signals, accountBalance, journalStats, prices, quotes, changes, mode, outlook, now, levels, analysisLive, socketLive, cryptoVolAlerts }) {
+function DashTab({ signals, accountBalance, journalStats, prices, quotes, changes, mode, outlook, now, levels, analysisLive, socketLive, cryptoVolAlerts, calendar }) {
   const approved = signals.filter(s => s.gate?.status === 'approved' || s.gate?.status === 'APPROVED');
   const recent = signals.slice(0, 12);
   const [chartSymbol, setChartSymbol] = useState('XAUUSD');
@@ -2287,6 +2378,7 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
           ))}
         </div>
       )}
+      <WhatToExpect outlook={outlook} calendar={calendar} now={now || Date.now()} mode={mode} />
       {/* LIVE TICKS FIRST — no scroll required */}
       <div className="omni-home-grid">
         {/* Chart first — symbol/TF controls only inside Full chart (no duplicate chips here) */}
@@ -2641,7 +2733,6 @@ function IntelTab({ now, outlook, mode, calendar, levels }) {
         note: s.institutionalPositioning.note,
       }))
     : null;
-
   const calendarRows = Array.isArray(calendar) && calendar.length
     ? calendar.slice(0, 60).map(e => ({
         name: e.name,
@@ -4048,7 +4139,7 @@ export default function OmniceeDashboard() {
       <div className="flex flex-col flex-1 min-h-0" style={{ minHeight: 0 }}>
         <div className="omni-main omni-scroll">
           <ErrorBoundary key={activeTab} label={activeTab}>
-            {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} analysisLive={feed.analysisLive} socketLive={feed.socketLive} cryptoVolAlerts={feed.cryptoVolAlerts} />}
+            {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} analysisLive={feed.analysisLive} socketLive={feed.socketLive} cryptoVolAlerts={feed.cryptoVolAlerts} calendar={feed.calendar} />}
             {activeTab === 'SIGNALS' && (
               <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} auditLog={feed.auditLog} analysisLive={feed.analysisLive} />
             )}

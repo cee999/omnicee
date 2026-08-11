@@ -649,7 +649,12 @@ async function runTests() {
     if (outlook.week !== undefined || outlook.nextWeek !== undefined) throw new Error('expected calendar fields to stay removed from MarketOutlookBuilder output — if this changed intentionally, update alert-dispatcher.js._sendMarketOutlook to match');
     if (!outlook.symbols[0].institutionalPositioning?.isExtreme) throw new Error('expected EURUSD institutional positioning to be attached and flagged extreme');
     if (!outlook.narrative.includes('hedge funds')) throw new Error('expected narrative to mention institutional/hedge-fund positioning');
-    pass(`MarketOutlookBuilder: no calendar leakage, COT-extreme=${outlook.symbols[0].institutionalPositioning.isExtreme}`);
+    // FIX: new field for the "what to expect this session" frontend
+    // panel — locks in the contract so a future narrative refactor can't
+    // silently drop it the way calendar's removal left dead fields
+    // behind for alert-dispatcher.js to trip over.
+    if (!outlook.session?.name || !Number.isFinite(outlook.session?.utcHour)) throw new Error(`expected structured session {name, utcHour} on outlook, got ${JSON.stringify(outlook.session)}`);
+    pass(`MarketOutlookBuilder: no calendar leakage, session=${outlook.session.name}, COT-extreme=${outlook.symbols[0].institutionalPositioning.isExtreme}`);
   } catch (e) { fail('MarketOutlookBuilder', e); }
 
   try {
