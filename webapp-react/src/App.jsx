@@ -799,6 +799,7 @@ function useLiveFeed() {
   const [heatmapTiles, setHeatmapTiles] = useState(null);
   const [feedHealth, setFeedHealth] = useState(null);
   const [uptimeSec, setUptimeSec] = useState(null);
+  const [eaAuthIssue, setEaAuthIssue] = useState(null);
   // Null until a real EA-reported balance (POST /api/ea/balance) arrives via
   // poll or the 'balance' socket channel — DashTab/RiskTab show "—" until then.
   const [accountBalance, setAccountBalance] = useState(null);
@@ -830,6 +831,7 @@ function useLiveFeed() {
      retrying every 4s in the background, and flip to live the instant the
      backend answers — no manual refresh required. */
   const [wakingBackend, setWakingBackend] = useState(false);
+  const [wakeAttempts, setWakeAttempts] = useState(0);
   useEffect(() => {
     let cancelled = false;
     let timer = null;
@@ -839,6 +841,7 @@ function useLiveFeed() {
     setMode('live');
     const tryProbe = () => {
       attempts += 1;
+      setWakeAttempts(attempts);
       const probe = attempts % 2 === 0
         ? omniFetch('/health', 6000)
         : omniFetch('/api/market?symbols=EURUSD', 8000);
@@ -853,9 +856,20 @@ function useLiveFeed() {
         });
     };
     tryProbe();
-    // Hard ceiling: stop "waking" spinner after 45s even if backend is slow
-    const stopWake = setTimeout(() => { if (!cancelled) setWakingBackend(false); }, 45000);
-    return () => { cancelled = true; if (timer) clearTimeout(timer); clearTimeout(stopWake); };
+    // FIX: this used to force wakingBackend false at a hard 45s ceiling no
+    // matter what — meaning on any cold start slower than 45s (common on
+    // Render free: 30-60s+ is normal, and can run longer), the "connecting
+    // to server" banner would vanish while the retry loop kept silently
+    // running underneath, leaving the DASH tab looking permanently empty
+    // with zero indication anything was still happening. That's "sometimes
+    // it takes never to open" — not a retry-loop bug, a UI-honesty bug:
+    // the one visible signal that the app was still trying got switched
+    // off before the thing it was waiting for actually finished. The
+    // retry loop itself already has no ceiling (tryProbe recurses forever
+    // until cancelled or successful) — removed the mismatched visual one
+    // instead of extending it further, since any fixed number just moves
+    // the same failure mode to a different wait time.
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, []);
 
   /* Clock runs regardless of mode. */
@@ -1000,7 +1014,23 @@ function useLiveFeed() {
       try { const r = await recordFetch('heatmap', omniFetch('/api/heatmap')); if (!cancelled && r.ok) setHeatmapTiles(r.tiles); } catch (_) {}
       try { const r = await recordFetch('audit-trail', omniFetch('/api/audit-trail?limit=50')); if (!cancelled && r.ok) setAuditLog([...(r.nearMisses||[]), ...(r.entries||[])].slice(0, 50)); } catch (_) {}
       try { const r = await recordFetch('health', omniFetch('/api/health')); if (!cancelled && r.ok) setFeedHealth(r.feeds); } catch (_) {}
-      try { const r = await omniFetch('/health'); if (!cancelled && r.ok) setUptimeSec(r.uptime); } catch (_) {}
+      try {
+        const r = await omniFetch('/health');
+        if (!cancelled && r.ok) {
+          setUptimeSec(r.uptime);
+          // FIX: EA auth failures were only visible in Render's server
+          // logs, rate-limited to once/minute so they wouldn't get lost
+          // in spam — but nobody looks at server logs while trading, and
+          // the actual visible symptom (chart quietly staying on Deriv
+          // forever) looks identical to a chart bug, not an auth problem.
+          // Surface it in the UI instead. Only flag it "active" if a
+          // failure happened recently (last 3 min) — EA_SECRET being
+          // fixed should clear this within a poll cycle or two, not
+          // require a redeploy to stop showing a stale warning.
+          const recent = r.eaAuthLastFailureAt && (Date.now() - r.eaAuthLastFailureAt) < 180000;
+          setEaAuthIssue(recent ? { failures: r.eaAuthFailures, lastAt: r.eaAuthLastFailureAt } : null);
+        }
+      } catch (_) {}
       // FIX (Known gap #2): "Equity curve stays illustrative even in live
       // mode ... worth adding a db.getEquityCurve() + route." Realized-trade
       // curve, ~20s refresh (same cadence as the other heavier routes here)
@@ -1212,7 +1242,7 @@ function useLiveFeed() {
     now, prices, quotes, changes, flash, signals, calendar, levels, auditLog, equityCurve, equityCurveLive,
     stats, outlook, heatmapTiles, feedHealth, uptimeSec, accountBalance, socketLive, analysisLive, cryptoVolAlerts,
     news, sentiment, journalStats, learningProfiles, relativeStrength, hurstBoard, fetchErrors,
-    mode, connected: mode === 'live', wakingBackend,
+    mode, connected: mode === 'live', wakingBackend, wakeAttempts, eaAuthIssue,
   };
 }
 
@@ -4132,7 +4162,15 @@ export default function OmniceeDashboard() {
       <InstallBanner installEvt={installEvt} loggedIn={!!user} onInstalled={() => setInstallEvt(null)} />
       {feed.wakingBackend && (
         <div className="px-4 py-2 font-mono text-[11px] border-b" style={{ borderColor: 'var(--border)', color: 'var(--gold)', background: 'var(--panel2)' }}>
-          Connecting to server… prices and signals appear when the backend is awake (can take up to a minute on free hosting).
+          {feed.wakeAttempts > 10
+            ? `Still waking the server up (attempt ${feed.wakeAttempts}) — free hosting can take a couple minutes after being idle. Not stuck, still retrying.`
+            : 'Connecting to server… prices and signals appear when the backend is awake (can take up to a minute on free hosting).'}
+        </div>
+      )}
+      {feed.eaAuthIssue && (
+        <div className="px-4 py-2 font-mono text-[11px] border-b" style={{ borderColor: 'var(--border)', color: 'var(--coral)', background: 'var(--panel2)' }}>
+          MT5 EA is being rejected by the server ({feed.eaAuthIssue.failures} failed attempts) — chart and prices are running on Deriv only.
+          Your EA's secret likely doesn't match this deployment's EA_SECRET. Recompile mt5/OmniceeEA.mq5 and re-enter the secret in the EA's Inputs tab in MT5.
         </div>
       )}
       <TickerTape prices={feed.prices || {}} changes={feed.changes || {}} flash={feed.flash || {}} quotes={feed.quotes || {}} />

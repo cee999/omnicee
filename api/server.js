@@ -198,9 +198,27 @@ function createApp() {
   app.use('/api/ea', eaLimiter);
 
   app.get('/health', async (_req, res) => {
-    let mongo = { ok: false };
-    try { mongo = await db.health(); } catch (err) { mongo = { ok: false, error: err.message }; }
-    // Same fix as /api/health above (MemoryManager.getFullStats() had zero callers anywhere) — this endpoint is what the frontend's About panel actually fetches, which that fix didn't reach since it only...
+    // FIX: this is render.yaml's healthCheckPath — Render's own platform-
+    // level gate for "is this deploy ready to receive traffic" during
+    // every cold start, and it's also what the frontend's wake-probe and
+    // the self-ping both hit. It was awaiting db.health() (a real Mongo
+    // Atlas round-trip) with no timeout, unbounded — if Mongo was slow or
+    // briefly unreachable for any reason, this endpoint got slow or hung
+    // right along with it, which doesn't just slow one API call: it
+    // directly extends how long Render keeps the deploy "not ready" and
+    // how long the frontend's cold-start probe keeps failing. The one
+    // endpoint that most needs to answer fast, unconditionally, was
+    // exactly as slow as the least reliable dependency in the whole
+    // system. Capped at 2s so a Mongo hiccup can't block this past a
+    // bounded, small delay — still reports real status when Mongo
+    // answers in time, just can't hang the whole readiness gate on it.
+    let mongo = { ok: false, error: 'timeout' };
+    try {
+      mongo = await Promise.race([
+        db.health(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000)),
+      ]);
+    } catch (err) { mongo = { ok: false, error: err.message }; }
     let cache = null;
     try { cache = getEngines().memory?.getFullStats?.() || null; } catch (_) { }
     res.json({
@@ -210,6 +228,8 @@ function createApp() {
       mongo,
       finnhub: finnhub.enabled(),
       cache,
+      eaAuthFailures,
+      eaAuthLastFailureAt,
     });
   });
 
@@ -861,6 +881,24 @@ app.get('/api/levels', dashboardReadAuth, (req, res) => {
 
   const EA_SECRET = String(process.env.EA_SECRET || '').trim();
   const EA_SECRET_REQUIRED = process.env.NODE_ENV === 'production';
+  // FIX: an auth failure here was completely silent server-side — just a
+  // 401 JSON response nobody's watching, since the EA runs unattended in
+  // a MT5 terminal in the background. That's a real trap after the
+  // "harden EA auth" security fix: it rightly stripped the hardcoded
+  // secret that used to ship as OmniceeEA.mq5's default InpEASecret value
+  // (it was exposed in git history) — but .mq5 changes don't auto-deploy
+  // the way this web app does. Anyone still running the EA they already
+  // had compiled and attached in MT5 is silently sending the OLD secret
+  // on every single price tick, getting 401'd, and has no way to know —
+  // the chart just quietly stays on Deriv forever, looking like a chart
+  // bug rather than what it actually is: an auth mismatch that needs the
+  // EA recompiled and its InpEASecret input re-entered to match whatever
+  // EA_SECRET is actually set on this deployment. Tracked here so /health
+  // (which the frontend already polls) can surface it as a real banner
+  // instead of a silent, indistinguishable-from-normal-Deriv-usage state.
+  let eaAuthFailures = 0;
+  let eaAuthLastFailureAt = null;
+  let eaAuthLastFailureLoggedAt = 0;
   function eaAuth(req, res, next) {
     if (!EA_SECRET) {
       if (EA_SECRET_REQUIRED) {
@@ -874,6 +912,15 @@ app.get('/api/levels', dashboardReadAuth, (req, res) => {
     const supplied = Buffer.from(token);
     if (supplied.length === expected.length && supplied.length > 0 && crypto.timingSafeEqual(supplied, expected)) {
       return next();
+    }
+    eaAuthFailures++;
+    eaAuthLastFailureAt = Date.now();
+    // Log at most once a minute — the EA retries this every ~1s, and a
+    // 401-per-second log spam would itself become the thing burying the
+    // signal that something needs fixing.
+    if (Date.now() - eaAuthLastFailureLoggedAt > 60000) {
+      eaAuthLastFailureLoggedAt = Date.now();
+      console.warn(`[API] EA auth rejected on ${req.path} (${eaAuthFailures} failures since boot) — if this is your own MT5 EA, its InpEASecret input doesn't match this deployment's EA_SECRET. Recompile mt5/OmniceeEA.mq5 and re-enter the secret in the EA's Inputs tab in MT5; the old hardcoded default was removed for security and won't auto-update in a terminal that's already running it.`);
     }
     return res.status(401).json({ ok: false, error: 'Invalid EA secret' });
   }
