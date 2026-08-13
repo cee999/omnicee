@@ -1,0 +1,43 @@
+name: Finish isolated web-only migration
+
+on:
+  push:
+    branches:
+      - refactor/web-only-notifications-v2
+    paths:
+      - tools/finish-web-only-migration.js
+      - .github/workflows/finish-web-only-migration.yml
+      - index.js
+      - api/server.js
+      - api/web-*.js
+      - signal-pipeline/web-alert-dispatcher.js
+      - signal-pipeline/alert-dispatcher.js
+      - api/telegram-auth.js
+      - render.yaml
+      - .env.example
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts
+      - run: node tools/finish-web-only-migration.js
+      - run: git diff --check
+      - run: |
+          git config user.name "omnicee-web-migration"
+          git config user.email "actions@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "No migration changes required."
+            exit 0
+          fi
+          git add index.js api/server.js api/web-auth.js api/web-push.js api/web-push-store.js api/web-push-routes.js signal-pipeline/web-alert-dispatcher.js render.yaml .env.example api/telegram-auth.js signal-pipeline/alert-dispatcher.js
+          git commit -m "refactor: remove Telegram and wire web push"
+          git push
