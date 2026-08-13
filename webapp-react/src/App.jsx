@@ -398,12 +398,16 @@ function SectionHeader({ icon: Icon, title, sub }) {
 
 /* Shown wherever a panel's real data hasn't arrived yet — replaces every
    demo/simulated fallback that used to sit here instead. */
-function WaitingForBackend({ height = 140, label = 'Waiting for live data… check feeds / API keys' }) {
+function WaitingForBackend({ height = 140, label = 'Loading live data…' }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-2 font-mono text-[10px] uppercase tracking-wider"
-      style={{ height, color: 'var(--textFaint)' }}>
-      <Circle size={6} fill="currentColor" className="omni-pulse" />
-      {label}
+    <div className="flex flex-col items-center justify-center gap-2 px-3 font-mono text-[11px] text-center"
+      style={{ minHeight: height, height: height === 'auto' ? undefined : height, color: 'var(--textDim)', background: 'var(--panel2)', borderRadius: 8, border: '1px dashed var(--border)' }}>
+      <div className="flex items-center gap-2" style={{ color: 'var(--emerald)' }}>
+        <Circle size={7} fill="currentColor" className="omni-pulse" />
+        <span className="uppercase tracking-wider text-[10px]">OMNICEE</span>
+      </div>
+      <div style={{ color: 'var(--text)' }}>{label}</div>
+      <div className="text-[10px]" style={{ color: 'var(--textFaint)' }}>Desk stays open — data fills in as feeds connect</div>
     </div>
   );
 }
@@ -482,6 +486,24 @@ function getTelegramInitData() {
 }
 
 const SESSION_KEY = 'omnicee_session_v1';
+const OMNI_CACHE_KEY = 'omnicee_desk_cache_v1';
+function loadDeskCache() {
+  try {
+    const raw = localStorage.getItem(OMNI_CACHE_KEY);
+    if (!raw) return null;
+    const c = JSON.parse(raw);
+    if (!c || typeof c !== 'object') return null;
+    return c;
+  } catch (_) { return null; }
+}
+function saveDeskCache(partial) {
+  try {
+    const prev = loadDeskCache() || {};
+    const next = { ...prev, ...partial, savedAt: Date.now() };
+    localStorage.setItem(OMNI_CACHE_KEY, JSON.stringify(next));
+  } catch (_) {}
+}
+
 
 function getSession() {
   try {
@@ -785,13 +807,26 @@ function LoginGate({ onAuthed }) {
 function useLiveFeed() {
   const [mode, setMode] = useState('live'); // always show shell; never blank on checking
   const [now, setNow] = useState(Date.now());
-  const [prices, setPrices] = useState(() => Object.fromEntries(SYMBOLS.map(s => [s, null])));
-  const [quotes, setQuotes] = useState(() => Object.fromEntries(SYMBOLS.map(s => [s, null])));
+  const [prices, setPrices] = useState(() => {
+    const c = loadDeskCache();
+    const base = Object.fromEntries(SYMBOLS.map(s => [s, null]));
+    if (c?.prices) for (const s of SYMBOLS) if (c.prices[s] != null) base[s] = c.prices[s];
+    return base;
+  });
+  const [quotes, setQuotes] = useState(() => {
+    const c = loadDeskCache();
+    const base = Object.fromEntries(SYMBOLS.map(s => [s, null]));
+    if (c?.quotes) for (const s of SYMBOLS) if (c.quotes[s]) base[s] = c.quotes[s];
+    return base;
+  });
   const [calendar, setCalendar] = useState([]);
   const [levels, setLevels] = useState({});
   const [changes, setChanges] = useState(() => Object.fromEntries(SYMBOLS.map(s => [s, null])));
   const [flash, setFlash] = useState({});
-  const [signals, setSignals] = useState([]);
+  const [signals, setSignals] = useState(() => {
+    const c = loadDeskCache();
+    return Array.isArray(c?.signals) ? c.signals.slice(0, 40) : [];
+  });
   const [auditLog, setAuditLog] = useState([]);
   const [equityCurve, setEquityCurve] = useState([]);
   const [stats, setStats] = useState(null);
@@ -872,7 +907,13 @@ function useLiveFeed() {
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, []);
 
+  /* Persist last desk snapshot so reopen is never blank */
+  useEffect(() => {
+    saveDeskCache({ prices, quotes, signals: (signals || []).slice(0, 40) });
+  }, [prices, quotes, signals]);
+
   /* Clock runs regardless of mode. */
+
   useEffect(() => {
     const clock = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(clock);
@@ -1352,13 +1393,15 @@ function TickerTape({ prices, changes, flash, quotes }) {
                   <span style={{ color: 'var(--textFaint)' }}>/</span>
                   <span style={{ color: 'var(--emerald)' }}>{fmtPrice(sym, ask)}</span>
                 </>
-              ) : (
+              ) : mid != null ? (
                 <span style={{ color: 'var(--text)' }}>{fmtPrice(sym, mid)}</span>
+              ) : (
+                <span style={{ color: 'var(--textFaint)' }}>—</span>
               )}
               {ch != null && (
                 <span style={{ color: up ? 'var(--emerald)' : 'var(--coral)' }}>{fmtPct(ch)}</span>
               )}
-              {q?.source === 'mt5_ea' && <span style={{ color: 'var(--gold)', fontSize: 9 }}>LIVE</span>}
+              {(q?.source === 'mt5_ea' || q?.source === 'deriv') && <span style={{ color: 'var(--gold)', fontSize: 9 }}>{q?.source === 'mt5_ea' ? 'MT5' : 'DERIV'}</span>}
             </span>
           );
         })}
@@ -4156,7 +4199,7 @@ export default function OmniceeDashboard() {
 
   return (
     <AppErrorBoundary>
-    <div className="omni-root text-sm" style={{ background: 'var(--void, #05070a)', color: 'var(--text, #eef2f7)' }}>
+    <div className="omni-root text-sm" style={{ minHeight: '100vh', minHeight: '100dvh', background: 'var(--void, #05070a)', color: 'var(--text, #eef2f7)' }}>
       <ThemeStyle />
       <TopBar now={feed.now || Date.now()} mode={feed.mode || 'live'} socketLive={!!feed.socketLive} analysisLive={feed.analysisLive} wakingBackend={!!feed.wakingBackend} onCommand={handleCommand} soundOn={soundOn} onToggleSound={toggleSound} />
       <InstallBanner installEvt={installEvt} loggedIn={!!user} onInstalled={() => setInstallEvt(null)} />
