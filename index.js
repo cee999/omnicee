@@ -98,6 +98,7 @@ const { AlphaVantageFeed }   = loadModule('./feeds/alpha-vantage-feed',         
 const { FinnhubFeed }        = loadModule('./feeds/finnhub-feed',                'FinnhubFeed')       || {};
 const { FMPFeed }            = loadModule('./feeds/fmp-feed',                    'FMPFeed')           || {};
 const { ForexFactoryCalendar } = loadModule('./feeds/forex-factory-calendar',   'ForexFactoryCalendar') || {};
+const { BinancePublicFeed }   = loadModule('./feeds/binance-public-feed',       'BinancePublicFeed')   || {};
 const { DerivFeed }            = loadModule('./feeds/deriv-feed',               'DerivFeed')            || {};
 const { CryptoVolatilityAlert } = loadModule('./feeds/crypto-volatility-alert', 'CryptoVolatilityAlert') || {};
 const { CFTCCotFeed }        = loadModule('./feeds/cftc-cot-feed',               'CFTCCotFeed')       || {};
@@ -1294,6 +1295,8 @@ const PRICE_SOURCE_RANK = {
   tradingview: 90,
   deriv: 55,
   finnhub: 50,
+  binance: 52,
+  finnhub: 50,
   candle: 40,
   unknown: 0,
 };
@@ -2028,7 +2031,38 @@ function buildFeeds() {
     derivFeed.start();
     feeds.push({ name: 'DerivFeed', instance: derivFeed, symbols: SYMBOLS });
     if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('Deriv', derivFeed, SYMBOLS);
-    log.info(`DerivFeed (primary free live) for: ${SYMBOLS.join(', ')}`);
+    log.info(`DerivFeed started (app_id=${process.env.DERIV_APP_ID || '1089'}) — if symbols invalid, set DERIV_APP_ID from api.deriv.com`);
+  }
+
+  // Finnhub live FX/gold when FINNHUB_API_KEY is set (Deriv public app often rejects symbols)
+  if (finnhubFeed?.enabled?.() && fxSymbols.length) {
+    try {
+      finnhubFeed.on('price', ({ symbol, price }) => {
+        const last = lastPriceBySymbol[symbol];
+        if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < 1500) return;
+        if (last && last.source === 'deriv' && (Date.now() - last.ts) < 2000) return;
+        onLivePrice(symbol, price, { source: 'finnhub' });
+      });
+      finnhubFeed.connectPriceStream(fxSymbols);
+      feeds.push({ name: 'FinnhubPrice', instance: finnhubFeed, symbols: fxSymbols });
+      log.info(`Finnhub price stream for: ${fxSymbols.join(', ')}`);
+    } catch (e) {
+      log.warn(`Finnhub price stream failed: ${e.message}`);
+    }
+  }
+
+  // Binance public crypto ticks (no API key)
+  if (BinancePublicFeed && cryptoSymbols.length && process.env.DISABLE_BINANCE !== '1') {
+    const binanceFeed = new BinancePublicFeed({ symbols: cryptoSymbols });
+    binanceFeed.on('price', ({ symbol, price, bid, ask }) => {
+      const last = lastPriceBySymbol[symbol];
+      if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < 1500) return;
+      onLivePrice(symbol, price, { source: 'binance', bid, ask });
+    });
+    binanceFeed.on('connected', () => log.info('BinancePublicFeed connected'));
+    binanceFeed.on('error', (err) => log.warn(`BinancePublicFeed: ${feedErrorMessage(err)}`));
+    feeds.push({ name: 'BinancePublicFeed', instance: binanceFeed, symbols: cryptoSymbols });
+    log.info(`BinancePublicFeed for: ${cryptoSymbols.join(', ')}`);
   }
 
   // Yahoo never overwrites a symbol that has a recent mt5_ea tick.
