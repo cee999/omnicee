@@ -1256,6 +1256,30 @@ function startServer(config = {}) {
   // FIX: balance_update was emitted (real data — /api/ea/balance receives the MT5 EA's actual account balance/equity/margin) but had no forward() entry, so it silently never reached any connected browser.
   forward('balance_update', 'balance');
 
+  // Bridge engine ticks → REST market cache (socket may be quiet; REST must still work)
+  function syncPricesFromEngine() {
+    try {
+      const live = getEngines();
+      const map = live?.lastPriceBySymbol || {};
+      for (const [symbol, tick] of Object.entries(map)) {
+        if (!tick || !Number.isFinite(tick.price)) continue;
+        MARKET_SNAPSHOT_CACHE.set(String(symbol).toUpperCase(), {
+          symbol: String(symbol).toUpperCase(),
+          price: tick.price,
+          bid: tick.bid ?? null,
+          ask: tick.ask ?? null,
+          change: null,
+          bias: null,
+          source: tick.source || 'engine',
+          timestamp: tick.ts || Date.now(),
+        });
+      }
+    } catch (_) {}
+  }
+  setInterval(syncPricesFromEngine, 2000);
+  setTimeout(syncPricesFromEngine, 500);
+
+
   const port = Number(config.port || API_PORT);
   httpServer.listen(port, () => {
     console.log(`[API] OMNICEE REST + Socket.IO listening on http://localhost:${port}`);

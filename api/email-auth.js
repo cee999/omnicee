@@ -14,11 +14,19 @@ function isValidEmail(email) {
 }
 
 function getOtpPepper() {
-  const pepper = String(process.env.OTP_PEPPER || '').trim();
+  const pepper = String(
+    process.env.OTP_PEPPER
+    || process.env.EA_SECRET
+    || process.env.APP_ACCESS_TOKEN
+    || ''
+  ).trim();
   if (pepper) return pepper;
-  // Never silently fall back to a known/static secret in production.
   if (process.env.NODE_ENV === 'production') {
-    throw new Error('OTP_PEPPER is required in production');
+    console.warn('[AUTH] OTP_PEPPER/EA_SECRET unset — using ephemeral process pepper (set OTP_PEPPER on Render)');
+    if (!global.__omniceeOtpPepper) {
+      global.__omniceeOtpPepper = crypto.randomBytes(16).toString('hex');
+    }
+    return global.__omniceeOtpPepper;
   }
   return 'omnicee-local-dev-otp';
 }

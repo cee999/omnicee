@@ -1299,6 +1299,17 @@ const PRICE_SOURCE_RANK = {
 };
 const BROKER_PRICE_HOLD_MS = Number(process.env.BROKER_PRICE_HOLD_MS) || 60000;
 const lastPriceBySymbol = {};
+// BOOT_SEED_PRICES: restore last known ticks so /api/market is not empty after restart
+try {
+  const persist = require('./lib/persist');
+  const snap = persist.loadCandles?.();
+  if (snap?.lastPrices && typeof snap.lastPrices === 'object') {
+    for (const [sym, v] of Object.entries(snap.lastPrices)) {
+      if (v && Number.isFinite(v.price)) lastPriceBySymbol[sym] = { ...v, ts: v.ts || Date.now() };
+    }
+  }
+} catch (_) {}
+
 
 function onLivePrice(symbol, price, { change = null, bias = null, source = 'candle', bid = null, ask = null } = {}) {
   if (!SYMBOLS.includes(symbol)) return;
