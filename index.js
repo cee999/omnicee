@@ -155,28 +155,6 @@ const inFlight = new Set();
 const lastAnalysisAt = new Map();   // key → last run ms
 const lastAnalysisScore = new Map(); // key → last final score (0–100)
 const lastTickAt = new Map();        // symbol → last accepted tick ms
-let engineReadyEmitted = false;
-let bootStartAt = Date.now();
-const BOOT_GRACE_MS = Number(process.env.BOOT_GRACE_MS || 60000); // first 60s: relaxed requirements
-
-// Load persisted candles + last-market cache so cold-starts have immediate data
-try {
-  const persist = require('./lib/persist');
-  const persisted = persist.loadCandles();
-  if (persisted && typeof persisted === 'object') {
-    // persisted expected shape: { candleStores: { symbol: { tf: [...] } }, lastPrices: { symbol: { price, bid, ask, source, ts } } }
-    if (persisted.candleStores) {
-      Object.assign(candleStores, persisted.candleStores);
-      log.info('Loaded persisted candleStores — symbols:', Object.keys(persisted.candleStores).length);
-    }
-    if (persisted.lastPrices) {
-      for (const [s, v] of Object.entries(persisted.lastPrices)) {
-        lastPriceBySymbol[s] = v;
-      }
-      log.info('Loaded persisted last prices — symbols:', Object.keys(persisted.lastPrices).length);
-    }
-  }
-} catch (e) { log.debug('No persisted state loaded'); }
 const LIVE_ANALYSIS_INTERVAL_MS = Number(process.env.ANALYSIS_INTERVAL_MS || 45000);
 const ADAPTIVE_THROTTLE = process.env.ADAPTIVE_THROTTLE !== 'false'; // default ON
 
@@ -259,11 +237,7 @@ function scheduleLiveAnalysis(symbol, reason = 'tick') {
   for (const tf of TIMEFRAMES_STR) {
     const key = `${symbol}:${tf}`;
     const n = candleStores[symbol]?.[tf]?.length || 0;
-    let minBars = SIGNAL_SOFT_GATES ? 40 : 50;
-    // During initial boot grace period, allow fewer bars so signals can seed faster
-    if (reason === 'boot' && (Date.now() - bootStartAt) < BOOT_GRACE_MS) {
-      minBars = Math.min(8, minBars);
-    }
+    const minBars = SIGNAL_SOFT_GATES ? 40 : 50;
     if (n < minBars) continue;
     if (inFlight.has(key)) continue;
 
@@ -1250,7 +1224,7 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
     // signal-generation gap, not just a display lag. Only Deriv reaches
     // this branch now (Yahoo/TwelveData/Binance/Bybit are gone), so this
     // just matches the hold everywhere else already uses.
-    const holdMs = src === 'deriv' ? Math.min(BROKER_PRICE_HOLD_MS, 12000) : BROKER_PRICE_HOLD_MS;
+    const holdMs = src === 'deriv' ? Math.min(BROKER_PRICE_HOLD_MS, (process.env.DERIV_PRIMARY !== 'false' && process.env.DERIV_PRIMARY !== '0') ? 1500 : 5000) : BROKER_PRICE_HOLD_MS;
     if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < holdMs) {
       return;
     }
@@ -1308,11 +1282,16 @@ function onLivePrice(symbol, price, { change = null, bias = null, source = 'cand
   const rank = PRICE_SOURCE_RANK[source] ?? PRICE_SOURCE_RANK.unknown;
   const prev = lastPriceBySymbol[symbol];
 
-  // If the EA / PC is offline, mt5_ea timestamps go stale and Deriv must win.
+  // Deriv is live backup (and primary when MT5 is offline or DERIV_PRIMARY=true).
+  // Short hold so charts/ticks recover within ~2s after EA dies instead of 12–15s.
+  const derivPrimary = process.env.DERIV_PRIMARY !== 'false' && process.env.DERIV_PRIMARY !== '0';
   const holdMs = source === 'deriv'
-    ? Math.min(BROKER_PRICE_HOLD_MS, 12000)
+    ? (derivPrimary ? 1500 : Math.min(BROKER_PRICE_HOLD_MS, 5000))
     : BROKER_PRICE_HOLD_MS;
-  if (prev && prev.rank > rank && (now - prev.ts) < holdMs) {
+  // When Deriv is primary, never let a stale mt5_ea quote block Deriv ticks.
+  if (source === 'deriv' && derivPrimary && prev && prev.source === 'mt5_ea' && (now - prev.ts) > 1500) {
+    // allow fall-through
+  } else if (prev && prev.rank > rank && (now - prev.ts) < holdMs) {
     return;
   }
   const sameRankMin = source === 'mt5_ea' ? 50 : 400;
@@ -1326,27 +1305,6 @@ function onLivePrice(symbol, price, { change = null, bias = null, source = 'cand
 
   // Always-on analysis: same spirit as live chart — rescore while ticks flow
   try { scheduleLiveAnalysis(symbol, source); } catch (_) {}
-
-  // Emit a one-time engine readiness signal so clients know the trading
-  // engine has started receiving live ticks and can flip out of "waking".
-  if (!engineReadyEmitted) {
-    engineReadyEmitted = true;
-    try {
-      if (wsBus) wsBus.emit('engine_ready', { ts: Date.now(), symbol, source });
-    } catch (_) {}
-  }
-  // persist a lightweight snapshot to disk so restarts have immediate data
-  try {
-    const persist = require('./lib/persist');
-    persist.saveCandles({ candleStores, lastPrices: lastPriceBySymbol });
-  } catch (_) {}
-  // keep cache fresh periodically
-  try {
-    const persist = require('./lib/persist');
-    setInterval(() => {
-      try { persist.saveCandles({ candleStores, lastPrices: lastPriceBySymbol }); } catch (_) {}
-    }, 15 * 1000);
-  } catch (_) {}
 
   // Crypto volatility alerts (BTC/ETH short-window % moves)
   if (cryptoVolAlert && cryptoVolAlert.watches(symbol)) {
@@ -1428,9 +1386,8 @@ function onMT5Tick(symbol, price, { bid, ask, timestamp } = {}) {
         try { onCandle({ symbol, timeframe: tf, candle: { ...prev }, isClosed: true }); }
         catch (e) { log.warn(`onMT5Tick close [${symbol} ${tf}]: ${e.message}`); }
       }
-      const baseOpen = Number.isFinite(bid) ? bid : price;
       mt5CandleBuilders[key] = {
-        timestamp: bucketStart, open: baseOpen, high: baseOpen, low: baseOpen, close: baseOpen,
+        timestamp: bucketStart, open: price, high: price, low: price, close: price,
         volume: 0, bid, ask, source: 'mt5_ea',
         // FIX: chart-vs-ticker mismatch — candleStores' OHLC here is built
         // from `price`, which api/server.js's /api/ea/prices computes as
@@ -1449,19 +1406,9 @@ function onMT5Tick(symbol, price, { bid, ask, timestamp } = {}) {
         bidOpen: bid, bidHigh: bid, bidLow: bid, bidClose: bid,
       };
     } else {
-      // Prefer bid when available and sane (avoid large instantaneous spread artifacts)
-      let tickVal = Number.isFinite(bid) ? bid : price;
-      try {
-        const base = Number(price) || 0;
-        const diff = Math.abs((Number(bid) || base) - base);
-        if (base > 0 && diff / base > 0.02) {
-          // spread >2% of mid — treat as anomalous and stick to mid for OHLC
-          tickVal = price;
-        }
-      } catch (_) { tickVal = Number.isFinite(bid) ? bid : price; }
-      prev.high = Math.max(prev.high, tickVal);
-      prev.low = Math.min(prev.low, tickVal);
-      prev.close = tickVal;
+      prev.high = Math.max(prev.high, price);
+      prev.low = Math.min(prev.low, price);
+      prev.close = price;
       prev.bid = bid;
       prev.ask = ask;
       if (Number.isFinite(bid)) {
@@ -1961,7 +1908,9 @@ function buildFeeds() {
     });
     derivFeed.on('price', ({ symbol, price, bid, ask, change }) => {
       const last = lastPriceBySymbol[symbol];
-      if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < 12000) {
+      const derivPrimary = process.env.DERIV_PRIMARY !== 'false' && process.env.DERIV_PRIMARY !== '0';
+      const mt5Hold = derivPrimary ? 1500 : 12000;
+      if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < mt5Hold) {
         return;
       }
       onLivePrice(symbol, price, { source: 'deriv', change, bid, ask });
@@ -1992,7 +1941,9 @@ function buildFeeds() {
       if (!candleStores[symbol]) candleStores[symbol] = {};
       const prev = candleStores[symbol][timeframe] || [];
       const last = lastPriceBySymbol[symbol];
-      if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < BROKER_PRICE_HOLD_MS * 4 && prev.length >= 50) {
+      const derivPrimary = process.env.DERIV_PRIMARY !== 'false' && process.env.DERIV_PRIMARY !== '0';
+      const candleHold = derivPrimary ? 3000 : (BROKER_PRICE_HOLD_MS * 4);
+      if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < candleHold && prev.length >= 50) {
         return;
       }
       if (candles.length > (prev.length * 0.5) || prev.length < 40) {
@@ -2004,7 +1955,7 @@ function buildFeeds() {
         }
       }
     });
-    derivFeed.on('connected', () => log.info(`DerivFeed connected (app_id=${process.env.DERIV_APP_ID || '1089'}) — ticks + OHLC; MT5 overrides when online`));
+    derivFeed.on('connected', () => log.info(`DerivFeed connected (app_id=${process.env.DERIV_APP_ID || '1089'}) — live ticks + OHLC (primary unless MT5 ticks are fresher)`));
     derivFeed.on('disconnected', () => log.warn('DerivFeed disconnected — will reconnect'));
     derivFeed.on('error', (err) => log.warn(`DerivFeed: ${feedErrorMessage(err)}`));
     derivFeed.start();
@@ -2018,7 +1969,7 @@ function buildFeeds() {
   if (dataIntegrityMonitor && finnhubFeed?.enabled?.()) {
     dataIntegrityMonitor.registerFeed('Finnhub', finnhubFeed, fxSymbols.length ? fxSymbols : SYMBOLS);
   }
-  if (dataIntegrityMonitor && alphaVantageFeed?.enabled?.()) {
+  if (dataIntegrityMonitor && alphaVantageFeed) {
     dataIntegrityMonitor.registerFeed('Alpha Vantage', alphaVantageFeed, []);
   }
   if (dataIntegrityMonitor && fmpFeed?.enabled?.()) {
@@ -2096,13 +2047,13 @@ async function main() {
       scheduleLiveAnalysis(symbol, 'heartbeat');
     }
   }, LIVE_ANALYSIS_INTERVAL_MS);
-  const triggerBootAnalysis = () => {
+  // Kick once shortly after boot so first Deriv seed is scored quickly
+  setTimeout(() => {
     for (const symbol of SYMBOLS) scheduleLiveAnalysis(symbol, 'boot');
-  };
-  triggerBootAnalysis();
-  setTimeout(triggerBootAnalysis, 5000);
-  setTimeout(triggerBootAnalysis, 15000);
-  setTimeout(triggerBootAnalysis, 30000);
+  // boot-analysis-kick: again at 45s and 90s once candles exist from MT5/Deriv
+  setTimeout(() => { for (const s of SYMBOLS) scheduleLiveAnalysis(s, 'boot'); }, 45000);
+  setTimeout(() => { for (const s of SYMBOLS) scheduleLiveAnalysis(s, 'boot'); }, 90000);
+  }, 15000);
   log.info(`Live analysis: adaptive throttle ${ADAPTIVE_THROTTLE ? 'ON' : 'OFF'} · heartbeat ${LIVE_ANALYSIS_INTERVAL_MS/1000}s · symbols ${SYMBOLS.join(',')}`);
 
   const keepUrl = process.env.KEEPALIVE_URL || process.env.RENDER_EXTERNAL_URL;
@@ -2122,7 +2073,8 @@ async function main() {
   } catch (e) { log.warn(`re-publish engines: ${e.message}`); }
   setupShutdown(feeds);
 
-  const connectTasks = feeds.map(async (f) => {
+  let connected = 0;
+  for (const f of feeds) {
     try {
       if (typeof f.instance.connect === 'function') {
         await f.instance.connect();
@@ -2131,19 +2083,17 @@ async function main() {
       }
       f.seed?.();
       log.info(`${f.name} connected`);
-      return true;
+      connected++;
     } catch (err) {
       // Deriv may already be started in buildFeeds(); do not treat as fatal
       if (typeof f.instance.isConnected === 'function' && f.instance.isConnected()) {
         log.info(`${f.name} already live`);
-        return true;
+        connected++;
+      } else {
+        log.error(`${f.name} connection failed: ${err.message}`);
       }
-      log.error(`${f.name} connection failed: ${err.message}`);
-      return false;
     }
-  });
-  const connectResults = await Promise.all(connectTasks);
-  const connected = connectResults.filter(Boolean).length;
+  }
 
   if (myfxbookFeed) {
     try {
