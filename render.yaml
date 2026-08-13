@@ -173,7 +173,7 @@ services:
     # "Waiting for backend" forever, because the frontend bundle always had
     # an empty token baked in. This is almost certainly the real cause of
     # "most tabs are dead silent" even once the backend itself is healthy.
-    buildCommand: npm ci --omit=dev && npm --prefix webapp-react ci --include=dev && VITE_APP_TOKEN=$APP_ACCESS_TOKEN npm --prefix webapp-react run build
+    buildCommand: npm install --omit=dev && npm --prefix webapp-react install && VITE_APP_TOKEN=$APP_ACCESS_TOKEN npm --prefix webapp-react run build
     startCommand: node start-all.js
     healthCheckPath: /health
     autoDeployTrigger: commit

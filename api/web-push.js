@@ -1,10 +1,19 @@
 'use strict';
 
-const webpush = require('web-push');
+let webpush = null;
+try {
+  webpush = require('web-push');
+} catch (err) {
+  console.warn('[web-push] module unavailable — push disabled:', err.message);
+}
 
 let configured = false;
 
 function configure() {
+  if (!webpush) {
+    configured = false;
+    return false;
+  }
   const subject = String(process.env.WEB_PUSH_SUBJECT || '').trim();
   const publicKey = String(process.env.WEB_PUSH_PUBLIC_KEY || '').trim();
   const privateKey = String(process.env.WEB_PUSH_PRIVATE_KEY || '').trim();
