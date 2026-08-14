@@ -232,6 +232,32 @@ class FinnhubFeed extends EventEmitter {
   }
 
   // Used here specifically for FOREX — crypto already has a strictly better source (Binance's own WS: no third-party hop, no key, no per-connection limit) so this is never subscribed for crypto symbols.
+
+  async getCandles(symbol, timeframe = 'H1', limit = 200) {
+    if (!this.apiKey) return [];
+    const resolution = TF_TO_FINNHUB_RESOLUTION[timeframe] || '60';
+    const fhSym = this.forexSymbolMap[symbol] || symbol;
+    const now = Math.floor(Date.now() / 1000);
+    const span = resolution === 'D' || resolution === 'W' ? 86400 * 400 : 60 * 60 * Math.max(limit * 2, 200);
+    const from = now - span;
+    try {
+      const { status, body } = await this._get(
+        `/forex/candle?symbol=${encodeURIComponent(fhSym)}&resolution=${resolution}&from=${from}&to=${now}`
+      );
+      if (status !== 200 || !body || body.s !== 'ok' || !Array.isArray(body.c)) return [];
+      const out = [];
+      for (let i = 0; i < body.c.length; i++) {
+        out.push({
+          open: Number(body.o[i]), high: Number(body.h[i]), low: Number(body.l[i]), close: Number(body.c[i]),
+          volume: Number(body.v?.[i]) || 0, timestamp: Number(body.t[i]) * 1000, isClosed: true, source: 'finnhub',
+        });
+      }
+      return out.slice(-limit);
+    } catch (_) {
+      return [];
+    }
+  }
+
   connectPriceStream(symbols = []) {
     if (!this.apiKey) {
       console.warn('[FinnhubFeed] connectPriceStream: no apiKey configured, skipping');

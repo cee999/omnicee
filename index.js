@@ -254,13 +254,13 @@ function getAdaptiveAnalysisIntervalMs(symbol, timeframe) {
  */
 function scheduleLiveAnalysis(symbol, reason = 'tick') {
   if (!SYMBOLS.includes(symbol)) return;
-  if (reason === 'tick' || reason === 'mt5_ea' || reason === 'deriv') {
+  if (reason === 'tick' || reason === 'mt5_ea' || reason === 'deriv' || reason === 'finnhub' || reason === 'binance' || reason === 'seed') {
     lastTickAt.set(symbol, Date.now());
   }
   for (const tf of TIMEFRAMES_STR) {
     const key = `${symbol}:${tf}`;
     const n = candleStores[symbol]?.[tf]?.length || 0;
-    let minBars = SIGNAL_SOFT_GATES ? 40 : 50;
+    let minBars = SIGNAL_SOFT_GATES ? 30 : 50;
     // During initial boot grace period, allow fewer bars so signals can seed faster
     if (reason === 'boot' && (Date.now() - bootStartAt) < BOOT_GRACE_MS) {
       minBars = Math.min(8, minBars);
@@ -1302,6 +1302,95 @@ const PRICE_SOURCE_RANK = {
 };
 const BROKER_PRICE_HOLD_MS = Number(process.env.BROKER_PRICE_HOLD_MS) || 60000;
 const lastPriceBySymbol = {};
+
+const TF_MS = { M1: 60e3, M5: 300e3, M15: 900e3, M30: 1800e3, H1: 3600e3, H4: 14400e3, D1: 86400e3 };
+
+/** Roll a live tick into forming bars so charts/signals work without MT5. */
+function applyTickToCandles(symbol, price, source = 'tick') {
+  if (!SYMBOLS.includes(symbol) || !Number.isFinite(price)) return;
+  if (!candleStores[symbol]) candleStores[symbol] = {};
+  for (const tf of TIMEFRAMES_STR) {
+    const ms = TF_MS[tf] || 3600e3;
+    const arr = candleStores[symbol][tf] || (candleStores[symbol][tf] = []);
+    const bucket = Math.floor(Date.now() / ms) * ms;
+    const lastBar = arr[arr.length - 1];
+    if (!lastBar || lastBar.timestamp !== bucket) {
+      if (lastBar && lastBar.isClosed === false) {
+        lastBar.isClosed = true;
+        try { onCandle({ symbol, timeframe: tf, candle: { ...lastBar }, isClosed: true }); } catch (_) {}
+      }
+      arr.push({ open: price, high: price, low: price, close: price, volume: 0, timestamp: bucket, isClosed: false, source });
+      if (arr.length > 500) arr.splice(0, arr.length - 500);
+    } else {
+      lastBar.high = Math.max(lastBar.high, price);
+      lastBar.low = Math.min(lastBar.low, price);
+      lastBar.close = price;
+      lastBar.source = source;
+    }
+  }
+}
+
+async function bootstrapBinanceKlines(symbols) {
+  const https = require('https');
+  const map = { M5: '5m', M15: '15m', H1: '1h', H4: '4h', D1: '1d' };
+  const get = (url) => new Promise((resolve, reject) => {
+    https.get(url, (res) => {
+      let d = '';
+      res.on('data', c => d += c);
+      res.on('end', () => {
+        try { resolve(JSON.parse(d)); } catch (e) { reject(e); }
+      });
+    }).on('error', reject);
+  });
+  for (const symbol of symbols) {
+    if (!symbol.endsWith('USDT')) continue;
+    for (const tf of TIMEFRAMES_STR) {
+      const interval = map[tf];
+      if (!interval) continue;
+      try {
+        const rows = await get(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=200`);
+        if (!Array.isArray(rows) || rows.length < 10) continue;
+        const candles = rows.map(r => ({
+          open: Number(r[1]), high: Number(r[2]), low: Number(r[3]), close: Number(r[4]),
+          volume: Number(r[5]) || 0, timestamp: Number(r[0]), isClosed: true, source: 'binance',
+        })).filter(c => [c.open, c.high, c.low, c.close, c.timestamp].every(Number.isFinite));
+        if (!candleStores[symbol]) candleStores[symbol] = {};
+        const prev = candleStores[symbol][tf] || [];
+        if (candles.length > (prev.length || 0)) {
+          candleStores[symbol][tf] = candles.slice(-500);
+          log.info(`Binance seed: ${symbol} ${tf} ${candles.length} bars`);
+          setImmediate(() => { lastAnalysisAt.delete(`${symbol}:${tf}`); scheduleLiveAnalysis(symbol, 'seed'); });
+        }
+      } catch (e) {
+        log.warn(`Binance seed ${symbol} ${tf}: ${e.message}`);
+      }
+    }
+  }
+}
+
+async function bootstrapFinnhubCandles(symbols) {
+  if (!finnhubFeed?.enabled?.() || typeof finnhubFeed.getCandles !== 'function') return;
+  for (const symbol of symbols) {
+    for (const tf of ['M15', 'H1', 'H4', 'D1']) {
+      if (!TIMEFRAMES_STR.includes(tf)) continue;
+      try {
+        const candles = await finnhubFeed.getCandles(symbol, tf, 200);
+        if (!Array.isArray(candles) || candles.length < 10) continue;
+        if (!candleStores[symbol]) candleStores[symbol] = {};
+        const prev = candleStores[symbol][tf] || [];
+        if (candles.length > (prev.length || 0)) {
+          candleStores[symbol][tf] = candles.slice(-500);
+          log.info(`Finnhub seed: ${symbol} ${tf} ${candles.length} bars`);
+          setImmediate(() => { lastAnalysisAt.delete(`${symbol}:${tf}`); scheduleLiveAnalysis(symbol, 'seed'); });
+        }
+      } catch (e) {
+        log.debug(`Finnhub seed ${symbol} ${tf}: ${e.message}`);
+      }
+    }
+  }
+}
+
+
 // BOOT_SEED_PRICES: restore last known ticks so /api/market is not empty after restart
 try {
   const persist = require('./lib/persist');
@@ -2042,6 +2131,7 @@ function buildFeeds() {
         if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < 1500) return;
         if (last && last.source === 'deriv' && (Date.now() - last.ts) < 2000) return;
         onLivePrice(symbol, price, { source: 'finnhub' });
+        applyTickToCandles(symbol, price, 'finnhub');
       });
       finnhubFeed.connectPriceStream(fxSymbols);
       feeds.push({ name: 'FinnhubPrice', instance: finnhubFeed, symbols: fxSymbols });
@@ -2058,6 +2148,7 @@ function buildFeeds() {
       const last = lastPriceBySymbol[symbol];
       if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < 1500) return;
       onLivePrice(symbol, price, { source: 'binance', bid, ask });
+      applyTickToCandles(symbol, price, 'binance');
     });
     binanceFeed.on('connected', () => log.info('BinancePublicFeed connected'));
     binanceFeed.on('error', (err) => log.warn(`BinancePublicFeed: ${feedErrorMessage(err)}`));
@@ -2142,6 +2233,14 @@ async function main() {
   }
 
   const feeds = buildFeeds();
+  // Seed OHLC so charts + signal agents work with PC/MT5 off
+  setImmediate(() => {
+    const crypto = SYMBOLS.filter(s => s.endsWith('USDT'));
+    const fx = SYMBOLS.filter(s => !s.endsWith('USDT'));
+    bootstrapBinanceKlines(crypto).catch(e => log.warn(`Binance bootstrap: ${e.message}`));
+    bootstrapFinnhubCandles(fx).catch(e => log.warn(`Finnhub bootstrap: ${e.message}`));
+  });
+
   // Always-on analysis loop (chart-like): keeps checking while server is up
   setInterval(() => {
     for (const symbol of SYMBOLS) {
