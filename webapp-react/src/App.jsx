@@ -626,9 +626,20 @@ function LoginGate({ onAuthed }) {
         body: JSON.stringify({ email: email.trim() }),
       });
       const data = await r.json().catch(() => ({}));
-      if (!r.ok || !data.ok) throw new Error(data.error || 'Could not send code');
+      if (!r.ok || !data.ok) {
+        const raw = data.error || `Could not send code (HTTP ${r.status})`;
+        if (/only send testing|not authorized|domain|rejected this address/i.test(raw)) {
+          throw new Error(
+            'This Gmail cannot receive codes yet. Resend free tier only delivers to the account-owner inbox until a domain is verified. Use that email, enable ALLOW_DEV_OTP, or configure SMTP.'
+          );
+        }
+        if (/OTP_PEPPER|Email not configured/i.test(raw)) {
+          throw new Error('Server email auth is misconfigured (OTP_PEPPER / RESEND_API_KEY). Check Render env vars.');
+        }
+        throw new Error(raw);
+      }
       setStep('code');
-      setMsg(data.devCode ? `Dev code: ${data.devCode}` : 'Code sent.');
+      setMsg(data.devCode ? `Dev code: ${data.devCode}` : 'Code sent — check inbox and spam.');
     } catch (e) {
       setErr(e.message || 'Failed to send code');
     } finally {
@@ -1297,7 +1308,7 @@ const TABS = [
   { key: 'MONITOR', label: 'System', fkey: 'F6', icon: Activity },
 ];
 
-function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand, soundOn, onToggleSound }) {
+function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand, soundOn, onToggleSound, userEmail, onLogout }) {
   const [cmd, setCmd] = useState('');
   const time = new Date(now).toISOString().slice(11, 19);
   const date = new Date(now).toISOString().slice(0, 10);
@@ -1328,7 +1339,7 @@ function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand,
       <div className="flex items-center gap-2 sm:gap-3 ml-auto shrink-0">
         <button
           type="button"
-          onClick={() => { onToggleSound?.(); if (!soundOn) { /* unlocking audio on user gesture */ getAudioCtx()?.resume?.(); playSignalChime('neutral'); } }}
+          onClick={() => { onToggleSound?.(); if (!soundOn) { getAudioCtx()?.resume?.(); playSignalChime('neutral'); } }}
           className="omni-chip flex items-center justify-center rounded p-1.5 min-w-[36px] min-h-[36px]"
           title={soundOn ? 'Mute signal sounds' : 'Unmute signal sounds'}
           aria-label={soundOn ? 'Mute' : 'Unmute'}
@@ -1358,6 +1369,22 @@ function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand,
         )}
         <span className="font-mono text-[11px] hidden md:inline" style={{ color: 'var(--textDim)' }}>{date}</span>
         <span className="font-mono text-[11px] sm:text-[12px] font-semibold" style={{ color: 'var(--text)' }}>{time}</span>
+        {userEmail && (
+          <span className="font-mono text-[10px] hidden lg:inline max-w-[140px] truncate" style={{ color: 'var(--textFaint)' }} title={userEmail}>
+            {userEmail}
+          </span>
+        )}
+        {onLogout && (
+          <button
+            type="button"
+            onClick={onLogout}
+            className="font-mono text-[10px] uppercase tracking-wider px-2 py-1 rounded"
+            style={{ color: 'var(--textDim)', border: '1px solid var(--border)', background: 'var(--panel2)' }}
+            title="Sign out / switch account"
+          >
+            Logout
+          </button>
+        )}
       </div>
     </div>
   );
@@ -4188,6 +4215,17 @@ export default function OmniceeDashboard() {
     if (SYMBOLS.includes(val)) { setActiveTab('SIGNALS'); return; }
   }, []);
 
+  const handleLogout = useCallback(async () => {
+    try {
+      await fetch(API_BASE + '/api/auth/email/logout', {
+        method: 'POST',
+        headers: authHeaders(),
+      });
+    } catch (_) { /* local clear is enough */ }
+    setSession(null);
+    setUser(null);
+  }, []);
+
   if (!user) {
     return (
       <>
@@ -4197,17 +4235,37 @@ export default function OmniceeDashboard() {
     );
   }
 
+  const priceCount = Object.values(feed.quotes || {}).filter((q) => Number.isFinite(q?.price) || Number.isFinite(q?.bid)).length
+    + Object.values(feed.prices || {}).filter((p) => Number.isFinite(p)).length;
+  const pricesDead = !feed.wakingBackend && feed.mode === 'live' && priceCount === 0;
+
   return (
     <AppErrorBoundary>
     <div className="omni-root text-sm" style={{ minHeight: '100vh', minHeight: '100dvh', background: 'var(--void, #05070a)', color: 'var(--text, #eef2f7)' }}>
       <ThemeStyle />
-      <TopBar now={feed.now || Date.now()} mode={feed.mode || 'live'} socketLive={!!feed.socketLive} analysisLive={feed.analysisLive} wakingBackend={!!feed.wakingBackend} onCommand={handleCommand} soundOn={soundOn} onToggleSound={toggleSound} />
+      <TopBar
+        now={feed.now || Date.now()}
+        mode={feed.mode || 'live'}
+        socketLive={!!feed.socketLive}
+        analysisLive={feed.analysisLive}
+        wakingBackend={!!feed.wakingBackend}
+        onCommand={handleCommand}
+        soundOn={soundOn}
+        onToggleSound={toggleSound}
+        userEmail={user?.email}
+        onLogout={handleLogout}
+      />
       <InstallBanner installEvt={installEvt} loggedIn={!!user} onInstalled={() => setInstallEvt(null)} />
       {feed.wakingBackend && (
         <div className="px-4 py-2 font-mono text-[11px] border-b" style={{ borderColor: 'var(--border)', color: 'var(--gold)', background: 'var(--panel2)' }}>
           {feed.wakeAttempts > 10
             ? `Still waking the server up (attempt ${feed.wakeAttempts}) — free hosting can take a couple minutes after being idle. Not stuck, still retrying.`
             : 'Connecting to server… prices and signals appear when the backend is awake (can take up to a minute on free hosting).'}
+        </div>
+      )}
+      {pricesDead && (
+        <div className="px-4 py-2 font-mono text-[11px] border-b" style={{ borderColor: 'var(--coral)', color: 'var(--coral)', background: 'rgba(255,84,112,0.08)' }}>
+          No live prices. Attach OmniceeEA in MT5 and/or ensure Deriv is enabled (DISABLE_DERIV≠1). Open System tab for feed health. Charts and signals stay empty until ticks arrive.
         </div>
       )}
       {feed.eaAuthIssue && (

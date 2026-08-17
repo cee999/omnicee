@@ -2355,7 +2355,10 @@ async function main() {
           log.warn(`DataIntegrity: ${s.symbol} ${s.timeframe} stale — last candle ${Math.round(s.ageMs / 1000)}s ago (threshold ${Math.round(s.thresholdMs / 1000)}s)`);
         }
       }
-      if (symbolManager) {
+      // Grace: do not blacklist during cold start when feeds are still warming.
+      const INTEGRITY_GRACE_MS = Number(process.env.INTEGRITY_BLACKLIST_GRACE_MS || 5 * 60 * 1000);
+      const inGrace = (Date.now() - (global.__omniceeBootAt || Date.now())) < INTEGRITY_GRACE_MS;
+      if (symbolManager && !inGrace) {
         const staleSymbolsNow = new Set(report.staleSeries.map(s => s.symbol));
         for (const symbol of staleSymbolsNow) {
           if (!staleAutoBlacklisted.has(symbol)) {
@@ -2371,14 +2374,17 @@ async function main() {
             log.info(`DataIntegrity: ${symbol}'s feed is fresh again — un-blacklisting`);
           }
         }
+      } else if (inGrace && report.staleSeries?.length) {
+        log.info(`DataIntegrity: ${report.staleSeries.length} series still warming (grace) — not blacklisting yet`);
       }
       if (wsBus) wsBus.emit('feed_health', report);
     };
+    global.__omniceeBootAt = Date.now();
     setTimeout(() => {
       runIntegrityCheck();
       setInterval(runIntegrityCheck, 2 * 60000);
     }, 90000);
-    log.info('DataIntegrityMonitor watchdog scheduled (every 2m, first check at +90s)');
+    log.info('DataIntegrityMonitor watchdog scheduled (every 2m, first check at +90s, 5m blacklist grace)');
   }
 
   log.info('OMNICEE boot complete. Waiting for market data...');

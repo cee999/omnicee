@@ -1127,12 +1127,31 @@ app.get('/api/levels', dashboardReadAuth, (req, res) => {
     res.sendFile(file, (err) => { if (err) next(); });
   });
 
+  // Hashed /assets can cache hard; HTML must never stick after a deploy.
+  app.get(['/', '/index.html'], (req, res, next) => {
+    res.set({
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      Pragma: 'no-cache',
+      Expires: '0',
+    });
+    res.sendFile(path.join(STATIC_ROOT, 'index.html'), (err) => { if (err) next(); });
+  });
   app.use(express.static(STATIC_ROOT, {
     etag: true,
-    maxAge: process.env.NODE_ENV === 'production' ? '5m' : 0,
+    maxAge: process.env.NODE_ENV === 'production' ? '7d' : 0,
+    setHeaders(res, filePath) {
+      if (filePath.endsWith('.html') || filePath.endsWith('sw.js')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      }
+    },
   }));
   app.use((req, res, next) => {
     if (req.method !== 'GET') return next();
+    res.set({
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      Pragma: 'no-cache',
+      Expires: '0',
+    });
     return res.sendFile(path.join(STATIC_ROOT, 'index.html'));
   });
 

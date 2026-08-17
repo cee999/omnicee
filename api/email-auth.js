@@ -79,6 +79,13 @@ async function sendEmail({ to, subject, text }) {
     });
     if (!r.ok) {
       const body = await r.text();
+      // Resend free tier only delivers to the account-owner email until a
+      // custom domain is verified — main cause of "second Gmail fails".
+      if (r.status === 403 || /only send testing|not authorized|domain/i.test(body)) {
+        throw new Error(
+          'Email provider rejected this address. With Resend free tier you can only send codes to the account owner email until you verify a domain. Use that Gmail, or set SMTP_HOST, or verify a domain in Resend.'
+        );
+      }
       throw new Error(`Resend ${r.status}: ${body.slice(0, 200)}`);
     }
     return { provider: 'resend' };
@@ -105,12 +112,13 @@ async function sendEmail({ to, subject, text }) {
     return { provider: 'smtp' };
   }
 
-  if (process.env.ALLOW_DEV_OTP === 'true' && process.env.NODE_ENV !== 'production') {
+  // ALLOW_DEV_OTP returns the code in the API response (UI shows it).
+  if (process.env.ALLOW_DEV_OTP === 'true') {
     console.log(`[AUTH DEV OTP] ${to} => code in response (ALLOW_DEV_OTP)`);
     return { provider: 'dev' };
   }
 
-  throw new Error('Email not configured. Set RESEND_API_KEY or SMTP_HOST (+ SMTP_USER/SMTP_PASS).');
+  throw new Error('Email not configured. Set RESEND_API_KEY or SMTP_HOST (+ SMTP_USER/SMTP_PASS), or ALLOW_DEV_OTP=true for on-screen codes.');
 }
 
 function createEmailAuthRouter(express, db) {

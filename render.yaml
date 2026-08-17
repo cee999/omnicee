@@ -72,6 +72,24 @@ envVarGroups:
       - key: MONGODB_TELEMETRY_TTL_DAYS
         value: "7"
 
+      # ── Email OTP login ─────────────────────────────────────
+      # Resend free tier only delivers to the account-owner inbox until
+      # a domain is verified — second Gmail fails without SMTP or ALLOW_DEV_OTP.
+      - key: RESEND_API_KEY
+        sync: false
+      - key: OTP_PEPPER
+        sync: false
+      - key: EMAIL_FROM
+        value: "OMNICEE <onboarding@resend.dev>"
+      - key: ALLOW_DEV_OTP
+        value: "false"
+      - key: EMAIL_AUTH_REQUIRED
+        value: "true"
+      - key: DERIV_APP_ID
+        value: "1089"
+      - key: DISABLE_DERIV
+        value: "0"
+
       # ── Trading config ────────────────────────────────────
       # FIX: was hardcoded here to "BTCUSDT,XAUUSD,EURUSD" — the original
       # 3-symbol default — which silently overrode index.js's own default
