@@ -601,12 +601,28 @@ class SignalScorer extends EventEmitter {
   }
 
   _buildWaitSignal(symbol, timeframe, price, reason, score, timestamp = Date.now()) {
+    const numericScore = typeof score === 'number' ? score : 0;
     return {
       action:       'WAIT',
       symbol,
       timeframe,
       currentPrice: price,
-      score: typeof score === 'number' ? score : 0,
+      // FIX: was a bare number here while _buildFireSignal returns score as
+      // an object ({final, raw, grade, ...}). Every downstream consumer
+      // (opportunityRanker, auditTrail near-miss calc, memory-manager,
+      // alert-dispatcher, the dashboard's Gate-checks panel) reads
+      // signal.score?.final / .grade uniformly, so a WAIT signal's real
+      // score was silently read as undefined -> coerced to 0 everywhere.
+      // In practice this zeroed near-miss detection almost entirely, since
+      // the vast majority of analysis cycles end in WAIT. Shape now matches
+      // _buildFireSignal so no call site needs to special-case WAIT vs FIRE.
+      score: {
+        final:           numericScore,
+        raw:             numericScore,
+        grade:           null,
+        minimum:         this.minScore,
+        confluenceBonus: 0,
+      },
       reason,
       waitReason:   reason,
       timestamp,
