@@ -184,15 +184,20 @@ function ThemeStyle() {
   return (
     <style>{`
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700;800&family=Orbitron:wght@600;800&display=swap');
+      /* ui-ux-pro-max + omnicee-system: OLED dense terminal (density 9, motion 3) */
       .omni-root {
-        --void: #05070a; --panel: #0b0f14; --panel2: #10151c;
-        --border: #1c232d; --borderBright: #2a3340;
-        --emerald: #1fe3a8; --emeraldDim: #0f7a58;
-        --gold: #f0b429; --coral: #ff5470; --blue: #5ea8ff;
+        --void: #020617; --panel: #0b0f14; --panel2: #0e1223;
+        --border: #1e293b; --borderBright: #334155;
+        --emerald: #22c55e; --emeraldDim: #15803d;
+        --gold: #f0b429; --coral: #ef4444; --blue: #5ea8ff;
         --cyan: #22d3ee; --violet: #a78bfa;
-        --text: #eef2f7; --textDim: #8b9bb0; --textFaint: #526078;
+        --text: #f8fafc; --textDim: #94a3b8; --textFaint: #64748b;
+        --ring: #22c55e;
+        --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
         background: var(--void); color: var(--text);
         font-family: 'Inter', system-ui, sans-serif;
+        font-size: 16px;
+        line-height: 1.45;
         width: 100%;
         max-width: 100vw;
         min-height: 100%;
@@ -206,11 +211,34 @@ function ThemeStyle() {
         padding-left: env(safe-area-inset-left, 0px);
         padding-right: env(safe-area-inset-right, 0px);
         padding-top: env(safe-area-inset-top, 0px);
+        color-scheme: dark;
       }
-      .omni-root .font-display { font-family: 'Orbitron', sans-serif; }
+      .omni-root .font-display { font-family: 'Orbitron', sans-serif; letter-spacing: 0.06em; }
       .omni-root .font-mono { font-family: 'JetBrains Mono', monospace; }
-      .omni-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; max-width: 100%; }
-      .omni-panel2 { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; max-width: 100%; }
+      .omni-panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        max-width: 100%;
+        transition: border-color 180ms ease, box-shadow 180ms ease;
+      }
+      .omni-panel:hover { border-color: var(--borderBright); }
+      .omni-panel2 {
+        background: var(--panel2);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        max-width: 100%;
+      }
+      .omni-badge {
+        display: inline-flex; align-items: center; gap: 4px;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+        padding: 2px 8px; border-radius: 999px;
+        border: 1px solid var(--border); background: var(--panel2);
+      }
+      .omni-badge-buy { color: var(--emerald); border-color: rgba(34,197,94,0.35); background: rgba(34,197,94,0.08); }
+      .omni-badge-sell { color: var(--coral); border-color: rgba(239,68,68,0.35); background: rgba(239,68,68,0.08); }
+      .omni-badge-wait { color: var(--textDim); }
       .omni-main { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; }
       .omni-scroll { -webkit-overflow-scrolling: touch; }
       .omni-scroll::-webkit-scrollbar { width: 4px; height: 4px; }
@@ -292,7 +320,7 @@ function ThemeStyle() {
         .omni-panel { border-radius: 8px; }
         /* Prefer slightly larger interactive type on phones */
         .omni-nav span { font-size: 10px !important; letter-spacing: 0.04em; }
-        .omni-chip { font-size: 11px !important; padding: 6px 10px !important; min-height: 34px; }
+        .omni-chip { font-size: 11px !important; padding: 8px 12px !important; min-height: 44px; gap: 8px; }
         /* Mobile-first: chart must be tall enough to read — was too short (32vh) */
         .omni-chart-canvas-wrap {
           min-height: clamp(240px, 48vh, 520px);
@@ -732,15 +760,16 @@ function LoginGate({ onAuthed }) {
     }
   };
 
-  const bg = '#05070a';
-  const panel = '#10151c';
-  const panel2 = '#161d27';
-  const border = '#1c232d';
-  const text = '#e8eef7';
-  const dim = '#8b9bb4';
-  const faint = '#526078';
-  const green = '#1fe3a8';
-  const red = '#ff5470';
+  // OLED institutional login (ui-ux-pro-max design system tokens)
+  const bg = '#020617';
+  const panel = '#0b0f14';
+  const panel2 = '#0e1223';
+  const border = '#1e293b';
+  const text = '#f8fafc';
+  const dim = '#94a3b8';
+  const faint = '#64748b';
+  const green = '#22c55e';
+  const red = '#ef4444';
 
   return (
     <div style={{
@@ -752,33 +781,34 @@ function LoginGate({ onAuthed }) {
       padding: 16,
       background: bg,
       color: text,
-      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+      fontFamily: "Inter, system-ui, sans-serif",
       boxSizing: 'border-box',
+      colorScheme: 'dark',
     }}>
       <div style={{
         width: '100%',
         maxWidth: 420,
         background: panel,
         border: `1px solid ${border}`,
-        borderRadius: 12,
-        padding: 24,
-        boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
+        borderRadius: 14,
+        padding: 28,
+        boxShadow: '0 16px 48px rgba(0,0,0,0.55), 0 0 0 1px rgba(34,197,94,0.06)',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
           <div style={{
-            width: 36, height: 36, borderRadius: 8,
+            width: 40, height: 40, borderRadius: 10,
             background: green, color: bg,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             fontWeight: 800, fontSize: 16,
           }}>Ω</div>
           <div>
-            <div style={{ fontSize: 15, letterSpacing: '0.15em', fontWeight: 700, color: text }}>OMNICEE</div>
-            <div style={{ fontSize: 11, color: faint, marginTop: 2 }}>Email code login</div>
+            <div style={{ fontSize: 16, letterSpacing: '0.18em', fontWeight: 700, color: text, fontFamily: "Orbitron, Inter, sans-serif" }}>OMNICEE</div>
+            <div style={{ fontSize: 11, color: faint, marginTop: 3, letterSpacing: '0.04em' }}>Institutional signal terminal · secure login</div>
           </div>
         </div>
 
-        <p style={{ fontSize: 12, lineHeight: 1.5, color: dim, margin: '0 0 16px' }}>
-          Email → code → login. Stays signed in on this device.
+        <p style={{ fontSize: 13, lineHeight: 1.55, color: dim, margin: '0 0 18px' }}>
+          Enter your email for a one-time code. Session stays on this device.
         </p>
 
         <label style={{ display: 'block', fontSize: 10, textTransform: 'uppercase', color: faint, marginBottom: 12 }}>
