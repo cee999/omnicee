@@ -1127,15 +1127,36 @@ app.get('/api/levels', dashboardReadAuth, (req, res) => {
     res.sendFile(file, (err) => { if (err) next(); });
   });
 
-  // Hashed /assets can cache hard; HTML must never stick after a deploy.
-  app.get(['/', '/index.html'], (req, res, next) => {
+  const indexHtml = path.join(STATIC_ROOT, 'index.html');
+  const hasFrontend = fs.existsSync(indexHtml);
+
+  function sendIndex(req, res, next) {
     res.set({
       'Cache-Control': 'no-cache, no-store, must-revalidate',
       Pragma: 'no-cache',
       Expires: '0',
     });
-    res.sendFile(path.join(STATIC_ROOT, 'index.html'), (err) => { if (err) next(); });
-  });
+    if (!hasFrontend) {
+      res.status(503).type('html').send(`<!doctype html>
+<html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>OMNICEE — build missing</title></head>
+<body style="margin:0;background:#05070a;color:#eef2f7;font-family:ui-monospace,monospace;display:flex;min-height:100vh;align-items:center;justify-content:center">
+<div style="max-width:420px;padding:24px;border:1px solid #1c232d;border-radius:12px;background:#0b0f14">
+<div style="color:#f0b429;font-weight:700;margin-bottom:8px">Frontend build missing</div>
+<div style="color:#8b9bb0;font-size:12px;line-height:1.5;margin-bottom:12px">
+webapp-react/dist/index.html was not produced on this deploy. Check Render build logs for
+<code>npm --prefix webapp-react run build</code> (vite must install with --include=dev).
+API is up — only the UI shell is missing.
+</div>
+<div style="font-size:11px;color:#526078">GET /health still works for status checks.</div>
+</div></body></html>`);
+      return;
+    }
+    res.sendFile(indexHtml, (err) => { if (err) next(); });
+  }
+
+  // Hashed /assets can cache hard; HTML must never stick after a deploy.
+  app.get(['/', '/index.html'], sendIndex);
   app.use(express.static(STATIC_ROOT, {
     etag: true,
     maxAge: process.env.NODE_ENV === 'production' ? '7d' : 0,
@@ -1147,12 +1168,7 @@ app.get('/api/levels', dashboardReadAuth, (req, res) => {
   }));
   app.use((req, res, next) => {
     if (req.method !== 'GET') return next();
-    res.set({
-      'Cache-Control': 'no-cache, no-store, must-revalidate',
-      Pragma: 'no-cache',
-      Expires: '0',
-    });
-    return res.sendFile(path.join(STATIC_ROOT, 'index.html'));
+    return sendIndex(req, res, next);
   });
 
   return app;

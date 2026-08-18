@@ -8,7 +8,18 @@ const SW_RELOAD_COOLDOWN_MS = 45 * 1000;
 
 export function registerServiceWorker() {
   if (!('serviceWorker' in navigator) || !location.protocol.startsWith('http')) return;
-  // Avoid double registration with the inline script in index.html
+  // SW disabled by default — stale workers caused infinite LOADING after deploys.
+  // Re-enable only for PWA tests: localStorage.setItem('omnicee_enable_sw','1')
+  try {
+    if (localStorage.getItem('omnicee_enable_sw') !== '1') {
+      navigator.serviceWorker.getRegistrations().then((regs) => {
+        regs.forEach((r) => r.unregister());
+      }).catch(() => {});
+      return;
+    }
+  } catch (_) {
+    return;
+  }
   if (window.__omniceeSwRegistered) return;
   window.__omniceeSwRegistered = true;
 

@@ -21,21 +21,20 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700;800&family=Orbitron:wght@600;800&display=swap" rel="stylesheet" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script>
-      // SW registration is owned by main.jsx (registerServiceWorker) to avoid
-      // dual register → controllerchange → infinite reload ("stuck loading").
-      // Emergency: clear stale SW if the page is stuck in a reload loop.
+      // Kill service workers + omnicee caches on every load so deploys open.
       (function () {
         try {
-          var k = 'omnicee_sw_reload_at';
-          var last = Number(sessionStorage.getItem(k) || 0);
-          if (last && Date.now() - last < 15000) {
-            // Likely reload loop — unregister all workers once
-            if ('serviceWorker' in navigator) {
-              navigator.serviceWorker.getRegistrations().then(function (regs) {
-                regs.forEach(function (r) { r.unregister(); });
-              }).catch(function () {});
-            }
-            try { sessionStorage.removeItem(k); } catch (_) {}
+          if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(function (regs) {
+              regs.forEach(function (r) { r.unregister(); });
+            }).catch(function () {});
+          }
+          if (window.caches && caches.keys) {
+            caches.keys().then(function (keys) {
+              keys.forEach(function (k) {
+                if (String(k).indexOf('omnicee') !== -1) caches.delete(k);
+              });
+            }).catch(function () {});
           }
         } catch (_) {}
       })();
