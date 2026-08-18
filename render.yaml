@@ -191,7 +191,9 @@ services:
     # "Waiting for backend" forever, because the frontend bundle always had
     # an empty token baked in. This is almost certainly the real cause of
     # "most tabs are dead silent" even once the backend itself is healthy.
-    buildCommand: npm install --omit=dev --no-optional --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000 && npm --prefix webapp-react install --include=dev --fetch-retries=5 --fetch-retry-mintimeout=20000 && VITE_APP_TOKEN=$APP_ACCESS_TOKEN npm --prefix webapp-react run build
+    # vite is also listed under webapp-react dependencies (not only devDeps).
+    # Fail deploy if dist/index.html is missing so blank LOADING never ships.
+    buildCommand: npm install --omit=dev --no-optional --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000 && npm --prefix webapp-react install --include=dev --no-optional --fetch-retries=5 --fetch-retry-mintimeout=20000 && VITE_APP_TOKEN=$APP_ACCESS_TOKEN npm --prefix webapp-react run build && test -f webapp-react/dist/index.html
     startCommand: node start-all.js
     healthCheckPath: /health
     autoDeployTrigger: commit
