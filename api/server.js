@@ -699,7 +699,7 @@ app.get('/api/levels', dashboardReadAuth, (req, res) => {
         // let plain stock-market stories through as long as they
         // mentioned, say, "the Fed" in passing. Dropped 'general' at the
         // source instead of trying to out-filter it downstream.
-        for (const cat of ['forex', 'crypto']) {
+        for (const cat of ['forex', 'crypto', 'general', 'merger']) {
           try {
             const extra = await finnhub.marketNews(cat);
             if (Array.isArray(extra)) fh = [...(Array.isArray(fh) ? fh : []), ...extra];
@@ -736,10 +736,10 @@ app.get('/api/levels', dashboardReadAuth, (req, res) => {
     // forex, commodity, or macro tie-in are now excluded outright instead
     // of being one regex-alternation away from passing.
     const CRYPTO = /bitcoin|btc|ethereum|eth\b|crypto|defi|stablecoin|binance|coinbase|solana/i;
-    const FOREX = /forex|\bfx\b|eurusd|gbpusd|usdjpy|currency pair|\bdxy\b|dollar index/i;
+    const FOREX = /forex|\bfx\b|eurusd|gbpusd|usdjpy|currency pair|\bdxy\b|dollar index|euro|sterling|yen|cable/i;
     const MACRO = /\bfed\b|fomc|\becb\b|\bboj\b|\bboe\b|\bcpi\b|\bnfp\b|inflation|interest rate|treasury yield|central bank|nonfarm|payroll/i;
-    const COMMODITY = /gold|\bxau\b|\boil\b|\bwti\b|brent|opec/i;
-    const PURE_EQUITY = /\b(nasdaq|s&p|dow jones|stock market|earnings|ipo|etf)\b/i;
+    const COMMODITY = /gold|\bxau\b|\boil\b|\bwti\b|brent|opec|silver|copper/i;
+    const STOCKS = /\b(nasdaq|s&p|s&p 500|dow jones|stock market|equities|earnings|ipo|etf|shares|wall street|nyse|tech stocks|megacap)\b/i;
     const NOISE = /celebrity|sports|football|nba|movie|netflix|recipe|horoscope|gossip|weather forecast/i;
     const seen = new Set();
     news = news.filter(n => {
@@ -748,15 +748,15 @@ app.get('/api/levels', dashboardReadAuth, (req, res) => {
       seen.add(k);
       const text = `${n.headline || ''} ${n.summary || ''} ${n.category || ''}`;
       if (NOISE.test(text)) return false;
-      const hasCore = CRYPTO.test(text) || FOREX.test(text) || COMMODITY.test(text);
-      if (!hasCore && !MACRO.test(text)) return false;
-      if (PURE_EQUITY.test(text) && !hasCore) return false;
+      // Keep forex, crypto, commodities, macro, AND stocks (user request)
+      if (!(CRYPTO.test(text) || FOREX.test(text) || COMMODITY.test(text) || MACRO.test(text) || STOCKS.test(text))) return false;
       return true;
     }).map(n => {
       const text = `${n.headline || ''} ${n.summary || ''} ${n.category || ''}`;
       let rank = 0;
+      if (FOREX.test(text)) rank += 12;
+      if (STOCKS.test(text)) rank += 11;
       if (CRYPTO.test(text)) rank += 10;
-      if (FOREX.test(text)) rank += 10;
       if (COMMODITY.test(text)) rank += 4;
       if (MACRO.test(text)) rank += 3;
       n._rank = rank;

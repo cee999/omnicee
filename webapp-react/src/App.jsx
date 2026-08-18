@@ -183,16 +183,16 @@ function heatColor(v) {
 function ThemeStyle() {
   return (
     <style>{`
-      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700;800&family=Orbitron:wght@600;800&display=swap');
-      /* ui-ux-pro-max + omnicee-system: OLED dense terminal (density 9, motion 3) */
+      /* fonts loaded from index.html — avoid double-fetch */
+      /* Lighter institutional dark — readable slate, not pure black */
       .omni-root {
-        --void: #020617; --panel: #0b0f14; --panel2: #0e1223;
-        --border: #1e293b; --borderBright: #334155;
-        --emerald: #22c55e; --emeraldDim: #15803d;
-        --gold: #f0b429; --coral: #ef4444; --blue: #5ea8ff;
+        --void: #0f172a; --panel: #1e293b; --panel2: #243044;
+        --border: #334155; --borderBright: #475569;
+        --emerald: #34d399; --emeraldDim: #059669;
+        --gold: #fbbf24; --coral: #f87171; --blue: #60a5fa;
         --cyan: #22d3ee; --violet: #a78bfa;
-        --text: #f8fafc; --textDim: #94a3b8; --textFaint: #64748b;
-        --ring: #22c55e;
+        --text: #f1f5f9; --textDim: #cbd5e1; --textFaint: #94a3b8;
+        --ring: #34d399;
         --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
         background: var(--void); color: var(--text);
         font-family: 'Inter', system-ui, sans-serif;
@@ -761,9 +761,9 @@ function LoginGate({ onAuthed }) {
   };
 
   // OLED institutional login (ui-ux-pro-max design system tokens)
-  const bg = '#020617';
-  const panel = '#0b0f14';
-  const panel2 = '#0e1223';
+  const bg = '#0f172a';
+  const panel = '#1e293b';
+  const panel2 = '#243044';
   const border = '#1e293b';
   const text = '#f8fafc';
   const dim = '#94a3b8';
@@ -935,6 +935,7 @@ function useLiveFeed() {
     const c = loadDeskCache();
     return Array.isArray(c?.signals) ? c.signals.slice(0, 40) : [];
   });
+  const [signalToast, setSignalToast] = useState(null);
   const [auditLog, setAuditLog] = useState([]);
   const [equityCurve, setEquityCurve] = useState([]);
   const [stats, setStats] = useState(null);
@@ -1018,6 +1019,12 @@ function useLiveFeed() {
     return () => clearInterval(clock);
   }, []);
 
+  useEffect(() => {
+    if (!signalToast) return undefined;
+    const tmr = setTimeout(() => setSignalToast(null), 8000);
+    return () => clearTimeout(tmr);
+  }, [signalToast]);
+
   /* Telegram Mini App shell init — ran unconditionally in the retired
      webapp/index.html (see its final <script> block) but had no equivalent
      here. tg.ready()/tg.expand() are no-ops (window.Telegram undefined)
@@ -1044,7 +1051,8 @@ function useLiveFeed() {
       if (tg) { tg.ready(); tg.expand(); }
     } catch (_) { /* not inside Telegram, or SDK not loaded yet — fine */ }
     if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-      setTimeout(() => { try { Notification.requestPermission(); } catch (_) {} }, 4000);
+      // Ask early so phone/desktop alerts work when first signal fires
+      setTimeout(() => { try { Notification.requestPermission(); } catch (_) {} }, 1200);
     }
   }, []);
 
@@ -1288,25 +1296,31 @@ function useLiveFeed() {
         const norm = normalizeSignal(payload);
         setSignals(prev => {
           if (prev.some(s => s.id === payload.id)) return prev;
-          // Audio feedback — only for newly seen high-quality signals
           try {
-            if (loadSoundPref() && signalScore(norm) >= 70) {
+            if (loadSoundPref() && signalScore(norm) >= 55) {
               playSignalChime(normalizeDirection(norm.action));
             }
           } catch (_) {}
           return [norm, ...prev].slice(0, 200);
         });
-        // Browser push when a real signal arrives
+        if (norm.action === 'BUY' || norm.action === 'SELL') {
+          setSignalToast({ id: norm.id, symbol: norm.symbol, action: norm.action, score: norm.score, timeframe: norm.timeframe, at: Date.now() });
+        }
+        // Phone / desktop notification
         try {
           if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
             const title = `OMNICEE ${norm.symbol} ${norm.action}`;
             const body = `Score ${norm.score} · ${norm.timeframe || ''} · entry ${norm.entry ?? '—'}`;
+            try {
+              new Notification(title, { body, icon: '/icons/icon-192.png', tag: norm.id });
+            } catch (_) {}
             navigator.serviceWorker?.getRegistration?.().then(reg => {
               if (reg?.showNotification) reg.showNotification(title, { body, icon: '/icons/icon-192.png', tag: norm.id, data: { url: '/' } });
-              else new Notification(title, { body, icon: '/icons/icon-192.png' });
-            }).catch(() => new Notification(title, { body }));
+            }).catch(() => {});
+          } else if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+            Notification.requestPermission().catch(() => {});
           }
-        } catch (_) { /* notification optional */ }
+        } catch (_) { /* optional */ }
       });
 
       // Complements the /api/stats poll above with push updates the
@@ -1383,6 +1397,7 @@ function useLiveFeed() {
     stats, outlook, heatmapTiles, feedHealth, uptimeSec, accountBalance, socketLive, analysisLive, cryptoVolAlerts,
     news, sentiment, journalStats, learningProfiles, relativeStrength, hurstBoard, fetchErrors,
     mode, connected: mode === 'live', wakingBackend, wakeAttempts, eaAuthIssue,
+    signalToast, dismissSignalToast: () => setSignalToast(null),
   };
 }
 
@@ -1602,10 +1617,11 @@ function MarketVoice({ now, signals, quotes, outlook, mode }) {
  * disagree about where one bar ends and the next begins.
  */
 const TIMEFRAME_MS_CLIENT = { M15: 15 * 60e3, H1: 3600e3, H4: 4 * 3600e3, D1: 86400e3 };
+/* Classic TradingView-style candles on a lighter slate board */
 const CHART_COLORS = {
-  up: '#1fe3a8', down: '#ff5470', grid: '#1c232d', border: '#1c232d',
-  text: '#526078', crosshair: '#8b9bb0', panel2: '#10151c',
-  ema20: '#5ea8ff', ema50: '#a78bfa', band: '#526078',
+  up: '#26a69a', down: '#ef5350', grid: '#2a3544', border: '#3d4a5c',
+  text: '#c0c8d4', crosshair: '#9aa5b4', panel2: '#1e293b',
+  ema20: '#60a5fa', ema50: '#c084fc', band: '#64748b',
 };
 
 const INDICATOR_DEFS = [
@@ -1840,11 +1856,17 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
       timeScale: { borderColor: CHART_COLORS.border, timeVisible: true, secondsVisible: false },
     });
 
+    // Standard filled candles (TV-style): solid body + matching wick color
     const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: CHART_COLORS.up, downColor: CHART_COLORS.down,
-      borderUpColor: CHART_COLORS.up, borderDownColor: CHART_COLORS.down,
-      wickUpColor: CHART_COLORS.up, wickDownColor: CHART_COLORS.down,
-      priceLineVisible: false,
+      upColor: CHART_COLORS.up,
+      downColor: CHART_COLORS.down,
+      borderVisible: true,
+      borderUpColor: CHART_COLORS.up,
+      borderDownColor: CHART_COLORS.down,
+      wickUpColor: CHART_COLORS.up,
+      wickDownColor: CHART_COLORS.down,
+      priceLineVisible: true,
+      lastValueVisible: true,
     });
     // Volume as a squashed overlay in the bottom 20% of the same pane —
     // the standard lightweight-charts pattern, avoids multi-pane sizing
@@ -2025,13 +2047,18 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
       const durationMs = TIMEFRAME_MS_CLIENT[timeframe];
       const list = (signals || []).filter(s => s.action === 'BUY' || s.action === 'SELL');
 
-      markersRef.current.setMarkers(list.map(s => ({
-        time: Math.floor((s.timestamp || Date.now()) / durationMs) * (durationMs / 1000),
-        position: s.action === 'BUY' ? 'belowBar' : 'aboveBar',
-        color: s.action === 'BUY' ? CHART_COLORS.up : CHART_COLORS.down,
-        shape: s.action === 'BUY' ? 'arrowUp' : 'arrowDown',
-        text: s.score != null ? String(Math.round(s.score)) : s.action,
-      })));
+      markersRef.current.setMarkers(list.map(s => {
+        const ts = Number(s.timestamp || Date.now());
+        const sec = Math.floor((ts > 1e12 ? ts : ts * 1000) / durationMs) * (durationMs / 1000);
+        return {
+          time: sec,
+          position: s.action === 'BUY' ? 'belowBar' : 'aboveBar',
+          color: s.action === 'BUY' ? CHART_COLORS.up : CHART_COLORS.down,
+          shape: s.action === 'BUY' ? 'arrowUp' : 'arrowDown',
+          text: `${s.action}${s.score != null ? ' ' + Math.round(Number(s.score)) : ''}`,
+          size: 2,
+        };
+      }));
 
       priceLinesRef.current.forEach(l => { try { candleSeriesRef.current.removePriceLine(l); } catch (_) {} });
       priceLinesRef.current = [];
@@ -3048,13 +3075,14 @@ function NewsTab({ news, mode }) {
   const [selected, setSelected] = useState(null);
   const CATS = [
     { id: 'all', label: 'All markets' },
-    { id: 'crypto', label: 'Crypto' },
+    { id: 'stocks', label: 'Stocks' },
     { id: 'forex', label: 'Forex' },
+    { id: 'crypto', label: 'Crypto' },
     { id: 'macro', label: 'Macro / Fed' },
     { id: 'gold', label: 'Gold' },
     { id: 'oil', label: 'Oil' },
   ];
-  const MARKET_RE = /bitcoin|btc|ethereum|eth|crypto|defi|stablecoin|solana|sec\b|etf|binance|coinbase|forex|fx\b|eurusd|gbpusd|usdjpy|currency|dollar|dxy|fed\b|fomc|ecb|boj|boe|cpi|nfp|inflation|interest rate|treasury|yield|gold|xau|oil|wti|brent|opec|nasdaq|s&p|liquidity|central bank|risk.?on|risk.?off|payroll/i;
+  const MARKET_RE = /bitcoin|btc|ethereum|eth|crypto|defi|stablecoin|solana|sec\b|etf|binance|coinbase|forex|fx\b|eurusd|gbpusd|usdjpy|currency|dollar|dxy|fed\b|fomc|ecb|boj|boe|cpi|nfp|inflation|interest rate|treasury|yield|gold|xau|oil|wti|brent|opec|nasdaq|s&p|dow jones|stock market|equities|earnings|shares|wall street|nyse|liquidity|central bank|risk.?on|risk.?off|payroll/i;
   const NOISE_RE = /celebrity|sports|football|nba|movie|netflix|recipe|horoscope|weather forecast|gossip/i;
   const CRYPTO_RE = /bitcoin|btc|ethereum|eth|crypto|defi|stablecoin|solana|binance|coinbase|sec\b.*crypto|crypto.*etf/i;
   const FOREX_RE = /forex|fx\b|eurusd|gbpusd|usdjpy|currency|dxy|dollar index|ecb|boj|boe/i;
@@ -3077,6 +3105,7 @@ function NewsTab({ news, mode }) {
       if (cat === 'all') return true;
       const c = (n.category || '').toLowerCase();
       const t = h.toLowerCase();
+      if (cat === 'stocks') return /nasdaq|s&p|dow|stock|equit|earning|shares|wall street|nyse|etf/.test(t);
       if (cat === 'crypto') return c === 'crypto' || CRYPTO_RE.test(t);
       if (cat === 'forex') return c === 'forex' || FOREX_RE.test(t) || /eur|gbp|jpy|dollar/.test(t);
       if (cat === 'macro') return /fed\b|fomc|ecb|boj|boe|cpi|nfp|inflation|interest rate|treasury|yield|central bank|payroll/.test(t);
@@ -4253,6 +4282,23 @@ class AppErrorBoundary extends React.Component {
 }
 
 /* ── App shell ──────────────────────────────────────────────────────── */
+function SignalToast({ toast, onDismiss }) {
+  if (!toast) return null;
+  const buy = toast.action === 'BUY';
+  return (
+    <div role="alert" className="fixed z-[10000] left-1/2 -translate-x-1/2 top-3 max-w-[min(420px,94vw)] w-full px-3">
+      <div className="omni-panel px-4 py-3 flex items-start gap-3" style={{ borderColor: buy ? 'rgba(52,211,153,0.55)' : 'rgba(248,113,113,0.55)', boxShadow: '0 12px 40px rgba(0,0,0,0.45)' }}>
+        <div className="font-mono text-[11px] uppercase tracking-wider mt-0.5" style={{ color: buy ? 'var(--emerald)' : 'var(--coral)' }}>{toast.action}</div>
+        <div className="flex-1 min-w-0">
+          <div className="font-display text-[13px] tracking-wider" style={{ color: 'var(--text)' }}>{toast.symbol} · {toast.timeframe || 'H1'}</div>
+          <div className="font-mono text-[11px] mt-0.5" style={{ color: 'var(--textDim)' }}>Score {toast.score != null ? Math.round(Number(toast.score)) : '—'} · live signal</div>
+        </div>
+        <button type="button" onClick={onDismiss} className="font-mono text-[10px] px-2 py-1 rounded" style={{ color: 'var(--textFaint)', border: '1px solid var(--border)' }}>DISMISS</button>
+      </div>
+    </div>
+  );
+}
+
 export default function OmniceeDashboard() {
   const [activeTab, setActiveTab] = useState(() => {
     try {
@@ -4337,6 +4383,7 @@ export default function OmniceeDashboard() {
     <AppErrorBoundary>
     <div className="omni-root text-sm" style={{ minHeight: '100vh', minHeight: '100dvh', background: 'var(--void, #05070a)', color: 'var(--text, #eef2f7)' }}>
       <ThemeStyle />
+      {feed.signalToast ? <SignalToast toast={feed.signalToast} onDismiss={feed.dismissSignalToast} /> : null}
       <TopBar
         now={feed.now || Date.now()}
         mode={feed.mode || 'live'}
