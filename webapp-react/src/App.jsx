@@ -312,11 +312,40 @@ function ThemeStyle() {
       @media (max-width: 380px) {
         .omni-nav span { font-size: 9px !important; }
       }
-      /* Prefer reduced motion when user requests it */
+      /* Prefer reduced motion when user requests it (ui-ux-pro-max) */
       @media (prefers-reduced-motion: reduce) {
         .omni-pulse, .omni-ticker-track, .omni-flash-up, .omni-flash-down {
           animation: none !important;
         }
+      }
+      /* Focus + pointer affordances — never remove focus rings */
+      .omni-root button:focus-visible,
+      .omni-root a:focus-visible,
+      .omni-root input:focus-visible,
+      .omni-root [tabindex]:focus-visible {
+        outline: 2px solid var(--emerald);
+        outline-offset: 2px;
+      }
+      .omni-root button:not(:disabled),
+      .omni-root a,
+      .omni-root .omni-chip,
+      .omni-root .omni-row {
+        cursor: pointer;
+      }
+      .omni-root button:disabled { cursor: not-allowed; }
+      /* Stable skeleton for loading panels — avoids blank/freeze perception */
+      @keyframes omni-skeleton {
+        0% { background-position: 100% 0; }
+        100% { background-position: -100% 0; }
+      }
+      .omni-skeleton {
+        background: linear-gradient(90deg, var(--panel2) 25%, var(--border) 50%, var(--panel2) 75%);
+        background-size: 200% 100%;
+        animation: omni-skeleton 1.4s ease-in-out infinite;
+        border-radius: 6px;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .omni-skeleton { animation: none; background: var(--panel2); }
       }
       /* When full chart is open, hide ticker + top bar so symbols/TF are not covered */
       body.omni-chart-expanded .omni-topbar,
@@ -399,14 +428,25 @@ function SectionHeader({ icon: Icon, title, sub }) {
 /* Shown wherever a panel's real data hasn't arrived yet — replaces every
    demo/simulated fallback that used to sit here instead. */
 function WaitingForBackend({ height = 140, label = 'Loading live data…' }) {
+  const h = height === 'auto' ? 140 : Number(height) || 140;
   return (
-    <div className="flex flex-col items-center justify-center gap-2 px-3 font-mono text-[11px] text-center"
-      style={{ minHeight: height, height: height === 'auto' ? undefined : height, color: 'var(--textDim)', background: 'var(--panel2)', borderRadius: 8, border: '1px dashed var(--border)' }}>
+    <div
+      className="flex flex-col justify-center gap-3 px-3 py-3 font-mono text-[11px]"
+      role="status"
+      aria-busy="true"
+      aria-live="polite"
+      style={{ minHeight: h, height: height === 'auto' ? undefined : h, color: 'var(--textDim)', background: 'var(--panel2)', borderRadius: 8, border: '1px dashed var(--border)' }}
+    >
       <div className="flex items-center gap-2" style={{ color: 'var(--emerald)' }}>
         <Circle size={7} fill="currentColor" className="omni-pulse" />
         <span className="uppercase tracking-wider text-[10px]">OMNICEE</span>
+        <span style={{ color: 'var(--text)' }}>{label}</span>
       </div>
-      <div style={{ color: 'var(--text)' }}>{label}</div>
+      <div className="flex flex-col gap-2" aria-hidden="true">
+        <div className="omni-skeleton" style={{ height: 10, width: '88%' }} />
+        <div className="omni-skeleton" style={{ height: 10, width: '64%' }} />
+        <div className="omni-skeleton" style={{ height: 10, width: '76%' }} />
+      </div>
       <div className="text-[10px]" style={{ color: 'var(--textFaint)' }}>Desk stays open — data fills in as feeds connect</div>
     </div>
   );
@@ -753,8 +793,8 @@ function LoginGate({ onAuthed }) {
           </label>
         )}
 
-        {msg ? <div style={{ fontSize: 12, color: green, marginBottom: 10 }}>{msg}</div> : null}
-        {err ? <div style={{ fontSize: 12, color: red, marginBottom: 10 }}>{err}</div> : null}
+        {msg ? <div role="status" style={{ fontSize: 12, color: green, marginBottom: 10 }}>{msg}</div> : null}
+        {err ? <div role="alert" style={{ fontSize: 12, color: red, marginBottom: 10, lineHeight: 1.45 }}>{err}</div> : null}
 
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           {step === 'email' ? (
@@ -762,10 +802,12 @@ function LoginGate({ onAuthed }) {
               type="button"
               disabled={busy || !email.includes('@')}
               onClick={requestCode}
+              aria-busy={busy ? 'true' : 'false'}
               style={{
                 flex: 1, padding: '12px 14px', borderRadius: 8, border: 'none',
                 background: green, color: bg, fontWeight: 700, fontSize: 13,
                 cursor: busy ? 'wait' : 'pointer', opacity: (busy || !email.includes('@')) ? 0.55 : 1,
+                minHeight: 44,
               }}
             >
               {busy ? 'Sending…' : 'Send code'}
