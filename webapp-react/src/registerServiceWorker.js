@@ -1,27 +1,32 @@
 /**
  * Auto-update the installed PWA when a new deploy ships.
- * - Poll for new sw.js
- * - skipWaiting + clients.claim on the new worker
- * - Reload all open tabs once (no reinstall required)
+ * Guard against infinite reload loops (controllerchange + dual registration
+ * was the root cause of "frontend just loading and never opens" after commits).
  */
+const SW_RELOAD_KEY = 'omnicee_sw_reload_at';
+const SW_RELOAD_COOLDOWN_MS = 45 * 1000;
+
 export function registerServiceWorker() {
   if (!('serviceWorker' in navigator) || !location.protocol.startsWith('http')) return;
+  // Avoid double registration with the inline script in index.html
+  if (window.__omniceeSwRegistered) return;
+  window.__omniceeSwRegistered = true;
 
-  let reloaded = false;
   const softReload = () => {
-    if (reloaded) return;
-    reloaded = true;
     try {
+      const last = Number(sessionStorage.getItem(SW_RELOAD_KEY) || 0);
+      if (Date.now() - last < SW_RELOAD_COOLDOWN_MS) return;
+      sessionStorage.setItem(SW_RELOAD_KEY, String(Date.now()));
       window.location.reload();
-    } catch (_) {}
+    } catch (_) {
+      try { window.location.reload(); } catch (__) {}
+    }
   };
 
-  // New SW took control → load the new JS/CSS shell
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     softReload();
   });
 
-  // SW can also ask the page to reload after activate
   navigator.serviceWorker.addEventListener('message', (event) => {
     if (event?.data?.type === 'SW_UPDATED' || event?.data === 'SW_UPDATED') {
       softReload();
@@ -38,28 +43,21 @@ export function registerServiceWorker() {
   navigator.serviceWorker
     .register('/sw.js', { updateViaCache: 'none' })
     .then((registration) => {
-      // Immediately check for a newer worker
       registration.update().catch(() => {});
 
-      // When a new worker installs, activate it right away
       registration.addEventListener('updatefound', () => {
         const installing = registration.installing;
         if (!installing) return;
         installing.addEventListener('statechange', () => {
-          if (installing.state === 'installed') {
-            // With an existing controller → update; first install has no controller
-            if (navigator.serviceWorker.controller) {
-              installing.postMessage({ type: 'SKIP_WAITING' });
-              installing.postMessage('SKIP_WAITING');
-              activateWaiting(registration);
-            }
+          if (installing.state === 'installed' && navigator.serviceWorker.controller) {
+            installing.postMessage({ type: 'SKIP_WAITING' });
+            activateWaiting(registration);
           }
         });
       });
 
       if (registration.waiting) activateWaiting(registration);
 
-      // Check again when the tab becomes visible (user returns to the app)
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') {
           registration.update().catch(() => {});
@@ -67,11 +65,11 @@ export function registerServiceWorker() {
         }
       });
 
-      // Periodic check while the app stays open (deploy mid-session)
+      // Less aggressive than every 60s — reduces update thrash after deploy
       setInterval(() => {
         registration.update().catch(() => {});
         if (registration.waiting) activateWaiting(registration);
-      }, 60 * 1000);
+      }, 5 * 60 * 1000);
     })
     .catch(() => {});
 }

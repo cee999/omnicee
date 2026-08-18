@@ -631,8 +631,12 @@ async function omniFetch(path, timeoutMs = 12000, options = {}) {
       headers: authHeaders(),
       body: options.body ? JSON.stringify(options.body) : undefined,
       signal: ctrl.signal,
+      cache: 'no-store',
     });
     if (res.status === 401) {
+      // Expired/invalid session must not freeze the desk on "loading" forever.
+      try { setSession(null); } catch (_) {}
+      try { window.dispatchEvent(new CustomEvent('omnicee:auth-required')); } catch (_) {}
       const err = new Error('AUTH_REQUIRED');
       err.code = 'AUTH_REQUIRED';
       throw err;
@@ -644,6 +648,27 @@ async function omniFetch(path, timeoutMs = 12000, options = {}) {
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Unauthenticated reachability probe — never attach session headers. */
+async function probeBackend(timeoutMs = 6000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(API_BASE + '/health', {
+      method: 'GET',
+      signal: ctrl.signal,
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) throw new Error(`health ${res.status}`);
+    // Accept JSON or plain text — do not hang on parse errors
+    const ct = res.headers.get('content-type') || '';
+    if (ct.includes('json')) return res.json().catch(() => ({ ok: true }));
+    return { ok: true };
   } finally {
     clearTimeout(timer);
   }
@@ -924,39 +949,30 @@ function useLiveFeed() {
     let cancelled = false;
     let timer = null;
     let attempts = 0;
-    // Never stay on a blank "checking" shell — show the dashboard shell immediately as live
-    // and keep probing. Cold Render can take 30–60s; UI must still paint TopBar/tabs.
+    // Always paint the desk shell. Never block on auth headers or JSON parse.
     setMode('live');
     const tryProbe = () => {
+      if (cancelled) return;
       attempts += 1;
       setWakeAttempts(attempts);
-      const probe = attempts % 2 === 0
-        ? omniFetch('/health', 6000)
-        : omniFetch('/api/market?symbols=EURUSD', 8000);
-      probe
-        .then(() => { if (!cancelled) { setMode('live'); setWakingBackend(false); } })
+      // Cap visible "waking" banner so the UI never looks stuck loading forever.
+      // Keep retrying quietly in the background after that.
+      if (attempts <= 24) setWakingBackend(true);
+      else setWakingBackend(false);
+
+      probeBackend(attempts < 6 ? 5000 : 8000)
+        .then(() => {
+          if (cancelled) return;
+          setMode('live');
+          setWakingBackend(false);
+        })
         .catch(() => {
           if (cancelled) return;
-          setWakingBackend(true);
-          // Keep mode live so tabs/prices shell always render
           setMode('live');
-          timer = setTimeout(tryProbe, attempts < 8 ? 2500 : 5000);
+          timer = setTimeout(tryProbe, attempts < 10 ? 2000 : 5000);
         });
     };
     tryProbe();
-    // FIX: this used to force wakingBackend false at a hard 45s ceiling no
-    // matter what — meaning on any cold start slower than 45s (common on
-    // Render free: 30-60s+ is normal, and can run longer), the "connecting
-    // to server" banner would vanish while the retry loop kept silently
-    // running underneath, leaving the DASH tab looking permanently empty
-    // with zero indication anything was still happening. That's "sometimes
-    // it takes never to open" — not a retry-loop bug, a UI-honesty bug:
-    // the one visible signal that the app was still trying got switched
-    // off before the thing it was waiting for actually finished. The
-    // retry loop itself already has no ceiling (tryProbe recurses forever
-    // until cancelled or successful) — removed the mismatched visual one
-    // instead of extending it further, since any fixed number just moves
-    // the same failure mode to a different wait time.
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, []);
 
@@ -4224,6 +4240,12 @@ export default function OmniceeDashboard() {
       saveSoundPref(next);
       return next;
     });
+  }, []);
+  // Session wiped by omniFetch 401 → drop to LoginGate instead of infinite loading
+  useEffect(() => {
+    const onAuthRequired = () => setUser(null);
+    window.addEventListener('omnicee:auth-required', onAuthRequired);
+    return () => window.removeEventListener('omnicee:auth-required', onAuthRequired);
   }, []);
   useEffect(() => {
     // If already running as installed app, never show install UI again

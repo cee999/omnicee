@@ -21,16 +21,32 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700;800&family=Orbitron:wght@600;800&display=swap" rel="stylesheet" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script>
-      // Register service worker as early as possible (required for desktop install)
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', function () {
-          navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' }).catch(function () {});
-        });
-      }
+      // SW registration is owned by main.jsx (registerServiceWorker) to avoid
+      // dual register → controllerchange → infinite reload ("stuck loading").
+      // Emergency: clear stale SW if the page is stuck in a reload loop.
+      (function () {
+        try {
+          var k = 'omnicee_sw_reload_at';
+          var last = Number(sessionStorage.getItem(k) || 0);
+          if (last && Date.now() - last < 15000) {
+            // Likely reload loop — unregister all workers once
+            if ('serviceWorker' in navigator) {
+              navigator.serviceWorker.getRegistrations().then(function (regs) {
+                regs.forEach(function (r) { r.unregister(); });
+              }).catch(function () {});
+            }
+            try { sessionStorage.removeItem(k); } catch (_) {}
+          }
+        } catch (_) {}
+      })();
     </script>
   </head>
   <body class="bg-void" style="margin:0;background:#05070a;color:#eef2f7">
-    <div id="root"></div>
+    <div id="root">
+      <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:ui-monospace,monospace;color:#8b9bb0;font-size:12px;letter-spacing:0.08em">
+        LOADING OMNICEE…
+      </div>
+    </div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
