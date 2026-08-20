@@ -15,6 +15,18 @@ const DEFAULT_FOREX_SYMBOL_MAP = {
   USDCHF: 'OANDA:USD_CHF',
 };
 
+// Exchange-listed equities/ETFs Finnhub's WS trade feed carries under their raw ticker
+// (no OANDA:-style prefix — that's a forex-only convention). Neither symbol is on Deriv's
+// public tick API, so Finnhub is the only 24/7 source for them.
+//   UUP    — real dollar-index ETF, exact 1:1 coverage.
+//   USOIL  — broker CFD, not a single listed ticker. USO (WTI crude ETF) is the closest
+//            real-time, no-signup proxy; it tracks spot crude closely but won't be
+//            byte-for-byte identical to a broker's exact CFD print.
+const DEFAULT_EQUITY_SYMBOL_MAP = {
+  UUP: 'UUP',
+  USOIL: 'USO',
+};
+
 const TF_TO_FINNHUB_RESOLUTION = {
   M1: '1', M5: '5', M15: '15', M30: '30',
   H1: '60', H4: '60',
@@ -35,6 +47,7 @@ class FinnhubFeed extends EventEmitter {
     this._candleAccessBlockedUntil = null;
     this._candleAccessConfirmed = null;
     this.forexSymbolMap = { ...DEFAULT_FOREX_SYMBOL_MAP, ...(config.forexSymbolMap || {}) };
+    this.equitySymbolMap = { ...DEFAULT_EQUITY_SYMBOL_MAP, ...(config.equitySymbolMap || {}) };
 
     this._ws = null;
     this._wsSymbols = [];
@@ -258,14 +271,21 @@ class FinnhubFeed extends EventEmitter {
     }
   }
 
+  // Forex pairs use the OANDA:-prefixed map; equities/ETFs (UUP, USOIL→USO) use their raw
+  // ticker. Merged here so callers/WS subscribe/reverse-lookup all see one symbol space.
+  _wsSymbolMap() {
+    return { ...this.forexSymbolMap, ...this.equitySymbolMap };
+  }
+
   connectPriceStream(symbols = []) {
     if (!this.apiKey) {
       console.warn('[FinnhubFeed] connectPriceStream: no apiKey configured, skipping');
       return;
     }
-    this._wsSymbols = symbols.filter(s => this.forexSymbolMap[s]);
+    const symbolMap = this._wsSymbolMap();
+    this._wsSymbols = symbols.filter(s => symbolMap[s]);
     if (!this._wsSymbols.length) {
-      console.warn('[FinnhubFeed] connectPriceStream: none of the requested symbols have a forexSymbolMap entry');
+      console.warn('[FinnhubFeed] connectPriceStream: none of the requested symbols have a forex/equity symbol map entry');
       return;
     }
     this._wsClosedByUser = false;
@@ -293,8 +313,9 @@ class FinnhubFeed extends EventEmitter {
       this._wsReconnectAttempts = 0;
       this._wsBackoffMs = 2000;
       this._wsConnected = true;
+      const symbolMap = this._wsSymbolMap();
       for (const sym of this._wsSymbols) {
-        this._ws.send(JSON.stringify({ type: 'subscribe', symbol: this.forexSymbolMap[sym] }));
+        this._ws.send(JSON.stringify({ type: 'subscribe', symbol: symbolMap[sym] }));
       }
       console.log(`[FinnhubFeed] Price stream connected for: ${this._wsSymbols.join(', ')}`);
       this.emit('connected');
@@ -330,7 +351,7 @@ class FinnhubFeed extends EventEmitter {
   _reverseSymbolMap() {
     if (!this._reverseMap) {
       this._reverseMap = {};
-      for (const [omniceeSymbol, finnhubSymbol] of Object.entries(this.forexSymbolMap)) {
+      for (const [omniceeSymbol, finnhubSymbol] of Object.entries(this._wsSymbolMap())) {
         this._reverseMap[finnhubSymbol] = omniceeSymbol;
       }
     }
