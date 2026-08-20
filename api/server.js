@@ -98,11 +98,14 @@ function latestMarketRows(symbols = []) {
   for (const [symbol, tick] of Object.entries(livePrices)) {
     if (wanted.size && !wanted.has(symbol)) continue;
     if (!tick || !Number.isFinite(tick.price)) continue;
+    const bid = tick.bid != null && Number.isFinite(Number(tick.bid)) ? Number(tick.bid) : null;
+    const ask = tick.ask != null && Number.isFinite(Number(tick.ask)) ? Number(tick.ask) : null;
+    const mid = (bid != null && ask != null) ? (bid + ask) / 2 : tick.price;
     rowsBySymbol.set(symbol, {
       symbol,
-      price: tick.price,
-      bid: tick.bid ?? null,
-      ask: tick.ask ?? null,
+      price: mid,
+      bid,
+      ask,
       change: null,
       bias: null,
       source: tick.source || 'unknown',
@@ -244,16 +247,22 @@ function createApp() {
   app.get('/api/signals', dashboardReadAuth, async (req, res) => {
     const symbol = req.query.symbol;
     const limit = Math.min(Number(req.query.limit) || 50, 200);
-    let signals = await db.getRecentSignals({ symbol, limit }).catch(err => {
+    let mongo = await db.getRecentSignals({ symbol, limit }).catch(err => {
       console.warn('[API] getRecentSignals (Mongo) failed, falling back to in-memory cache:', err.message);
       return null;
     });
-    let source = 'mongo';
-    if (!signals || signals.length === 0) {
-      signals = RECENT_SIGNALS_CACHE.filter(s => !symbol || s.symbol === symbol).slice(0, limit);
-      source = 'memory';
+    const mem = RECENT_SIGNALS_CACHE.filter(s => !symbol || s.symbol === symbol);
+    // Merge: memory first (freshest live scores including WAIT), then mongo FIRE history
+    const seen = new Set();
+    const signals = [];
+    for (const s of [...mem, ...(Array.isArray(mongo) ? mongo : [])]) {
+      const id = s.id || s.signalId || `${s.symbol}-${s.timestamp || s.ts || ''}-${s.action}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      signals.push(s);
+      if (signals.length >= limit) break;
     }
-    res.json({ ok: true, signals, source });
+    res.json({ ok: true, signals, source: mem.length ? 'memory+mongo' : (mongo?.length ? 'mongo' : 'empty') });
   });
 
   app.get('/api/market', dashboardReadAuth, async (req, res) => {
@@ -901,7 +910,7 @@ app.get('/api/levels', dashboardReadAuth, (req, res) => {
       if (MACRO.test(text)) rank += 3;
       n._rank = rank;
       return n;
-    }).sort((a, b) => (b._rank - a._rank) || ((b.datetime || 0) - (a.datetime || 0)))
+    }).sort((a, b) => ((b.datetime || 0) - (a.datetime || 0)) || (b._rank - a._rank))
       .map(({ _rank, ...rest }) => rest)
       .slice(0, 60);
 
@@ -1383,19 +1392,46 @@ function startServer(config = {}) {
 
   // FIX: GET /api/signals — the route the dashboard's Signals tab, Dashboard cards, and Tape all actually poll — only ever read from Mongo, with no fallback.
   bus.on('signal', payload => {
-    const compact = db.compactSignal(payload);
+    const compact = db.compactSignal({
+      ...payload,
+      currentPrice: payload.currentPrice ?? payload.entry ?? payload.price,
+      id: payload.id || `${payload.symbol}-${payload.timeframe}-${payload.timestamp || Date.now()}`,
+    });
     io.emit('signal', compact);
     RECENT_SIGNALS_CACHE.unshift(compact);
-    if (RECENT_SIGNALS_CACHE.length > RECENT_SIGNALS_CACHE_LIMIT) RECENT_SIGNALS_CACHE.length = RECENT_SIGNALS_CACHE_LIMIT;
-    db.saveSignal(payload).catch(err => console.warn('[API] persist signal:', err.message));
+    // Dedupe WAIT per symbol+tf — keep newest only
+    if (String(compact.action).toUpperCase() === 'WAIT') {
+      const key = `${compact.symbol}:${compact.timeframe}`;
+      const seen = new Set([key]);
+      const filtered = [compact];
+      for (const s of RECENT_SIGNALS_CACHE.slice(1)) {
+        const k = `${s.symbol}:${s.timeframe}`;
+        if (String(s.action).toUpperCase() === 'WAIT' && seen.has(k)) continue;
+        if (String(s.action).toUpperCase() === 'WAIT') seen.add(k);
+        filtered.push(s);
+      }
+      RECENT_SIGNALS_CACHE.length = 0;
+      RECENT_SIGNALS_CACHE.push(...filtered.slice(0, RECENT_SIGNALS_CACHE_LIMIT));
+    } else if (RECENT_SIGNALS_CACHE.length > RECENT_SIGNALS_CACHE_LIMIT) {
+      RECENT_SIGNALS_CACHE.length = RECENT_SIGNALS_CACHE_LIMIT;
+    }
+    // Only persist real FIRE signals to Mongo (WAIT is desk telemetry only)
+    if (String(compact.action).toUpperCase() !== 'WAIT') {
+      db.saveSignal(payload).catch(err => console.warn('[API] persist signal:', err.message));
+    }
   });
   bus.on('market_update', payload => {
     if (!payload?.symbol || payload.price == null) return;
     const price = Number(payload.price);
     if (!Number.isFinite(price)) return;
+    const bid = payload.bid != null ? Number(payload.bid) : null;
+    const ask = payload.ask != null ? Number(payload.ask) : null;
+    const mid = (Number.isFinite(bid) && Number.isFinite(ask)) ? (bid + ask) / 2 : price;
     MARKET_SNAPSHOT_CACHE.set(String(payload.symbol).toUpperCase(), {
       symbol: String(payload.symbol).toUpperCase(),
-      price,
+      price: mid,
+      bid: Number.isFinite(bid) ? bid : null,
+      ask: Number.isFinite(ask) ? ask : null,
       change: payload.change ?? null,
       bias: payload.bias ?? null,
       source: payload.source || 'unknown',

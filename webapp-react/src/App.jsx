@@ -1106,9 +1106,13 @@ function useLiveFeed() {
               const src = m.source || 'unknown';
               const rank = SRC_RANK[src] ?? 0;
               const prevSrc = priceSourceRef.current[m.symbol];
-              if (prevSrc && prevSrc.rank > rank && (Date.now() - prevSrc.ts) < 15000) return;
+              // Prefer broker MT5; shorter hold so Deriv can fill when EA offline
+              if (prevSrc && prevSrc.rank > rank && (Date.now() - prevSrc.ts) < 8000) return;
               priceSourceRef.current[m.symbol] = { source: src, rank, ts: Date.now() };
-              next[m.symbol] = Number(m.price);
+              const bid = m.bid != null ? Number(m.bid) : null;
+              const ask = m.ask != null ? Number(m.ask) : null;
+              const mid = (Number.isFinite(bid) && Number.isFinite(ask)) ? (bid + ask) / 2 : Number(m.price);
+              next[m.symbol] = mid;
             });
             return next;
           });
@@ -1120,13 +1124,18 @@ function useLiveFeed() {
               const rank = SRC_RANK[src] ?? 0;
               const prevSrc = priceSourceRef.current[m.symbol];
               if (prevSrc && prevSrc.rank > rank && (Date.now() - prevSrc.ts) < 15000) return;
-              next[m.symbol] = {
-                price: Number(m.price),
-                bid: m.bid != null ? Number(m.bid) : prev[m.symbol]?.bid ?? null,
-                ask: m.ask != null ? Number(m.ask) : prev[m.symbol]?.ask ?? null,
-                source: src,
-                ts: Date.now(),
-              };
+              {
+                const bid = m.bid != null ? Number(m.bid) : prev[m.symbol]?.bid ?? null;
+                const ask = m.ask != null ? Number(m.ask) : prev[m.symbol]?.ask ?? null;
+                const mid = (Number.isFinite(bid) && Number.isFinite(ask)) ? (bid + ask) / 2 : Number(m.price);
+                next[m.symbol] = {
+                  price: mid,
+                  bid: Number.isFinite(bid) ? bid : null,
+                  ask: Number.isFinite(ask) ? ask : null,
+                  source: src,
+                  ts: Date.now(),
+                };
+              }
             });
             return next;
           });
@@ -3175,7 +3184,7 @@ function NewsTab({ news, mode }) {
       return true;
     })
     .slice()
-    .sort((a, b) => rankItem(b) - rankItem(a) || ((b.datetime || 0) - (a.datetime || 0)));
+    .sort((a, b) => ((b.datetime || 0) - (a.datetime || 0)) || (rankItem(b) - rankItem(a)));
 
   const items = filtered;
   const hasBody = (n) => {

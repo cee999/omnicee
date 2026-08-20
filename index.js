@@ -557,12 +557,8 @@ async function runAnalysisCycle(symbol, timeframe) {
     }
 
     if (!signal || signal.action === 'WAIT') {
-      const sc = signal?.score?.final ?? 0;
+      const sc = signal?.score?.final ?? (typeof signal?.score === 'number' ? signal.score : 0);
       const why = signal?.waitReason || signal?.reason || signal?.note || 'no_signal_or_wait';
-      // This used to be log.debug — invisible unless LOG_LEVEL=debug is set,
-      // which it isn't by default. Since the overwhelming majority of
-      // analysis cycles end here, that meant close to zero signal-pipeline
-      // activity was ever actually visible in production logs.
       log.info(`${key}: WAIT — score=${sc} — ${why}`);
       if (auditTrail) {
         auditTrail.record({
@@ -574,6 +570,23 @@ async function runAnalysisCycle(symbol, timeframe) {
           gatesPassed: sc >= 40 ? ['partial_score'] : [],
           nearMiss: sc >= MIN_SCORE - 15 && sc < MIN_SCORE,
         });
+      }
+      // Publish WAIT/near-miss to the desk so the signal tray is never a black hole
+      if (wsBus && signal && Number(sc) > 0) {
+        try {
+          const waitPayload = {
+            id: `wait-${symbol}-${timeframe}-${Date.now()}`,
+            symbol,
+            timeframe,
+            action: 'WAIT',
+            score: Number(sc),
+            entry: currentPrice,
+            timestamp: Date.now(),
+            gate: { status: Number(sc) >= MIN_SCORE - 15 ? 'near_miss' : 'wait', reason: String(why) },
+            waitReason: String(why),
+          };
+          wsBus.emit('signal', waitPayload);
+        } catch (_) {}
       }
       return;
     }
@@ -1412,7 +1425,7 @@ function onLivePrice(symbol, price, { change = null, bias = null, source = 'cand
   const prev = lastPriceBySymbol[symbol];
 
   // Deriv primary by default (MT5 only wins if ticks are <1.5s fresh).
-  const derivPrimary = process.env.DERIV_PRIMARY !== 'false' && process.env.DERIV_PRIMARY !== '0';
+  const derivPrimary = process.env.DERIV_PRIMARY === 'true' || process.env.DERIV_PRIMARY === '1';
   const holdMs = source === 'deriv'
     ? (derivPrimary ? 1500 : Math.min(BROKER_PRICE_HOLD_MS, 5000))
     : BROKER_PRICE_HOLD_MS;
@@ -2067,7 +2080,7 @@ function buildFeeds() {
     });
     derivFeed.on('price', ({ symbol, price, bid, ask, change }) => {
       const last = lastPriceBySymbol[symbol];
-      const derivPrimary = process.env.DERIV_PRIMARY !== 'false' && process.env.DERIV_PRIMARY !== '0';
+      const derivPrimary = process.env.DERIV_PRIMARY === 'true' || process.env.DERIV_PRIMARY === '1';
       const mt5Hold = derivPrimary ? 1500 : 12000;
       if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < mt5Hold) {
         return;
@@ -2100,7 +2113,7 @@ function buildFeeds() {
       if (!candleStores[symbol]) candleStores[symbol] = {};
       const prev = candleStores[symbol][timeframe] || [];
       const last = lastPriceBySymbol[symbol];
-      const derivPrimary = process.env.DERIV_PRIMARY !== 'false' && process.env.DERIV_PRIMARY !== '0';
+      const derivPrimary = process.env.DERIV_PRIMARY === 'true' || process.env.DERIV_PRIMARY === '1';
       const candleHold = derivPrimary ? 3000 : (BROKER_PRICE_HOLD_MS * 4);
       if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < candleHold && prev.length >= 50) {
         return;
