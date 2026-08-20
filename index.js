@@ -1264,7 +1264,7 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
     // signal-generation gap, not just a display lag. Only Deriv reaches
     // this branch now (Yahoo/TwelveData/Binance/Bybit are gone), so this
     // just matches the hold everywhere else already uses.
-    const holdMs = src === 'deriv' ? Math.min(BROKER_PRICE_HOLD_MS, (process.env.DERIV_PRIMARY !== 'false' && process.env.DERIV_PRIMARY !== '0') ? 1500 : 5000) : BROKER_PRICE_HOLD_MS;
+    const holdMs = src === 'deriv' ? Math.min(BROKER_PRICE_HOLD_MS, (process.env.DERIV_PRIMARY === 'true' || process.env.DERIV_PRIMARY === '1') ? 1500 : 5000) : BROKER_PRICE_HOLD_MS;
     if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < holdMs) {
       return;
     }
