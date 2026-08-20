@@ -209,17 +209,30 @@ function createApp() {
     // briefly unreachable for any reason, this endpoint got slow or hung
     // right along with it, which doesn't just slow one API call: it
     // directly extends how long Render keeps the deploy "not ready" and
-    // how long the frontend's cold-start probe keeps failing. The one
-    // endpoint that most needs to answer fast, unconditionally, was
-    // exactly as slow as the least reliable dependency in the whole
-    // system. Capped at 2s so a Mongo hiccup can't block this past a
-    // bounded, small delay — still reports real status when Mongo
-    // answers in time, just can't hang the whole readiness gate on it.
-    let mongo = { ok: false, error: 'timeout' };
+    // how long the frontend's cold-start probe keeps failing. Capped at
+    // 2s so a Mongo hiccup can't block this past a bounded delay.
+    //
+    // FIX #2, found right after shipping #1: Promise.race doesn't cancel
+    // the losing promise. If db.health() takes longer than 2s and then
+    // eventually rejects, that rejection arrives after the race has
+    // already settled via the timeout branch — nothing is attached to
+    // catch it at that point, since the `await Promise.race(...)`
+    // expression itself already resolved. That's an unhandled promise
+    // rejection, and on Node 15+ those are fatal by default: they crash
+    // the whole process, not just this one request. Every single hit to
+    // this endpoint — Render's own readiness check, the frontend's wake-
+    // probe, the self-ping — was a chance to crash the server outright
+    // whenever Mongo was slow-then-failing, which is exactly the kind of
+    // thing that happens more, not less, right after a cold start. The
+    // fix that actually needed to ship with #1: attach .catch() to
+    // db.health() immediately, so any eventual rejection is always
+    // handled somewhere regardless of whether it wins or loses the race.
+    const dbHealthSettled = db.health().catch(err => ({ ok: false, error: err.message }));
+    let mongo;
     try {
       mongo = await Promise.race([
-        db.health(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000)),
+        dbHealthSettled,
+        new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: 'timeout' }), 2000)),
       ]);
     } catch (err) { mongo = { ok: false, error: err.message }; }
     let cache = null;
