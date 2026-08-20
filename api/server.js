@@ -71,7 +71,7 @@ function dashboardReadAuth(req, res, next) {
     '/api/market', '/api/candles', '/api/health', '/health',
     '/api/calendar', '/api/news',
     '/api/signals', '/api/audit-trail', '/api/outlook',
-    '/api/heatmap', '/api/stats', '/api/levels', '/api/watchlist',
+    '/api/heatmap', '/api/stats', '/api/levels', '/api/watchlist', '/api/desk-brief',
   ]);
   if (req.method === 'GET' && publicPricePaths.has(path)) {
     req.telegramUser = { id: 'public-prices', username: 'public-prices' };
@@ -344,6 +344,146 @@ function createApp() {
     }
     res.json({ ok: true, outlook: { ...outlook, news } });
   });
+
+  // Vibe-style multi-agent desk brief (rule-based, no external LLM required).
+  // Teams: Session · Regime · Signals · Macro · Risk — grounded in live engine data.
+  app.get('/api/desk-brief', dashboardReadAuth, async (_req, res) => {
+    const live = getEngines() || {};
+    const now = Date.now();
+    const session = (typeof MarketOutlookBuilder?.sessionInfo === 'function')
+      ? MarketOutlookBuilder.sessionInfo(now)
+      : { name: 'Unknown', note: '', label: '' };
+
+    let outlook = null;
+    try {
+      if (live.regimeEngine && live.candleStores && MarketOutlookBuilder?.build) {
+        outlook = MarketOutlookBuilder.build({
+          symbols: live.symbols || [],
+          candleStores: live.candleStores,
+          regimeEngine: live.regimeEngine,
+          sessionFilter: live.sessionFilter,
+          cotParser: live.cotParser,
+          timeframe: 'H1',
+        });
+      }
+    } catch (err) {
+      console.warn('[API] desk-brief outlook:', err.message);
+    }
+
+    // Recent signals from memory/cache if available
+    let signals = [];
+    try {
+      if (typeof live.getRecentSignals === 'function') {
+        signals = live.getRecentSignals(20) || [];
+      } else if (Array.isArray(live.recentSignals)) {
+        signals = live.recentSignals.slice(0, 20);
+      }
+    } catch (_) {}
+
+    const fired = (signals || []).filter(s => {
+      const a = String(s.action || s.direction || '').toUpperCase();
+      return a === 'BUY' || a === 'SELL';
+    });
+    const waits = (signals || []).filter(s => String(s.action || '').toUpperCase() === 'WAIT');
+
+    const regimes = (outlook?.perSymbol || outlook?.symbols || []).slice(0, 12).map(e => ({
+      symbol: e.symbol,
+      regime: e.regime || '—',
+      tradeability: e.tradeability ?? null,
+      note: (e.reasons && e.reasons[0]) || e.dataNote || null,
+    }));
+
+    const topTradeable = regimes
+      .filter(r => r.tradeability != null)
+      .slice()
+      .sort((a, b) => (Number(b.tradeability) || 0) - (Number(a.tradeability) || 0))
+      .slice(0, 5);
+
+    // Macro: next high-impact calendar if engine or global cache has it
+    let macroEvents = [];
+    try {
+      const cal = global.__omniCalendarCache?.events || [];
+      macroEvents = cal
+        .filter(e => Number.isFinite(e.time) && e.time >= now - 3600000)
+        .slice(0, 8)
+        .map(e => ({
+          name: e.name,
+          currency: e.currency,
+          time: e.time,
+          impact: e.impact,
+          hoursAway: Math.round((e.time - now) / 3600000 * 10) / 10,
+        }));
+    } catch (_) {}
+
+    let journal = null;
+    try {
+      journal = live.journal?.getStats?.() || live.signalJournal?.getStats?.() || null;
+    } catch (_) {}
+
+    const teams = [
+      {
+        id: 'session',
+        title: 'Session desk',
+        summary: session.label || session.name || 'Session',
+        bullets: [session.note || 'Session context unavailable'].filter(Boolean),
+      },
+      {
+        id: 'regime',
+        title: 'Regime / quant',
+        summary: topTradeable.length
+          ? `Top tradeable: ${topTradeable.map(r => r.symbol).join(', ')}`
+          : 'Waiting for OHLC depth (≥40 bars) to classify regimes',
+        bullets: topTradeable.map(r => `${r.symbol}: ${r.regime}${r.tradeability != null ? ` · tradeability ${Math.round(Number(r.tradeability))}` : ''}`),
+      },
+      {
+        id: 'signals',
+        title: 'Signal team',
+        summary: fired.length
+          ? `${fired.length} live BUY/SELL in recent window`
+          : (waits.length ? `${waits.length} WAIT scores — no FIRE yet` : 'No recent pipeline scores'),
+        bullets: fired.slice(0, 5).map(s => {
+          const a = String(s.action || s.direction || '').toUpperCase();
+          const sc = s.score?.final ?? s.score ?? '—';
+          return `${s.symbol} ${a} · score ${sc} · ${s.timeframe || 'H1'}`;
+        }),
+      },
+      {
+        id: 'macro',
+        title: 'Macro / risk calendar',
+        summary: macroEvents.length
+          ? `${macroEvents.length} upcoming events in view`
+          : 'Calendar thin — check NEWS / calendar feeds',
+        bullets: macroEvents.slice(0, 5).map(e => {
+          const imp = e.impact ? ` [${e.impact}]` : '';
+          return `${e.currency || ''} ${e.name}${imp} · ${e.hoursAway}h`;
+        }),
+      },
+      {
+        id: 'risk',
+        title: 'Risk / journal',
+        summary: journal && journal.total
+          ? `Journal ${journal.total} trades · WR ${journal.winRate ?? '—'}% · PF ${journal.pf ?? '—'}`
+          : 'No closed outcomes yet — Shadow journal will fill as trades resolve',
+        bullets: journal && journal.total
+          ? [
+              `Expectancy (R): ${journal.expectancy ?? '—'}`,
+              `Avg win/loss (R): ${journal.avgWin ?? '—'} / ${journal.avgLoss ?? '—'}`,
+            ]
+          : ['Record outcomes on Valid tab to unlock Shadow diagnostics'],
+      },
+    ];
+
+    res.json({
+      ok: true,
+      generatedAt: now,
+      session,
+      teams,
+      regimes,
+      signalCounts: { fired: fired.length, wait: waits.length, total: (signals || []).length },
+      style: 'multi-agent-desk-brief',
+    });
+  });
+
 
       app.get('/api/calendar', dashboardReadAuth, async (_req, res) => {
     const now = Date.now();

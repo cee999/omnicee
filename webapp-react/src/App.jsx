@@ -114,6 +114,23 @@ function normalizeTargets(targets) {
   return ['tp1', 'tp2', 'tp3'].map(k => priceFrom(targets[k])).filter(v => v != null);
 }
 
+
+function copySignalExport(s) {
+  const lines = [
+    `OMNICEE ${s.symbol} ${s.action}`,
+    `TF: ${s.timeframe || 'H1'} · Score: ${s.score ?? '—'}`,
+    `Entry: ${s.entry ?? '—'} · SL: ${s.stopLoss ?? '—'} · TP1: ${s.targets?.[0] ?? '—'}`,
+    s.targets?.[1] != null ? `TP2: ${s.targets[1]}` : null,
+    `ID: ${s.id || '—'}`,
+  ].filter(Boolean).join('\n');
+  try {
+    navigator.clipboard?.writeText(lines);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 function normalizeSignal(s) {
   const action = normalizeDirection(s.action || s.direction);
   const agents = Array.isArray(s.agents || s.agentBreakdown) ? (s.agents || s.agentBreakdown) : [];
@@ -940,6 +957,7 @@ function useLiveFeed() {
   const [equityCurve, setEquityCurve] = useState([]);
   const [stats, setStats] = useState(null);
   const [outlook, setOutlook] = useState(null);
+  const [deskBrief, setDeskBrief] = useState(null);
   const [heatmapTiles, setHeatmapTiles] = useState(null);
   const [feedHealth, setFeedHealth] = useState(null);
   const [uptimeSec, setUptimeSec] = useState(null);
@@ -1144,6 +1162,7 @@ function useLiveFeed() {
     };
     const pullSlow = async () => {
       try { const r = await recordFetch('outlook', omniFetch('/api/outlook')); if (!cancelled && r.ok) setOutlook(r.outlook); } catch (_) {}
+      try { const r = await recordFetch('desk-brief', omniFetch('/api/desk-brief')); if (!cancelled && r.ok) setDeskBrief(r); } catch (_) {}
       try {
         let events = [];
         try {
@@ -1395,7 +1414,7 @@ function useLiveFeed() {
   return {
     now, prices, quotes, changes, flash, signals, calendar, levels, auditLog, equityCurve, equityCurveLive,
     stats, outlook, heatmapTiles, feedHealth, uptimeSec, accountBalance, socketLive, analysisLive, cryptoVolAlerts,
-    news, sentiment, journalStats, learningProfiles, relativeStrength, hurstBoard, fetchErrors,
+    news, sentiment, journalStats, learningProfiles, relativeStrength, hurstBoard, deskBrief, fetchErrors,
     mode, connected: mode === 'live', wakingBackend, wakeAttempts, eaAuthIssue,
     signalToast, dismissSignalToast: () => setSignalToast(null),
   };
@@ -2559,8 +2578,42 @@ function WhatToExpect({ outlook, calendar, now, mode }) {
   );
 }
 
+
+/** Vibe-style multi-agent desk brief — Session / Regime / Signals / Macro / Risk */
+function DeskBriefPanel({ brief, mode }) {
+  const live = mode === 'live' && brief?.ok && Array.isArray(brief.teams);
+  if (!live) {
+    return (
+      <div className="omni-panel p-3">
+        <SectionHeader icon={Layers} title="Desk Brief" sub="multi-agent research layer" />
+        <WaitingForBackend height={88} label="Building session · regime · signal · macro brief…" />
+      </div>
+    );
+  }
+  return (
+    <div className="omni-panel p-3 space-y-2">
+      <SectionHeader
+        icon={Layers}
+        title="Desk Brief"
+        sub={`${brief.session?.label || 'Session'} · ${new Date(brief.generatedAt || Date.now()).toUTCString().slice(17, 25)} UTC`}
+      />
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
+        {brief.teams.map((team) => (
+          <div key={team.id} className="omni-panel2 p-2.5 space-y-1.5">
+            <div className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--gold)' }}>{team.title}</div>
+            <div className="text-[12px] leading-snug" style={{ color: 'var(--text)' }}>{team.summary}</div>
+            {(team.bullets || []).slice(0, 4).map((b, i) => (
+              <div key={i} className="font-mono text-[10px] leading-snug" style={{ color: 'var(--textDim)' }}>· {b}</div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ── DASH ───────────────────────────────────────────────────────────── */
-function DashTab({ signals, accountBalance, journalStats, prices, quotes, changes, mode, outlook, now, levels, analysisLive, socketLive, cryptoVolAlerts, calendar }) {
+function DashTab({ signals, accountBalance, journalStats, prices, quotes, changes, mode, outlook, now, levels, analysisLive, socketLive, cryptoVolAlerts, calendar, deskBrief }) {
   const approved = signals.filter(s => s.gate?.status === 'approved' || s.gate?.status === 'APPROVED');
   const recent = signals.slice(0, 12);
   const [chartSymbol, setChartSymbol] = useState('XAUUSD');
@@ -2593,6 +2646,7 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
           ))}
         </div>
       )}
+      <DeskBriefPanel brief={deskBrief} mode={mode} />
       <WhatToExpect outlook={outlook} calendar={calendar} now={now || Date.now()} mode={mode} />
       {/* LIVE TICKS FIRST — no scroll required */}
       <div className="omni-home-grid">
@@ -2691,6 +2745,13 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
                 <span style={{ color: 'var(--gold)' }}>{s.score}</span>
                 <span style={{ color: 'var(--textDim)' }}>@ {fmtPrice(s.symbol, s.entry)}</span>
                 <Pill tone={s.gate?.status === 'approved' || s.gate?.status === 'APPROVED' ? 'up' : 'warn'}>{s.gate?.status || '—'}</Pill>
+                <button
+                  type="button"
+                  className="omni-chip font-mono text-[9px] px-2 py-1 rounded min-h-[28px]"
+                  style={{ color: 'var(--blue)', border: '1px solid var(--border)', background: 'var(--panel2)' }}
+                  title="Copy MT5-style export"
+                  onClick={() => copySignalExport(s)}
+                >COPY</button>
                 <span className="ml-auto text-[10px]" style={{ color: 'var(--textFaint)' }}>{timeAgo(s.timestamp)}</span>
               </div>
             ))}
@@ -3155,6 +3216,8 @@ function NewsTab({ news, mode }) {
             <img
               src={selected.image}
               alt=""
+              loading="lazy"
+              decoding="async"
               className="w-full rounded object-cover max-h-48"
               style={{ background: 'var(--panel2)' }}
               onError={(e) => { e.currentTarget.style.display = 'none'; }}
@@ -3826,7 +3889,7 @@ function ValidTab({ signals, journalStats, learningProfiles, mode, hurstBoard })
       </div>
 
       <div className="omni-panel p-4">
-        <SectionHeader icon={CheckCircle2} title="Backtest Summary" sub={hasJournal ? `${journalStats.total} completed trades` : 'trading journal'} />
+        <SectionHeader icon={CheckCircle2} title="Shadow Journal" sub={hasJournal ? `${journalStats.total} completed trades` : 'trading journal'} />
         {hasJournal ? (
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
             <StatCard label="Win Rate" value={`${journalStats.winRate}%`} />
@@ -4381,7 +4444,7 @@ export default function OmniceeDashboard() {
 
   return (
     <AppErrorBoundary>
-    <div className="omni-root text-sm" style={{ minHeight: '100vh', minHeight: '100dvh', background: 'var(--void, #05070a)', color: 'var(--text, #eef2f7)' }}>
+    <div className="omni-root text-sm" style={{ minHeight: '100dvh', background: 'var(--void, #0f172a)', color: 'var(--text, #f1f5f9)' }}>
       <ThemeStyle />
       {feed.signalToast ? <SignalToast toast={feed.signalToast} onDismiss={feed.dismissSignalToast} /> : null}
       <TopBar
@@ -4419,7 +4482,7 @@ export default function OmniceeDashboard() {
       <div className="flex flex-col flex-1 min-h-0" style={{ minHeight: 0 }}>
         <div className="omni-main omni-scroll">
           <ErrorBoundary key={activeTab} label={activeTab}>
-            {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} analysisLive={feed.analysisLive} socketLive={feed.socketLive} cryptoVolAlerts={feed.cryptoVolAlerts} calendar={feed.calendar} />}
+            {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} analysisLive={feed.analysisLive} socketLive={feed.socketLive} cryptoVolAlerts={feed.cryptoVolAlerts} calendar={feed.calendar} deskBrief={feed.deskBrief} />}
             {activeTab === 'SIGNALS' && (
               <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} auditLog={feed.auditLog} analysisLive={feed.analysisLive} />
             )}
