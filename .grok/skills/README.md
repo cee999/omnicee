@@ -1,1 +1,4 @@
-# Local agent skills (ui-ux-pro-max, omnicee-system)
+# Omnicee Grok Skills
+
+- **omnicee-system** — trading desk architect
+- **ui-ux-pro-max** — UI/UX design intelligence
