@@ -31,6 +31,8 @@ const SYMBOLS         = (requireEnv('SYMBOLS', 'XAUUSD,BTCUSDT,ETHUSDT,EURUSD,GB
 const TIMEFRAMES_STR  = (requireEnv('TIMEFRAMES', 'H1,H4') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
 const MIN_SCORE       = parseFloat(requireEnv('MIN_SIGNAL_SCORE', '55'));
+// Gold (XAUUSD) can use a slightly lower floor — liquid, high-ATR commodity desks
+const GOLD_MIN_SCORE  = parseFloat(requireEnv('GOLD_MIN_SCORE', String(Math.max(48, MIN_SCORE - 5))));
 const RISK_PCT        = parseFloat(requireEnv('RISK_PCT_PER_TRADE', '1.0'));
 const MAX_DAILY_LOSS  = parseFloat(requireEnv('MAX_DAILY_LOSS_PCT', '3.0'));
 const MAX_DRAWDOWN    = parseFloat(requireEnv('MAX_DRAWDOWN_PCT', '10.0'));
@@ -204,12 +206,18 @@ function getAdaptiveAnalysisIntervalMs(symbol, timeframe) {
   const utcDay = new Date().getUTCDay();
   const isWeekend = utcDay === 0 || utcDay === 6;
   const isCrypto = /USDT|USDC|BTC$|ETH$/.test(symbol);
+  const isGold = /XAU|GOLD/i.test(symbol);
   if (utcHour >= 13 && utcHour < 16) ms *= 0.55;       // London/NY overlap — hottest
   else if (utcHour >= 8 && utcHour < 13) ms *= 0.7;    // London
   else if (utcHour >= 16 && utcHour < 21) ms *= 0.75;  // NY
   else if (utcHour >= 0 && utcHour < 8) ms *= 1.25;    // Asia
   else ms *= 1.5;                                       // thin / rollover
   if (isWeekend && !isCrypto) ms *= 1.6;              // FX weekend dead
+  // Gold: prioritise London + NY (primary trading windows for XAU)
+  if (isGold) {
+    if (utcHour >= 8 && utcHour < 21) ms *= 0.65;     // active gold session
+    else ms *= 0.9;                                    // still scan off-hours (Asia gold flow)
+  }
 
   // 2) Realized volatility from last ~20 bars (range/close)
   const candles = candleStores[symbol]?.[timeframe];
@@ -533,6 +541,12 @@ async function runAnalysisCycle(symbol, timeframe) {
       currentPrice,
       timestamp: Date.now(),
     });
+
+    const effectiveMinScore = /XAU|GOLD/i.test(symbol) ? GOLD_MIN_SCORE : MIN_SCORE;
+    // Align scorer gate with gold floor for this cycle
+    if (scorer && effectiveMinScore !== scorer.minScore) {
+      try { scorer.minScore = effectiveMinScore; } catch (_) {}
+    }
 
     // Feed adaptive throttle: near-miss scores → shorter intervals next time
     try {

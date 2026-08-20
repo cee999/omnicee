@@ -152,6 +152,18 @@ function createEmailAuthRouter(express, db) {
         return res.status(400).json({ ok: false, error: 'Enter a valid email address' });
       }
 
+      // Optional desk password (LOGIN_PASSWORD or DESK_PASSWORD). When set,
+      // email alone is not enough — stops random inboxes from requesting OTP.
+      const requiredPass = String(
+        process.env.LOGIN_PASSWORD || process.env.DESK_PASSWORD || ''
+      ).trim();
+      if (requiredPass) {
+        const provided = String(req.body?.password || '').trim();
+        if (!provided || provided !== requiredPass) {
+          return res.status(401).json({ ok: false, error: 'Invalid email or password' });
+        }
+      }
+
       const now = Date.now();
       cleanupStale(now);
       const ip = String(req.ip || req.socket?.remoteAddress || 'unknown');
@@ -287,6 +299,19 @@ function createEmailAuthRouter(express, db) {
       console.warn('[AUTH] verify failed:', err.message);
       res.status(500).json({ ok: false, error: err.message || 'Verify failed' });
     }
+  });
+
+  // Public: tell LoginGate whether to show the password field
+  router.get('/config', (_req, res) => {
+    const needsPassword = Boolean(String(
+      process.env.LOGIN_PASSWORD || process.env.DESK_PASSWORD || ''
+    ).trim());
+    res.json({
+      ok: true,
+      passwordRequired: needsPassword,
+      otpLength: 6,
+      codeTtlMinutes: Math.round(CODE_TTL_MS / 60000),
+    });
   });
 
   router.get('/me', async (req, res) => {

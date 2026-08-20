@@ -85,6 +85,11 @@ envVarGroups:
         value: "false"
       - key: EMAIL_AUTH_REQUIRED
         value: "true"
+      # Optional shared desk password required with email before OTP is sent
+      - key: LOGIN_PASSWORD
+        sync: false
+      - key: GOLD_MIN_SCORE
+        value: "50"
       - key: DERIV_APP_ID
         value: "1089"
       - key: DISABLE_DERIV

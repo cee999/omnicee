@@ -232,6 +232,28 @@ function ThemeStyle() {
       }
       .omni-root .font-display { font-family: 'Orbitron', sans-serif; letter-spacing: 0.06em; }
       .omni-root .font-mono { font-family: 'JetBrains Mono', monospace; }
+      /* ui-ux-pro-max: accessible focus + reduced motion + mobile resilience */
+      .omni-root button:focus-visible,
+      .omni-root a:focus-visible,
+      .omni-root input:focus-visible,
+      .omni-root [tabindex]:focus-visible {
+        outline: 2px solid var(--ring);
+        outline-offset: 2px;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .omni-root, .omni-root * {
+          animation-duration: 0.01ms !important;
+          transition-duration: 0.01ms !important;
+        }
+      }
+      .omni-root input, .omni-root button, .omni-root select {
+        touch-action: manipulation;
+        -webkit-tap-highlight-color: transparent;
+      }
+      /* Prevent iOS zoom on focus — 16px minimum */
+      @media (max-width: 640px) {
+        .omni-root input, .omni-root select, .omni-root textarea { font-size: 16px !important; }
+      }
       .omni-panel {
         background: var(--panel);
         border: 1px solid var(--border);
@@ -721,19 +743,32 @@ async function probeBackend(timeoutMs = 6000) {
 
 function LoginGate({ onAuthed }) {
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
   const [step, setStep] = useState('email');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
+  const [passwordRequired, setPasswordRequired] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(API_BASE + '/api/auth/email/config', { cache: 'no-store' })
+      .then(r => r.json().catch(() => ({})))
+      .then(d => { if (!cancelled && d?.passwordRequired) setPasswordRequired(true); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   const requestCode = async () => {
     setBusy(true); setErr(''); setMsg('');
     try {
+      const body = { email: email.trim() };
+      if (passwordRequired || password) body.password = password;
       const r = await fetch(API_BASE + '/api/auth/email/request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim() }),
+        body: JSON.stringify(body),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
@@ -836,14 +871,39 @@ function LoginGate({ onAuthed }) {
             onChange={e => setEmail(e.target.value)}
             placeholder="you@email.com"
             autoComplete="email"
+            enterKeyHint="next"
+            aria-required="true"
             style={{
               display: 'block', width: '100%', marginTop: 6,
-              padding: '12px 14px', borderRadius: 8,
+              padding: '14px 14px', borderRadius: 10,
               border: `1px solid ${border}`, background: panel2, color: text,
-              fontSize: 14, outline: 'none', boxSizing: 'border-box',
+              fontSize: 16, outline: 'none', boxSizing: 'border-box',
+              minHeight: 48,
             }}
           />
         </label>
+
+        {step === 'email' && (passwordRequired || true) && (
+          <label style={{ display: 'block', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', color: faint, marginBottom: 12 }}>
+            Desk password {passwordRequired ? '' : '(optional if not required by server)'}
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder={passwordRequired ? 'Required' : 'Leave blank if not set'}
+              autoComplete="current-password"
+              enterKeyHint="go"
+              aria-required={passwordRequired ? 'true' : 'false'}
+              style={{
+                display: 'block', width: '100%', marginTop: 6,
+                padding: '14px 14px', borderRadius: 10,
+                border: `1px solid ${border}`, background: panel2, color: text,
+                fontSize: 16, outline: 'none', boxSizing: 'border-box',
+                minHeight: 48,
+              }}
+            />
+          </label>
+        )}
 
         {step === 'code' && (
           <label style={{ display: 'block', fontSize: 10, textTransform: 'uppercase', color: faint, marginBottom: 12 }}>
@@ -855,6 +915,9 @@ function LoginGate({ onAuthed }) {
               value={code}
               onChange={e => setCode(e.target.value.replace(/\D/g, ''))}
               placeholder="000000"
+              autoComplete="one-time-code"
+              enterKeyHint="done"
+              aria-label="Six digit verification code"
               style={{
                 display: 'block', width: '100%', marginTop: 6,
                 padding: '12px 14px', borderRadius: 8,
@@ -872,13 +935,13 @@ function LoginGate({ onAuthed }) {
           {step === 'email' ? (
             <button
               type="button"
-              disabled={busy || !email.includes('@')}
+              disabled={busy || !email.includes('@') || (passwordRequired && !password)}
               onClick={requestCode}
               aria-busy={busy ? 'true' : 'false'}
               style={{
                 flex: 1, padding: '12px 14px', borderRadius: 8, border: 'none',
                 background: green, color: bg, fontWeight: 700, fontSize: 13,
-                cursor: busy ? 'wait' : 'pointer', opacity: (busy || !email.includes('@')) ? 0.55 : 1,
+                cursor: busy ? 'wait' : 'pointer', opacity: (busy || !email.includes('@') || (passwordRequired && !password)) ? 0.55 : 1,
                 minHeight: 44,
               }}
             >
@@ -1590,24 +1653,28 @@ function TickerTape({ prices, changes, flash, quotes }) {
 
 function NavBar({ active, onSelect }) {
   return (
-    <div className="omni-nav">
+    <nav className="omni-nav" role="navigation" aria-label="Main desk sections">
       {TABS.map(t => (
         <button
           key={t.key}
           type="button"
           onClick={() => onSelect(t.key)}
+          aria-label={t.label}
+          aria-current={active === t.key ? 'page' : undefined}
           className="flex flex-col items-center justify-center gap-0.5 transition-colors"
           style={{
             color: active === t.key ? 'var(--emerald)' : 'var(--textDim)',
             background: active === t.key ? 'var(--panel2)' : 'transparent',
             borderTop: active === t.key ? '2px solid var(--emerald)' : '2px solid transparent',
+            minHeight: 52,
+            minWidth: 44,
           }}
         >
-          <t.icon size={20} strokeWidth={active === t.key ? 2.25 : 1.75} />
+          <t.icon size={20} strokeWidth={active === t.key ? 2.25 : 1.75} aria-hidden="true" />
           <span className="font-mono text-[9px] uppercase tracking-wider leading-none">{t.label}</span>
         </button>
       ))}
-    </div>
+    </nav>
   );
 }
 
