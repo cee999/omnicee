@@ -154,7 +154,8 @@ const lastVotes = {};
 const inFlight = new Set();
 /** Live analysis throttle state */
 const lastAnalysisAt = new Map();   // key → last run ms
-const lastAnalysisScore = new Map(); // key → last final score (0–100)
+const lastAnalysisScore = new Map();
+const lastWaitEmit = new Map(); // key -> { ts, score } throttle tray spam // key → last final score (0–100)
 const lastTickAt = new Map();        // symbol → last accepted tick ms
 let engineReadyEmitted = false;
 let bootStartAt = Date.now();
@@ -571,21 +572,30 @@ async function runAnalysisCycle(symbol, timeframe) {
           nearMiss: sc >= MIN_SCORE - 15 && sc < MIN_SCORE,
         });
       }
-      // Publish WAIT/near-miss to the desk so the signal tray is never a black hole
+      // Tray telemetry only — throttled; NEVER treated as a trade alert upstream
       if (wsBus && signal && Number(sc) > 0) {
         try {
-          const waitPayload = {
-            id: `wait-${symbol}-${timeframe}-${Date.now()}`,
-            symbol,
-            timeframe,
-            action: 'WAIT',
-            score: Number(sc),
-            entry: currentPrice,
-            timestamp: Date.now(),
-            gate: { status: Number(sc) >= MIN_SCORE - 15 ? 'near_miss' : 'wait', reason: String(why) },
-            waitReason: String(why),
-          };
-          wsBus.emit('signal', waitPayload);
+          const wkey = `${symbol}:${timeframe}`;
+          const prevW = lastWaitEmit.get(wkey);
+          const nowW = Date.now();
+          const scoreN = Number(sc);
+          const scoreMoved = !prevW || Math.abs(scoreN - (prevW.score || 0)) >= 3;
+          const aged = !prevW || (nowW - prevW.ts) >= 45000;
+          if (scoreMoved || aged) {
+            lastWaitEmit.set(wkey, { ts: nowW, score: scoreN });
+            wsBus.emit('signal', {
+              id: `wait-${symbol}-${timeframe}`, // stable id → client replaces
+              symbol,
+              timeframe,
+              action: 'WAIT',
+              score: scoreN,
+              entry: currentPrice,
+              currentPrice,
+              timestamp: nowW,
+              gate: { status: scoreN >= MIN_SCORE - 15 ? 'near_miss' : 'wait', reason: String(why) },
+              waitReason: String(why),
+            });
+          }
         } catch (_) {}
       }
       return;
@@ -1306,10 +1316,9 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
 const PRICE_SOURCE_RANK = {
   mt5_ea: 100,
   tradingview: 90,
-  deriv: 55,
-  finnhub: 50,
-  binance: 52,
-  finnhub: 50,
+  deriv: 70,
+  binance: 58,
+  finnhub: 60,
   candle: 40,
   unknown: 0,
 };

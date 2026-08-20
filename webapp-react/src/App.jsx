@@ -983,7 +983,7 @@ function useLiveFeed() {
   // Prefer broker (mt5_ea) ticks on the client so lower-rank sources cannot
   // paint over Exness prices while the EA is connected.
   const priceSourceRef = useRef({});
-  const SRC_RANK = { mt5_ea: 100, tradingview: 90, deriv: 55, candle: 40 };
+  const SRC_RANK = { mt5_ea: 100, tradingview: 90, deriv: 70, finnhub: 60, binance: 58, candle: 40, unknown: 0 };
 
   /* Reachability probe against the unauthenticated /health route. Render's
      free tier can take 30-60s+ to wake a cold instance, so a single
@@ -1322,31 +1322,47 @@ function useLiveFeed() {
       socket.on('signal', payload => {
         if (cancelled || !payload?.id) return;
         const norm = normalizeSignal(payload);
+        const action = String(norm.action || '').toUpperCase();
+        const isFire = action === 'BUY' || action === 'SELL';
+        const gateOk = ['approved', 'APPROVED', 'pending'].includes(String(norm.gate?.status || ''));
+        const sc = signalScore(norm);
+
+        // Tray: always update list; dedupe WAIT by symbol+timeframe
         setSignals(prev => {
           if (prev.some(s => s.id === payload.id)) return prev;
-          try {
-            if (loadSoundPref() && signalScore(norm) >= 55) {
-              playSignalChime(normalizeDirection(norm.action));
-            }
-          } catch (_) {}
-          return [norm, ...prev].slice(0, 200);
+          let next = prev;
+          if (!isFire) {
+            next = prev.filter(s => !(
+              String(s.action).toUpperCase() === 'WAIT'
+              && s.symbol === norm.symbol
+              && s.timeframe === norm.timeframe
+            ));
+          }
+          return [norm, ...next].slice(0, 200);
         });
-        if (norm.action === 'BUY' || norm.action === 'SELL') {
-          setSignalToast({ id: norm.id, symbol: norm.symbol, action: norm.action, score: norm.score, timeframe: norm.timeframe, at: Date.now() });
-        }
-        // Phone / desktop notification
+
+        // HARD RULE: never chime / toast / notify on WAIT or low noise
+        if (!isFire) return;
+        if (sc < 55) return;
+        // Prefer real approvals; still allow high-score FIRE without gate object
+        if (norm.gate?.status && ['wait', 'near_miss', 'blocked', 'gated'].includes(String(norm.gate.status).toLowerCase())) return;
+
+        try {
+          if (loadSoundPref()) playSignalChime(normalizeDirection(action));
+        } catch (_) {}
+        setSignalToast({ id: norm.id, symbol: norm.symbol, action, score: norm.score, timeframe: norm.timeframe, at: Date.now() });
         try {
           if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-            const title = `OMNICEE ${norm.symbol} ${norm.action}`;
-            const body = `Score ${norm.score} · ${norm.timeframe || ''} · entry ${norm.entry ?? '—'}`;
+            const title = `OMNICEE ${norm.symbol} ${action}`;
+            const body = `Score ${sc} · ${norm.timeframe || ''} · entry ${norm.entry ?? '—'}`;
             try {
-              new Notification(title, { body, icon: '/icons/icon-192.png', tag: norm.id });
+              new Notification(title, { body, icon: '/icons/icon-192.png', tag: `fire-${norm.symbol}-${action}`, renotify: true });
             } catch (_) {}
             navigator.serviceWorker?.getRegistration?.().then(reg => {
-              if (reg?.showNotification) reg.showNotification(title, { body, icon: '/icons/icon-192.png', tag: norm.id, data: { url: '/' } });
+              if (reg?.showNotification) {
+                reg.showNotification(title, { body, icon: '/icons/icon-192.png', tag: `fire-${norm.symbol}-${action}`, data: { url: '/' } });
+              }
             }).catch(() => {});
-          } else if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-            Notification.requestPermission().catch(() => {});
           }
         } catch (_) { /* optional */ }
       });
@@ -1375,10 +1391,14 @@ function useLiveFeed() {
       socket.on('crypto_volatility_alert', payload => {
         if (cancelled || !payload) return;
         setCryptoVolAlerts(prev => [payload, ...prev].slice(0, 20));
+        // Only notify on high/severe — low severity was spamming the phone
+        const sev = String(payload.severity || '').toLowerCase();
+        if (sev !== 'high' && sev !== 'severe') return;
         try {
           if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-            new Notification(`OMNICEE ${payload.symbol} ${payload.direction}`, {
+            new Notification(`OMNICEE VOL ${payload.symbol}`, {
               body: payload.message || `${payload.absPct}% in ${payload.window}`,
+              tag: `vol-${payload.symbol}`,
             });
           }
         } catch (_) {}
@@ -2746,14 +2766,19 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
           </div>
         ) : (
           <div className="divide-y max-h-[240px] overflow-y-auto omni-scroll" style={{ borderColor: 'var(--border)' }}>
-            {recent.map(s => (
-              <div key={s.id} className="px-3 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[12px]">
+            {recent.map(s => {
+              const act = String(s.action || '').toUpperCase();
+              const isWait = act === 'WAIT';
+              const actColor = act === 'BUY' || act === 'LONG' ? 'var(--emerald)' : act === 'SELL' || act === 'SHORT' ? 'var(--coral)' : 'var(--textFaint)';
+              return (
+              <div key={s.id} className="px-3 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[12px]" style={{ opacity: isWait ? 0.72 : 1 }}>
                 <span className="font-semibold" style={{ color: 'var(--text)' }}>{symLabel(s.symbol)}</span>
                 <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
-                <span style={{ color: (s.action === 'BUY' || s.action === 'LONG') ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
-                <span style={{ color: 'var(--gold)' }}>{s.score}</span>
-                <span style={{ color: 'var(--textDim)' }}>@ {fmtPrice(s.symbol, s.entry)}</span>
-                <Pill tone={s.gate?.status === 'approved' || s.gate?.status === 'APPROVED' ? 'up' : 'warn'}>{s.gate?.status || '—'}</Pill>
+                <span style={{ color: actColor }}>{act}</span>
+                <span style={{ color: 'var(--gold)' }}>{typeof s.score === 'object' ? s.score?.final ?? '—' : s.score}</span>
+                {!isWait && <span style={{ color: 'var(--textDim)' }}>@ {fmtPrice(s.symbol, s.entry)}</span>}
+                <Pill tone={s.gate?.status === 'approved' || s.gate?.status === 'APPROVED' ? 'up' : isWait ? 'warn' : 'warn'}>{s.gate?.status || (isWait ? 'scan' : '—')}</Pill>
+                {!isWait && (
                 <button
                   type="button"
                   className="omni-chip font-mono text-[9px] px-2 py-1 rounded min-h-[28px]"
@@ -2761,9 +2786,10 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
                   title="Copy MT5-style export"
                   onClick={() => copySignalExport(s)}
                 >COPY</button>
+                )}
                 <span className="ml-auto text-[10px]" style={{ color: 'var(--textFaint)' }}>{timeAgo(s.timestamp)}</span>
               </div>
-            ))}
+            );})}
           </div>
         )}
       </div>
@@ -2822,7 +2848,13 @@ function SignalsTab({ signals, prices, quotes, auditLog, analysisLive }) {
             <div key={sym} className="omni-panel2 px-2.5 py-2 font-mono text-[10px]">
               <div className="flex justify-between mb-1">
                 <span style={{ color: 'var(--text)' }}>{sym}</span>
-                <span style={{ color: q?.source === 'mt5_ea' ? 'var(--gold)' : 'var(--textFaint)' }}>{q?.source === 'mt5_ea' ? 'MT5' : q?.source === 'deriv' ? 'Deriv' : (q?.source || '—')}</span>
+                <span style={{ color: q?.source === 'mt5_ea' ? 'var(--gold)' : 'var(--textFaint)' }}>{
+                  q?.source === 'mt5_ea' ? 'MT5'
+                  : q?.source === 'deriv' ? 'Deriv'
+                  : q?.source === 'finnhub' ? 'Finnhub'
+                  : q?.source === 'binance' ? 'Binance'
+                  : (q?.source || '—')
+                }</span>
               </div>
               {q?.bid != null && q?.ask != null ? (
                 <div className="flex gap-2">
