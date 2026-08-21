@@ -1887,7 +1887,7 @@ class ErrorBoundary extends Component {
 }
 
 function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
-  const [timeframe, setTimeframe] = useState('H1');
+  const [timeframe, setTimeframe] = useState('M15');
   const [status, setStatus] = useState('loading'); // loading | ok | empty | error
   const [ohlcReadout, setOhlcReadout] = useState(null);
   const [indicators, setIndicators] = useState({ ema20: false, ema50: false, bb: false, vp: false, vol: true });
@@ -1960,18 +1960,36 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
     try {
     chart = createChart(containerRef.current, {
       autoSize: true,
-      layout: { background: { color: 'transparent' }, textColor: CHART_COLORS.text, fontFamily: 'JetBrains Mono, monospace', fontSize: 10 },
+      layout: { background: { color: 'transparent' }, textColor: CHART_COLORS.text, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 },
       grid: { vertLines: { color: CHART_COLORS.grid }, horzLines: { color: CHART_COLORS.grid } },
       crosshair: {
         mode: CrosshairMode.Normal,
         vertLine: { color: CHART_COLORS.crosshair, width: 1, style: LineStyle.Dashed, labelBackgroundColor: CHART_COLORS.panel2 },
         horzLine: { color: CHART_COLORS.crosshair, width: 1, style: LineStyle.Dashed, labelBackgroundColor: CHART_COLORS.panel2 },
       },
-      rightPriceScale: { borderColor: CHART_COLORS.border },
-      timeScale: { borderColor: CHART_COLORS.border, timeVisible: true, secondsVisible: false },
+      // Broker-style: tight price scale, leave room for volume strip
+      rightPriceScale: {
+        borderColor: CHART_COLORS.border,
+        scaleMargins: { top: 0.06, bottom: 0.18 },
+        entireTextOnly: false,
+      },
+      timeScale: {
+        borderColor: CHART_COLORS.border,
+        timeVisible: true,
+        secondsVisible: false,
+        // More candles on screen (MT5-like density)
+        barSpacing: 7,
+        minBarSpacing: 3,
+        rightOffset: 6,
+        shiftVisibleRangeOnNewBar: true,
+        fixLeftEdge: false,
+        fixRightEdge: false,
+      },
+      handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+      handleScale: { axisPressedMouseMove: true, mouseWheel: true, pinch: true },
     });
 
-    // Standard filled candles (TV-style): solid body + matching wick color
+    // Broker-style filled candles (TradingView / MT5 density)
     const candleSeries = chart.addSeries(CandlestickSeries, {
       upColor: CHART_COLORS.up,
       downColor: CHART_COLORS.down,
@@ -1982,6 +2000,8 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
       wickDownColor: CHART_COLORS.down,
       priceLineVisible: true,
       lastValueVisible: true,
+      // precision applied on each symbol load via applyOptions
+      priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
     });
     // Volume as a squashed overlay in the bottom 20% of the same pane —
     // the standard lightweight-charts pattern, avoids multi-pane sizing
@@ -2067,7 +2087,7 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
     async function load() {
       const myId = ++reqId;
       try {
-        const data = await omniFetch(`/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&limit=300`);
+        const data = await omniFetch(`/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&limit=500`);
         if (cancelled || myId !== reqId || !candleSeriesRef.current) return;
         const candles = (data?.candles || []).filter(c =>
           Number.isFinite(c.time) && Number.isFinite(c.open) && Number.isFinite(c.high)
@@ -2076,16 +2096,23 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
         if (!candles.length) {
           try { candleSeriesRef.current.setData([]); volumeSeriesRef.current?.setData([]); } catch (_) {}
           setStatus('empty');
-          loadedKeyRef.current = key; // this combo has resolved (to empty) — live ticks may now seed a fresh bar
+          loadedKeyRef.current = key;
           return;
         }
+        // Symbol-native precision (broker-like digits)
+        const prec = DECIMALS[symbol] ?? 2;
+        const minMove = prec === 4 ? 0.0001 : prec === 3 ? 0.001 : prec === 1 ? 0.1 : 0.01;
+        try {
+          candleSeriesRef.current.applyOptions({
+            priceFormat: { type: 'price', precision: prec, minMove },
+          });
+        } catch (_) {}
         candleSeriesRef.current.setData(candles.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })));
         volumeSeriesRef.current?.setData(candles.map(c => ({
           time: c.time,
           value: c.volume || 0,
-          color: c.close >= c.open ? 'rgba(31,227,168,0.35)' : 'rgba(255,84,112,0.35)',
+          color: c.close >= c.open ? 'rgba(38,166,154,0.35)' : 'rgba(239,83,80,0.35)',
         })));
-        // Keep volume on the ref so Volume Profile can distribute by price
         candlesRef.current = candles.map(({ time, open, high, low, close, volume }) => ({
           time, open, high, low, close, volume: volume || 0,
         }));
@@ -2094,8 +2121,18 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
         lastBarRef.current = { time: last.time, open: last.open, high: last.high, low: last.low, close: last.close };
         lastVolRef.current = last.volume || 0;
         setOhlcReadout({ o: last.open, h: last.high, l: last.low, c: last.close });
-        try { chartRef.current?.timeScale()?.fitContent?.(); } catch (_) {}
-        loadedKeyRef.current = key; // only NOW is it safe for the live-tick effect to write into this series
+        // Show many recent candles (not fit-all which compresses history to a smear)
+        try {
+          const n = candles.length;
+          // Target ~100–140 bars on screen for MT5/TV density
+          const visible = Math.min(Math.max(80, Math.floor(n * 0.45)), 140, n);
+          const from = Math.max(0, n - visible) - 0.5;
+          const to = n - 1 + 3; // small right padding for live bar
+          chartRef.current?.timeScale()?.setVisibleLogicalRange({ from, to });
+        } catch (_) {
+          try { chartRef.current?.timeScale()?.fitContent?.(); } catch (__) {}
+        }
+        loadedKeyRef.current = key;
         setStatus('ok');
       } catch (e) {
         if (!cancelled && myId === reqId) setStatus('error');
@@ -2120,7 +2157,17 @@ function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
   // ticker most. Use bid (matching the ticker/header's own coral figure)
   // whenever it exists, same fallback order the ticker itself uses.
   useEffect(() => {
-    const tickPrice = Number(quote?.bid ?? quote?.price);
+    // Broker charts (MT5) typically build candles from bid; if ask is present and
+    // the spread is sane, still prefer bid so the series matches MT5 bid OHLC.
+    const bid = Number(quote?.bid);
+    const ask = Number(quote?.ask);
+    const mid = Number(quote?.price);
+    let tickPrice = Number.isFinite(bid) ? bid : mid;
+    if (Number.isFinite(bid) && Number.isFinite(ask) && bid > 0) {
+      const spr = (ask - bid) / bid;
+      // only fall back to mid if spread looks broken (>2%)
+      if (spr > 0.02 && Number.isFinite(mid)) tickPrice = mid;
+    }
     if (!candleSeriesRef.current || !Number.isFinite(tickPrice)) return;
     // FIX (screen-blanks-on-switch, see ErrorBoundary/loadedKeyRef comments
     // above): don't write into the series until the history for THIS

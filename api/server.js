@@ -295,7 +295,7 @@ function createApp() {
     }
     const symbol = String(req.query.symbol || '').toUpperCase().trim();
     const timeframe = String(req.query.timeframe || 'H1').toUpperCase().trim();
-    const limit = Math.min(Math.max(Number(req.query.limit) || 300, 10), 500);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 400, 10), 600);
     if (!symbol) return res.status(400).json({ ok: false, error: 'symbol required' });
     let candles = live.candleStores[symbol]?.[timeframe];
     if (!candles?.length) {

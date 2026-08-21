@@ -1393,7 +1393,7 @@ async function bootstrapBinanceKlines(symbols) {
         if (!candleStores[symbol]) candleStores[symbol] = {};
         const prev = candleStores[symbol][tf] || [];
         if (candles.length > (prev.length || 0)) {
-          candleStores[symbol][tf] = candles.slice(-500);
+          candleStores[symbol][tf] = candles.slice(-600);
           log.info(`Binance seed: ${symbol} ${tf} ${candles.length} bars`);
           setImmediate(() => { lastAnalysisAt.delete(`${symbol}:${tf}`); scheduleLiveAnalysis(symbol, 'seed'); });
         }
@@ -1415,7 +1415,7 @@ async function bootstrapFinnhubCandles(symbols) {
         if (!candleStores[symbol]) candleStores[symbol] = {};
         const prev = candleStores[symbol][tf] || [];
         if (candles.length > (prev.length || 0)) {
-          candleStores[symbol][tf] = candles.slice(-500);
+          candleStores[symbol][tf] = candles.slice(-600);
           log.info(`Finnhub seed: ${symbol} ${tf} ${candles.length} bars`);
           setImmediate(() => { lastAnalysisAt.delete(`${symbol}:${tf}`); scheduleLiveAnalysis(symbol, 'seed'); });
         }

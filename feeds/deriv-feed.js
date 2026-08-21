@@ -19,11 +19,11 @@ const DERIV_MAP = {
 };
 
 const CANDLE_REQS = [
-  { timeframe: 'M5', granularity: 300, count: 200 },
-  { timeframe: 'M15', granularity: 900, count: 200 },
-  { timeframe: 'H1', granularity: 3600, count: 250 },
-  { timeframe: 'H4', granularity: 14400, count: 150 },
-  { timeframe: 'D1', granularity: 86400, count: 150 },
+  { timeframe: 'M5', granularity: 300, count: 300 },
+  { timeframe: 'M15', granularity: 900, count: 350 },
+  { timeframe: 'H1', granularity: 3600, count: 400 },
+  { timeframe: 'H4', granularity: 14400, count: 250 },
+  { timeframe: 'D1', granularity: 86400, count: 250 },
 ];
 
 const URLS = [
