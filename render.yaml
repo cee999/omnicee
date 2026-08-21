@@ -73,9 +73,14 @@ envVarGroups:
         value: "7"
 
       # ── Email OTP login ─────────────────────────────────────
-      # Resend free tier only delivers to the account-owner inbox until
-      # a domain is verified — second Gmail fails without SMTP or ALLOW_DEV_OTP.
+      # Resend free tier only delivers to the account-owner inbox until a
+      # domain is verified. Set BREVO_API_KEY too (free, sends to any
+      # recipient once your sender is verified — no domain needed) and it
+      # will be used automatically if Resend fails; falls through to SMTP
+      # after that, then ALLOW_DEV_OTP as a last resort.
       - key: RESEND_API_KEY
+        sync: false
+      - key: BREVO_API_KEY
         sync: false
       - key: OTP_PEPPER
         sync: false

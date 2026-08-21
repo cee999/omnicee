@@ -56,8 +56,100 @@ function isValidFromAddress(from) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) || /^[^<>]+<[^\s@]+@[^\s@]+\.[^\s@]+>$/.test(s);
 }
 
-async function sendEmail({ to, subject, text }) {
+// "Name <email@domain>" or a bare email -> { name, email } (Brevo/nodemailer want these split).
+function parseFromAddress(from) {
+  const s = String(from || '').trim();
+  const m = s.match(/^([^<>]*)<([^\s@<>]+@[^\s@<>]+)>$/);
+  if (m) return { name: m[1].trim().replace(/^["']|["']$/g, '') || 'OMNICEE', email: m[2].trim() };
+  return { name: 'OMNICEE', email: s };
+}
+
+async function sendViaResend({ to, subject, text, from }) {
   const resendKey = process.env.RESEND_API_KEY;
+  if (!resendKey) return null;
+  const r = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${resendKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ from, to: [to], subject, text }),
+  });
+  if (!r.ok) {
+    const body = await r.text();
+    // Resend free tier only delivers to the account-owner email until a
+    // custom domain is verified — main cause of "second Gmail fails".
+    if (r.status === 403 || /only send testing|not authorized|domain/i.test(body)) {
+      throw new Error(
+        'Resend free tier only delivers to the account-owner email until a domain is verified.'
+      );
+    }
+    throw new Error(`Resend ${r.status}: ${body.slice(0, 200)}`);
+  }
+  return { provider: 'resend' };
+}
+
+// Brevo (brevo.com) free tier: 300 emails/day, sends to ANY recipient once your
+// sender address is verified in the dashboard (a one-click email link — no DNS,
+// no custom domain needed). This is the real alternative to Resend's free-tier
+// "only your own inbox" restriction.
+async function sendViaBrevo({ to, subject, text, fromParsed }) {
+  const brevoKey = process.env.BREVO_API_KEY;
+  if (!brevoKey) return null;
+  const r = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'api-key': brevoKey,
+      'content-type': 'application/json',
+      accept: 'application/json',
+    },
+    body: JSON.stringify({
+      sender: { name: fromParsed.name, email: fromParsed.email },
+      to: [{ email: to }],
+      subject,
+      textContent: text,
+    }),
+  });
+  if (!r.ok) {
+    const body = await r.text();
+    if (/sender.*not.*valid|not authorized|unrecognised sender/i.test(body)) {
+      throw new Error(
+        `Brevo rejected sender "${fromParsed.email}" — verify it under Senders in your Brevo dashboard (or set BREVO_SENDER_EMAIL to an already-verified address).`
+      );
+    }
+    throw new Error(`Brevo ${r.status}: ${body.slice(0, 200)}`);
+  }
+  return { provider: 'brevo' };
+}
+
+async function sendViaSmtp({ to, subject, text, from }) {
+  const host = process.env.SMTP_HOST;
+  if (!host) return null;
+  let nodemailer;
+  try { nodemailer = require('nodemailer'); }
+  catch (_) { throw new Error('SMTP_HOST is set but the "nodemailer" package is not installed.'); }
+  const transporter = nodemailer.createTransport({
+    host,
+    port: Number(process.env.SMTP_PORT || 587),
+    secure: process.env.SMTP_SECURE === 'true',
+    auth: process.env.SMTP_USER
+      ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+      : undefined,
+  });
+  await transporter.sendMail({
+    from: isValidFromAddress(from) ? from : (process.env.SMTP_USER || from),
+    to,
+    subject,
+    text,
+  });
+  return { provider: 'smtp' };
+}
+
+// Tries every CONFIGURED provider in priority order (Resend -> Brevo -> SMTP) and
+// falls through to the next one on failure, instead of hard-failing on the first
+// provider that happens to have a key set. This is the fix for "Resend key is set
+// but broken, so nothing else ever gets tried."
+async function sendEmail({ to, subject, text }) {
   const DEFAULT_FROM = 'OMNICEE <onboarding@resend.dev>';
   let from = (process.env.EMAIL_FROM || '').trim().replace(/^["']|["']$/g, '') || DEFAULT_FROM;
   if (from && !from.includes('<') && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(from)) {
@@ -67,49 +159,24 @@ async function sendEmail({ to, subject, text }) {
     console.warn('[AUTH] Invalid EMAIL_FROM configured — using default sender');
     from = DEFAULT_FROM;
   }
+  const fromParsed = parseFromAddress(from);
+  if (process.env.BREVO_SENDER_EMAIL) fromParsed.email = process.env.BREVO_SENDER_EMAIL.trim();
 
-  if (resendKey) {
-    const r = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${resendKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ from, to: [to], subject, text }),
-    });
-    if (!r.ok) {
-      const body = await r.text();
-      // Resend free tier only delivers to the account-owner email until a
-      // custom domain is verified — main cause of "second Gmail fails".
-      if (r.status === 403 || /only send testing|not authorized|domain/i.test(body)) {
-        throw new Error(
-          'Email provider rejected this address. With Resend free tier you can only send codes to the account owner email until you verify a domain. Use that Gmail, or set SMTP_HOST, or verify a domain in Resend.'
-        );
-      }
-      throw new Error(`Resend ${r.status}: ${body.slice(0, 200)}`);
+  const providers = [
+    { name: 'resend', configured: Boolean(process.env.RESEND_API_KEY), send: () => sendViaResend({ to, subject, text, from }) },
+    { name: 'brevo', configured: Boolean(process.env.BREVO_API_KEY), send: () => sendViaBrevo({ to, subject, text, fromParsed }) },
+    { name: 'smtp', configured: Boolean(process.env.SMTP_HOST), send: () => sendViaSmtp({ to, subject, text, from }) },
+  ];
+
+  const errors = [];
+  for (const p of providers.filter(p => p.configured)) {
+    try {
+      const result = await p.send();
+      if (result) return result;
+    } catch (err) {
+      console.warn(`[AUTH] ${p.name} send failed, trying next provider: ${err.message}`);
+      errors.push(`${p.name}: ${err.message}`);
     }
-    return { provider: 'resend' };
-  }
-
-  let nodemailer;
-  try { nodemailer = require('nodemailer'); } catch (_) { nodemailer = null; }
-  const host = process.env.SMTP_HOST;
-  if (nodemailer && host) {
-    const transporter = nodemailer.createTransport({
-      host,
-      port: Number(process.env.SMTP_PORT || 587),
-      secure: process.env.SMTP_SECURE === 'true',
-      auth: process.env.SMTP_USER
-        ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
-        : undefined,
-    });
-    await transporter.sendMail({
-      from: isValidFromAddress(process.env.EMAIL_FROM) ? process.env.EMAIL_FROM.trim() : (process.env.SMTP_USER || DEFAULT_FROM),
-      to,
-      subject,
-      text,
-    });
-    return { provider: 'smtp' };
   }
 
   // ALLOW_DEV_OTP returns the code in the API response (UI shows it).
@@ -118,7 +185,10 @@ async function sendEmail({ to, subject, text }) {
     return { provider: 'dev' };
   }
 
-  throw new Error('Email not configured. Set RESEND_API_KEY or SMTP_HOST (+ SMTP_USER/SMTP_PASS), or ALLOW_DEV_OTP=true for on-screen codes.');
+  if (errors.length) {
+    throw new Error(`All configured email providers failed — ${errors.join(' | ')}`);
+  }
+  throw new Error('Email not configured. Set RESEND_API_KEY, BREVO_API_KEY, or SMTP_HOST (+ SMTP_USER/SMTP_PASS), or ALLOW_DEV_OTP=true for on-screen codes.');
 }
 
 function createEmailAuthRouter(express, db) {

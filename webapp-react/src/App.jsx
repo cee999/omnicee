@@ -773,13 +773,15 @@ function LoginGate({ onAuthed }) {
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
         const raw = data.error || `Could not send code (HTTP ${r.status})`;
-        if (/only send testing|not authorized|domain|rejected this address/i.test(raw)) {
+        if (/Email not configured/i.test(raw)) {
           throw new Error(
-            'This Gmail cannot receive codes yet. Resend free tier only delivers to the account-owner inbox until a domain is verified. Use that email, enable ALLOW_DEV_OTP, or configure SMTP.'
+            'Server email auth is not set up yet. Set RESEND_API_KEY, BREVO_API_KEY, or SMTP_HOST in Render env vars (or ALLOW_DEV_OTP=true for on-screen codes).'
           );
         }
-        if (/OTP_PEPPER|Email not configured/i.test(raw)) {
-          throw new Error('Server email auth is misconfigured (OTP_PEPPER / RESEND_API_KEY). Check Render env vars.');
+        if (/All configured email providers failed/i.test(raw)) {
+          // Server already tried every configured provider and each one's specific
+          // reason is in raw — surface that instead of guessing which provider it was.
+          throw new Error(`Could not deliver a code to this address. ${raw.replace(/^All configured email providers failed — /i, '')}`);
         }
         throw new Error(raw);
       }
