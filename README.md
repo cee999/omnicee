@@ -18,7 +18,7 @@ OMNICEE aggregates multi-agent confluence, session/risk gates, broker-grade pric
 | **Prices** | Prefer live **MT5 EA** bid/ask (Exness); fallbacks only when the EA is offline |
 | **Intel** | Session briefing (“What to expect”), regime/tradeability, COT positioning, economic calendar |
 | **News** | Multi-source forex / gold / oil / crypto-focused headlines |
-| **Auth** | Email one-time code login (Resend or SMTP); sessions persist on device |
+| **Auth** | Email one-time code login (Brevo or SMTP); sessions persist on device |
 | **Execution bridge** | MT5 EA pushes prices + balance; polls **approved** signals only |
 
 ---
@@ -112,8 +112,8 @@ npm test
 | Variable | Purpose |
 |----------|---------|
 | `EMAIL_AUTH_REQUIRED` | `true` to require login on the dashboard |
-| `RESEND_API_KEY` | Resend.com API key (recommended) |
-| `EMAIL_FROM` | Must be valid: `OMNICEE <onboarding@resend.dev>` or `email@domain.com` — **no extra quotes** |
+| `BREVO_API_KEY` | Brevo API key (recommended) |
+| `EMAIL_FROM` | Must be valid: `OMNICEE <noreply@omnicee.app>` or `email@domain.com` — **no extra quotes** |
 
 SMTP alternative: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`.
 
@@ -181,7 +181,7 @@ Default symbols include major FX, gold, oil, dollar proxy (`UUP`), and major cry
 - Never commit real `.env` or live `EA_SECRET` / API keys.  
 - Set `EA_SECRET` in production; without it, EA routes may be open.  
 - Prefer `EMAIL_AUTH_REQUIRED=true` when sharing the URL with friends.  
-- Resend `EMAIL_FROM` must be a real address format or sends fail with HTTP 422.
+- Brevo `EMAIL_FROM` must be a real address format or sends fail with HTTP 422.
 
 ---
 

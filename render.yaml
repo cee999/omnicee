@@ -72,15 +72,15 @@ envVarGroups:
       - key: MONGODB_TELEMETRY_TTL_DAYS
         value: "7"
 
-      # ── Email OTP login ─────────────────────────────────────
-      # Resend free tier only delivers to the account-owner inbox until
-      # a domain is verified — second Gmail fails without SMTP or ALLOW_DEV_OTP.
-      - key: RESEND_API_KEY
+      # ── Email OTP login (Brevo) ───────────────────────────────
+      # Create API key: https://app.brevo.com → SMTP & API → API keys
+      # Verify a sender/domain in Brevo, then set EMAIL_FROM to that address.
+      - key: BREVO_API_KEY
         sync: false
       - key: OTP_PEPPER
         sync: false
       - key: EMAIL_FROM
-        value: "OMNICEE <onboarding@resend.dev>"
+        value: "OMNICEE <noreply@omnicee.app>"
       - key: ALLOW_DEV_OTP
         value: "false"
       - key: EMAIL_AUTH_REQUIRED

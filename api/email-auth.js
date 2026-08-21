@@ -57,40 +57,63 @@ function isValidFromAddress(from) {
 }
 
 async function sendEmail({ to, subject, text }) {
-  const resendKey = process.env.RESEND_API_KEY;
-  const DEFAULT_FROM = 'OMNICEE <onboarding@resend.dev>';
-  let from = (process.env.EMAIL_FROM || '').trim().replace(/^["']|["']$/g, '') || DEFAULT_FROM;
-  if (from && !from.includes('<') && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(from)) {
-    from = `OMNICEE <${from}>`;
-  }
-  if (!isValidFromAddress(from)) {
-    console.warn('[AUTH] Invalid EMAIL_FROM configured — using default sender');
-    from = DEFAULT_FROM;
+  // Brevo (Sendinblue) transactional API — primary provider (Resend fully removed).
+  // https://developers.brevo.com/reference/send-transac-email
+  const brevoKey = String(
+    process.env.BREVO_API_KEY
+    || process.env.SENDINBLUE_API_KEY
+    || ''
+  ).trim();
+
+  const DEFAULT_FROM_EMAIL = 'noreply@omnicee.app';
+  const DEFAULT_FROM_NAME = 'OMNICEE';
+
+  let fromRaw = (process.env.EMAIL_FROM || '').trim().replace(/^["']|["']$/g, '');
+  let fromEmail = DEFAULT_FROM_EMAIL;
+  let fromName = DEFAULT_FROM_NAME;
+  if (fromRaw) {
+    const m = fromRaw.match(/^(.+?)\s*<([^>]+)>$/);
+    if (m) {
+      fromName = m[1].trim() || DEFAULT_FROM_NAME;
+      fromEmail = m[2].trim();
+    } else if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fromRaw)) {
+      fromEmail = fromRaw;
+    }
   }
 
-  if (resendKey) {
-    const r = await fetch('https://api.resend.com/emails', {
+  if (brevoKey) {
+    const html = `<!DOCTYPE html><html><body style="font-family:system-ui,sans-serif;line-height:1.5;color:#0f172a">
+<p>${String(text || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br/>')}</p>
+<p style="color:#64748b;font-size:12px">OMNICEE desk login — if you did not request this, ignore the message.</p>
+</body></html>`;
+    const r = await fetch('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${resendKey}`,
+        'api-key': brevoKey,
         'Content-Type': 'application/json',
+        Accept: 'application/json',
       },
-      body: JSON.stringify({ from, to: [to], subject, text }),
+      body: JSON.stringify({
+        sender: { name: fromName, email: fromEmail },
+        to: [{ email: to }],
+        subject: subject || 'OMNICEE login code',
+        textContent: text || '',
+        htmlContent: html,
+      }),
     });
     if (!r.ok) {
       const body = await r.text();
-      // Resend free tier only delivers to the account-owner email until a
-      // custom domain is verified — main cause of "second Gmail fails".
-      if (r.status === 403 || /only send testing|not authorized|domain/i.test(body)) {
+      if (r.status === 401 || r.status === 403) {
         throw new Error(
-          'Email provider rejected this address. With Resend free tier you can only send codes to the account owner email until you verify a domain. Use that Gmail, or set SMTP_HOST, or verify a domain in Resend.'
+          'Brevo rejected the request (auth/sender). Check BREVO_API_KEY and that EMAIL_FROM is a verified sender in Brevo.'
         );
       }
-      throw new Error(`Resend ${r.status}: ${body.slice(0, 200)}`);
+      throw new Error(`Brevo ${r.status}: ${body.slice(0, 240)}`);
     }
-    return { provider: 'resend' };
+    return { provider: 'brevo' };
   }
 
+  // Optional SMTP fallback (can also point at Brevo SMTP relay)
   let nodemailer;
   try { nodemailer = require('nodemailer'); } catch (_) { nodemailer = null; }
   const host = process.env.SMTP_HOST;
@@ -103,8 +126,11 @@ async function sendEmail({ to, subject, text }) {
         ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
         : undefined,
     });
+    const fromHeader = isValidFromAddress(process.env.EMAIL_FROM)
+      ? process.env.EMAIL_FROM.trim()
+      : `${fromName} <${fromEmail}>`;
     await transporter.sendMail({
-      from: isValidFromAddress(process.env.EMAIL_FROM) ? process.env.EMAIL_FROM.trim() : (process.env.SMTP_USER || DEFAULT_FROM),
+      from: fromHeader,
       to,
       subject,
       text,
@@ -112,13 +138,14 @@ async function sendEmail({ to, subject, text }) {
     return { provider: 'smtp' };
   }
 
-  // ALLOW_DEV_OTP returns the code in the API response (UI shows it).
   if (process.env.ALLOW_DEV_OTP === 'true') {
     console.log(`[AUTH DEV OTP] ${to} => code in response (ALLOW_DEV_OTP)`);
     return { provider: 'dev' };
   }
 
-  throw new Error('Email not configured. Set RESEND_API_KEY or SMTP_HOST (+ SMTP_USER/SMTP_PASS), or ALLOW_DEV_OTP=true for on-screen codes.');
+  throw new Error(
+    'Email not configured. Set BREVO_API_KEY (preferred), or SMTP_HOST (+ SMTP_USER/SMTP_PASS), or ALLOW_DEV_OTP=true for on-screen codes.'
+  );
 }
 
 function createEmailAuthRouter(express, db) {

@@ -775,11 +775,11 @@ function LoginGate({ onAuthed }) {
         const raw = data.error || `Could not send code (HTTP ${r.status})`;
         if (/only send testing|not authorized|domain|rejected this address/i.test(raw)) {
           throw new Error(
-            'This Gmail cannot receive codes yet. Resend free tier only delivers to the account-owner inbox until a domain is verified. Use that email, enable ALLOW_DEV_OTP, or configure SMTP.'
+            'Email provider rejected this address. Verify EMAIL_FROM as a sender in Brevo, or enable ALLOW_DEV_OTP for on-screen codes.'
           );
         }
         if (/OTP_PEPPER|Email not configured/i.test(raw)) {
-          throw new Error('Server email auth is misconfigured (OTP_PEPPER / RESEND_API_KEY). Check Render env vars.');
+          throw new Error('Server email auth is misconfigured (OTP_PEPPER / BREVO_API_KEY). Check Render env vars.');
         }
         throw new Error(raw);
       }
