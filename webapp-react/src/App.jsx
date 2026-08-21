@@ -773,7 +773,7 @@ function LoginGate({ onAuthed }) {
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
         const raw = data.error || `Could not send code (HTTP ${r.status})`;
-        if (/only send testing|not authorized|domain|rejected this address/i.test(raw)) {
+        if (/Email not configured/i.test(raw)) {
           throw new Error(
             'Email provider rejected this address. Verify EMAIL_FROM as a sender in Brevo, or enable ALLOW_DEV_OTP for on-screen codes.'
           );

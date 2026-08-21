@@ -77,6 +77,8 @@ envVarGroups:
       # Verify a sender/domain in Brevo, then set EMAIL_FROM to that address.
       - key: BREVO_API_KEY
         sync: false
+      - key: BREVO_API_KEY
+        sync: false
       - key: OTP_PEPPER
         sync: false
       - key: EMAIL_FROM

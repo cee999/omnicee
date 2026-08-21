@@ -57,8 +57,8 @@ function isValidFromAddress(from) {
 }
 
 async function sendEmail({ to, subject, text }) {
-  // Brevo (Sendinblue) transactional API — primary provider (Resend fully removed).
-  // https://developers.brevo.com/reference/send-transac-email
+  // Brevo transactional API — Resend fully removed.
+  // POST https://api.brevo.com/v3/smtp/email  (header: api-key)
   const brevoKey = String(
     process.env.BREVO_API_KEY
     || process.env.SENDINBLUE_API_KEY
@@ -82,8 +82,13 @@ async function sendEmail({ to, subject, text }) {
   }
 
   if (brevoKey) {
+    const safeText = String(text || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/\n/g, '<br/>');
     const html = `<!DOCTYPE html><html><body style="font-family:system-ui,sans-serif;line-height:1.5;color:#0f172a">
-<p>${String(text || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br/>')}</p>
+<p>${safeText}</p>
 <p style="color:#64748b;font-size:12px">OMNICEE desk login — if you did not request this, ignore the message.</p>
 </body></html>`;
     const r = await fetch('https://api.brevo.com/v3/smtp/email', {
@@ -113,7 +118,6 @@ async function sendEmail({ to, subject, text }) {
     return { provider: 'brevo' };
   }
 
-  // Optional SMTP fallback (can also point at Brevo SMTP relay)
   let nodemailer;
   try { nodemailer = require('nodemailer'); } catch (_) { nodemailer = null; }
   const host = process.env.SMTP_HOST;
@@ -129,12 +133,7 @@ async function sendEmail({ to, subject, text }) {
     const fromHeader = isValidFromAddress(process.env.EMAIL_FROM)
       ? process.env.EMAIL_FROM.trim()
       : `${fromName} <${fromEmail}>`;
-    await transporter.sendMail({
-      from: fromHeader,
-      to,
-      subject,
-      text,
-    });
+    await transporter.sendMail({ from: fromHeader, to, subject, text });
     return { provider: 'smtp' };
   }
 
