@@ -2372,6 +2372,52 @@ async function bootstrapYahooCandles(symbols) {
 }
 
 
+
+async function bootstrapStooqCandles(symbols) {
+  // Stooq free CSV — solid daily FX/gold/oil fallback when Yahoo is blocked.
+  const https = require('https');
+  const STOOQ = {
+    EURUSD: 'eurusd', GBPUSD: 'gbpusd', USDJPY: 'usdjpy',
+    XAUUSD: 'xauusd', USOIL: 'cl.f', UUP: 'uup.us',
+  };
+  const get = (url) => new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'Omnicee/1.0' } }, (res) => {
+      let d = '';
+      res.on('data', c => d += c);
+      res.on('end', () => resolve({ status: res.statusCode, body: d }));
+    }).on('error', reject);
+  });
+  for (const symbol of symbols) {
+    const s = STOOQ[symbol];
+    if (!s || symbol.endsWith('USDT')) continue;
+    try {
+      const url = `https://stooq.com/q/d/l/?s=${s}&i=d`;
+      const { status, body } = await get(url);
+      if (status !== 200 || !body || body.length < 50) continue;
+      const lines = body.trim().split(/\r?\n/).slice(1);
+      const candles = [];
+      for (const line of lines) {
+        const [date, open, high, low, close, volume] = line.split(',');
+        if (!date || !close) continue;
+        const ts = Date.parse(date + 'T00:00:00Z');
+        const o = Number(open), h = Number(high), l = Number(low), c = Number(close);
+        if (![ts, o, h, l, c].every(Number.isFinite)) continue;
+        candles.push({ open: o, high: h, low: l, close: c, volume: Number(volume) || 0, timestamp: ts, isClosed: true, source: 'stooq' });
+      }
+      if (candles.length < 10) continue;
+      if (!candleStores[symbol]) candleStores[symbol] = {};
+      const prev = candleStores[symbol].D1 || [];
+      if (candles.length > (prev.length || 0)) {
+        candleStores[symbol].D1 = candles.slice(-600);
+        log.info(`Stooq seed: ${symbol} D1 ${candles.length} bars`);
+      }
+    } catch (e) {
+      log.warn(`Stooq seed ${symbol}: ${e.message}`);
+    }
+  }
+}
+
+
 async function main() {
   log.info('╔══════════════════════════════════════╗');
   log.info('║  OMNICEE  — Institutional Grade v2   ║');
@@ -2410,6 +2456,7 @@ async function main() {
     bootstrapBinanceKlines(crypto).catch(e => log.warn(`Binance bootstrap: ${e.message}`));
     bootstrapFinnhubCandles(fx).catch(e => log.warn(`Finnhub bootstrap: ${e.message}`));
     bootstrapYahooCandles(fx.length ? fx : SYMBOLS).catch(e => log.warn(`Yahoo bootstrap: ${e.message}`));
+    bootstrapStooqCandles(fx.length ? fx : SYMBOLS).catch(e => log.warn(`Stooq bootstrap: ${e.message}`));
   });
 
   // Always-on analysis loop (chart-like): keeps checking while server is up

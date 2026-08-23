@@ -1395,16 +1395,16 @@ function useLiveFeed() {
       // dedupe by id since the next poll will also pick this signal up
       // once Mongo (or the server's memory cache) has it.
       socket.on('signal', payload => {
-        if (cancelled || !payload?.id) return;
+        if (cancelled || !payload) return;
         const norm = normalizeSignal(payload);
+        if (!norm.id) norm.id = `live-${norm.symbol}-${norm.timeframe}-${norm.timestamp || Date.now()}`;
         const action = String(norm.action || '').toUpperCase();
         const isFire = action === 'BUY' || action === 'SELL';
-        const gateOk = ['approved', 'APPROVED', 'pending'].includes(String(norm.gate?.status || ''));
         const sc = signalScore(norm);
 
-        // Tray: always update list; dedupe WAIT by symbol+timeframe
+        // Instant tray update (ws) — poll remains as backup
         setSignals(prev => {
-          if (prev.some(s => s.id === payload.id)) return prev;
+          if (prev.some(s => s.id === norm.id)) return prev;
           let next = prev;
           if (!isFire) {
             next = prev.filter(s => !(
@@ -1416,9 +1416,9 @@ function useLiveFeed() {
           return [norm, ...next].slice(0, 200);
         });
 
-        // HARD RULE: never chime / toast / notify on WAIT or low noise
+        // FIRE only for toast/chime/notify — match pipeline floor (50)
         if (!isFire) return;
-        if (sc < 55) return;
+        if (sc < 50) return;
         // Prefer real approvals; still allow high-score FIRE without gate object
         if (norm.gate?.status && ['wait', 'near_miss', 'blocked', 'gated'].includes(String(norm.gate.status).toLowerCase())) return;
 
@@ -2769,9 +2769,68 @@ function DeskBriefPanel({ brief, mode }) {
 
 /* ── DASH ───────────────────────────────────────────────────────────── */
 
+
+/** TradingView advanced chart (real-time when TV data available) */
+const TV_SYMBOL = {
+  XAUUSD: 'OANDA:XAUUSD',
+  EURUSD: 'OANDA:EURUSD',
+  GBPUSD: 'OANDA:GBPUSD',
+  USDJPY: 'OANDA:USDJPY',
+  BTCUSDT: 'BINANCE:BTCUSDT',
+  ETHUSDT: 'BINANCE:ETHUSDT',
+  USOIL: 'TVC:USOIL',
+  UUP: 'AMEX:UUP',
+};
+
+function TradingViewChart({ symbol }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!ref.current) return;
+    ref.current.innerHTML = '';
+    const script = document.createElement('script');
+    script.src = 'https://s3.tradingview.com/tv.js';
+    script.async = true;
+    script.onload = () => {
+      try {
+        if (!window.TradingView || !ref.current) return;
+        // eslint-disable-next-line no-new
+        new window.TradingView.widget({
+          container_id: ref.current.id,
+          symbol: TV_SYMBOL[symbol] || symbol,
+          interval: '15',
+          timezone: 'Etc/UTC',
+          theme: 'dark',
+          style: '1',
+          locale: 'en',
+          toolbar_bg: '#0f172a',
+          enable_publishing: false,
+          hide_side_toolbar: false,
+          allow_symbol_change: true,
+          studies: ['STD;EMA', 'STD;RSI'],
+          height: '100%',
+          width: '100%',
+        });
+      } catch (e) {
+        console.warn('[TV]', e.message);
+      }
+    };
+    document.head.appendChild(script);
+    return () => {
+      try { if (ref.current) ref.current.innerHTML = ''; } catch (_) {}
+    };
+  }, [symbol]);
+  const id = useMemo(() => `tv_${symbol}_${Math.random().toString(36).slice(2, 8)}`, [symbol]);
+  return (
+    <div className="w-full" style={{ height: 'min(70vh, 640px)', minHeight: 420 }}>
+      <div id={id} ref={ref} className="w-full h-full rounded-xl overflow-hidden" />
+    </div>
+  );
+}
+
 /** Full-screen multi-symbol charts desk */
 function ChartsTab({ signals, prices, quotes, levels, mode }) {
   const [chartSymbol, setChartSymbol] = useState('XAUUSD');
+  const [engine, setEngine] = useState('tv'); // tv | omni — TV for broker-like depth by default
   const q = quotes?.[chartSymbol];
   const chartSignals = useMemo(
     () => (signals || []).filter(s => s.symbol === chartSymbol && (s.action === 'BUY' || s.action === 'SELL')),
@@ -2801,6 +2860,31 @@ function ChartsTab({ signals, prices, quotes, levels, mode }) {
           {q?.source === 'mt5_ea' ? 'MT5 bid' : q?.source || (mode === 'live' ? 'feed' : '—')}
         </span>
       </div>
+      <div className="omni-panel px-3 py-2 flex flex-wrap gap-2 items-center">
+        <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>Engine</span>
+        {[
+          { k: 'tv', label: 'TradingView' },
+          { k: 'omni', label: 'Omnicee' },
+        ].map(opt => (
+          <button
+            key={opt.k}
+            type="button"
+            onClick={() => setEngine(opt.k)}
+            className="font-mono text-[11px] px-3 py-1.5 rounded-full min-h-[36px]"
+            style={{
+              color: engine === opt.k ? '#0b1220' : 'var(--textDim)',
+              background: engine === opt.k ? 'var(--emerald)' : 'rgba(15,23,42,0.5)',
+              border: '1px solid rgba(148,163,184,0.2)',
+              fontWeight: engine === opt.k ? 700 : 500,
+            }}
+          >
+            {opt.label}
+          </button>
+        ))}
+        <span className="ml-auto font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>
+          {engine === 'tv' ? 'Live broker-style data via TradingView' : 'Omnicee OHLC + signal markers'}
+        </span>
+      </div>
       <div className="omni-panel p-2 md:p-3" style={{ minHeight: 'min(70vh, 640px)' }}>
         <div className="flex items-center justify-between gap-2 mb-2 font-mono text-[11px]" style={{ color: 'var(--textDim)' }}>
           <span>
@@ -2813,9 +2897,15 @@ function ChartsTab({ signals, prices, quotes, levels, mode }) {
           </span>
           <span style={{ color: 'var(--textFaint)' }}>{chartSignals.length} signal marker{chartSignals.length === 1 ? '' : 's'}</span>
         </div>
-        <ErrorBoundary key={chartSymbol} label="the chart">
-          <LiveChart symbol={chartSymbol} quote={q} signals={chartSignals} levels={levels} onSymbolChange={setChartSymbol} />
-        </ErrorBoundary>
+        {engine === 'tv' ? (
+          <ErrorBoundary key={'tv-' + chartSymbol} label="TradingView">
+            <TradingViewChart symbol={chartSymbol} />
+          </ErrorBoundary>
+        ) : (
+          <ErrorBoundary key={'omni-' + chartSymbol} label="the chart">
+            <LiveChart symbol={chartSymbol} quote={q} signals={chartSignals} levels={levels} onSymbolChange={setChartSymbol} />
+          </ErrorBoundary>
+        )}
       </div>
     </div>
   );
@@ -3536,8 +3626,10 @@ function MonitorTab({ auditLog, feedHealth, uptimeSec, mode, fetchErrors, analys
           ))}
         </div>
       </div>
+    </div>
+  );
+}
 
-            {/* Gate audit trail kept server-side only */}
 /* ── HEAT ───────────────────────────────────────────────────────────── */
 function tileBiasSign(bias) {
   if (bias === 'BUY' || bias === 'LONG_LEANING') return 1;
