@@ -159,6 +159,7 @@ function normalizeSignal(s) {
 
 const FEEDS = [
   { name: 'MT5',          kind: 'Exness broker', status: 'unknown', note: 'attach OmniceeEA' },
+  { name: 'TradingView',  kind: 'OANDA / Binance quotes', status: 'unknown' },
   { name: 'Deriv',        kind: 'live ticks+OHLC', status: 'unknown' },
 ];
 
@@ -472,6 +473,58 @@ function ThemeStyle() {
           min-height: clamp(300px, 52vh, 640px);
           height: clamp(300px, 52vh, 640px);
         }
+      }
+      /* TradingView fills remaining viewport on every screen */
+      .omni-charts-page {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        min-height: calc(100dvh - 148px);
+        padding: 8px;
+        gap: 8px;
+        box-sizing: border-box;
+        width: 100%;
+        max-width: 100vw;
+      }
+      .omni-charts-toolbar {
+        flex: 0 0 auto;
+      }
+      .omni-charts-stage {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        padding: 0 !important;
+      }
+      .omni-tv-host {
+        flex: 1 1 auto;
+        width: 100%;
+        height: 100%;
+        min-height: 240px;
+        position: relative;
+      }
+      .omni-tv-host iframe,
+      .omni-tv-host > div {
+        width: 100% !important;
+        height: 100% !important;
+      }
+      .omni-root.is-charts .omni-main {
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+      .omni-home-tv {
+        width: 100%;
+        height: clamp(240px, 42vh, 560px);
+        min-height: 220px;
+      }
+      @media (max-width: 640px) {
+        .omni-charts-page { min-height: calc(100dvh - 132px); padding: 6px; gap: 6px; }
+        .omni-home-tv { height: clamp(220px, 46vh, 480px); }
+      }
+      @media (min-width: 1024px) {
+        .omni-home-tv { height: clamp(280px, 48vh, 620px); }
       }
     `}</style>
   );
@@ -1058,7 +1111,7 @@ function useLiveFeed() {
   // Prefer broker (mt5_ea) ticks on the client so lower-rank sources cannot
   // paint over Exness prices while the EA is connected.
   const priceSourceRef = useRef({});
-  const SRC_RANK = { mt5_ea: 100, tradingview: 90, deriv: 70, finnhub: 60, binance: 58, candle: 40, unknown: 0 };
+  const SRC_RANK = { mt5_ea: 100, tradingview: 92, deriv: 70, finnhub: 60, binance: 58, candle: 40, unknown: 0 };
 
   /* Reachability probe against the unauthenticated /health route. Render's
      free tier can take 30-60s+ to wake a cold instance, so a single
@@ -1412,6 +1465,17 @@ function useLiveFeed() {
       document.addEventListener('visibilitychange', onVisible);
       socket._omniNetHandlers = { onOffline, onOnline, onVisible };
 
+      // Application-level heartbeat — keeps Render/proxies from dropping idle sockets
+      let hbTimer = null;
+      const sendHeartbeat = () => {
+        try {
+          if (socket?.connected) socket.emit('heartbeat', { t: Date.now() });
+        } catch (_) {}
+      };
+      hbTimer = setInterval(sendHeartbeat, 12000);
+      socket.on('heartbeat_ack', () => { if (!cancelled) setSocketLive(true); });
+      socket._omniHbTimer = hbTimer;
+
       socket.on('market', payload => {
         if (cancelled || !payload?.symbol || payload.price == null || !(payload.symbol in BASE_PRICE)) return;
         const sym = payload.symbol;
@@ -1621,6 +1685,7 @@ function useLiveFeed() {
         }
       } catch (_) {}
       try { socket?.removeAllListeners?.(); } catch (_) {}
+      try { if (socket?._omniHbTimer) clearInterval(socket._omniHbTimer); } catch (_) {}
       try { socket?.disconnect(); } catch (_) {}
       setSocketLive(false);
     };
@@ -1656,7 +1721,7 @@ function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand,
     live: { label: 'Live', color: 'var(--emerald)', pulse: true },
   }[mode] || { label: 'Offline', color: 'var(--coral)', pulse: false };
   return (
-    <div className="omni-topbar flex items-center gap-2 sm:gap-4 px-2 sm:px-4 py-2.5 border-b shrink-0" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
+    <div className="omni-topbar flex items-center gap-2 sm:gap-4 px-2 sm:px-4 py-2.5 border-b shrink-0" style={{ borderColor: 'rgba(148,163,184,0.16)', background: 'rgba(15,23,42,0.78)', backdropFilter: 'blur(16px)' }}>
       <div className="flex items-center gap-2 shrink-0">
         <div className="w-7 h-7 rounded flex items-center justify-center font-display text-[12px] font-bold"
           style={{ background: 'var(--emerald)', color: '#05070a' }}>Ω</div>
@@ -1765,7 +1830,11 @@ function TickerTape({ prices, changes, flash, quotes }) {
               {ch != null && (
                 <span style={{ color: up ? 'var(--emerald)' : 'var(--coral)' }}>{fmtPct(ch)}</span>
               )}
-              {(q?.source === 'mt5_ea' || q?.source === 'deriv') && <span style={{ color: 'var(--gold)', fontSize: 9 }}>{q?.source === 'mt5_ea' ? 'MT5' : 'DERIV'}</span>}
+              {(q?.source === 'mt5_ea' || q?.source === 'deriv' || q?.source === 'tradingview') && (
+                <span style={{ color: 'var(--gold)', fontSize: 9 }}>
+                  {q?.source === 'mt5_ea' ? 'MT5' : q?.source === 'tradingview' ? 'TV' : 'DERIV'}
+                </span>
+              )}
             </span>
           );
         })}
@@ -2893,70 +2962,91 @@ const TV_SYMBOL = {
   UUP: 'AMEX:UUP',
 };
 
-function TradingViewChart({ symbol }) {
-  const ref = useRef(null);
+function TradingViewChart({ symbol, className = '' }) {
+  const hostRef = useRef(null);
   useEffect(() => {
-    if (!ref.current) return;
-    ref.current.innerHTML = '';
-    const script = document.createElement('script');
-    script.src = 'https://s3.tradingview.com/tv.js';
-    script.async = true;
-    script.onload = () => {
+    const host = hostRef.current;
+    if (!host) return undefined;
+    let cancelled = false;
+    const id = `tv_${symbol}_${Math.random().toString(36).slice(2, 8)}`;
+
+    const boot = () => {
+      if (cancelled || !window.TradingView || !hostRef.current) return;
+      hostRef.current.innerHTML = '';
+      const box = document.createElement('div');
+      box.id = id;
+      box.style.width = '100%';
+      box.style.height = '100%';
+      hostRef.current.appendChild(box);
       try {
-        if (!window.TradingView || !ref.current) return;
         // eslint-disable-next-line no-new
         new window.TradingView.widget({
-          container_id: ref.current.id,
+          autosize: true,
           symbol: TV_SYMBOL[symbol] || symbol,
           interval: '15',
           timezone: 'Etc/UTC',
           theme: 'dark',
           style: '1',
           locale: 'en',
-          toolbar_bg: '#0f172a',
+          toolbar_bg: '#0b1220',
           enable_publishing: false,
-          hide_side_toolbar: false,
+          hide_top_toolbar: false,
+          hide_legend: false,
+          hide_side_toolbar: typeof window !== 'undefined' && window.innerWidth < 768,
           allow_symbol_change: true,
-          studies: ['STD;EMA', 'STD;RSI'],
-          height: '100%',
-          width: '100%',
+          withdateranges: true,
+          details: false,
+          hotlist: false,
+          calendar: false,
+          studies: ['STD;EMA'],
+          container_id: id,
         });
       } catch (e) {
         console.warn('[TV]', e.message);
       }
     };
-    document.head.appendChild(script);
+
+    const loadScript = () => new Promise((resolve) => {
+      if (window.TradingView) { resolve(); return; }
+      const existing = document.querySelector('script[data-omni-tv]');
+      if (existing) {
+        if (window.TradingView) resolve();
+        else existing.addEventListener('load', () => resolve(), { once: true });
+        return;
+      }
+      const s = document.createElement('script');
+      s.src = 'https://s3.tradingview.com/tv.js';
+      s.async = true;
+      s.dataset.omniTv = '1';
+      s.onload = () => resolve();
+      s.onerror = () => resolve();
+      document.head.appendChild(s);
+    });
+
+    loadScript().then(boot);
     return () => {
-      try { if (ref.current) ref.current.innerHTML = ''; } catch (_) {}
+      cancelled = true;
+      try { if (hostRef.current) hostRef.current.innerHTML = ''; } catch (_) {}
     };
   }, [symbol]);
-  const id = useMemo(() => `tv_${symbol}_${Math.random().toString(36).slice(2, 8)}`, [symbol]);
-  return (
-    <div className="w-full" style={{ height: 'min(70vh, 640px)', minHeight: 420 }}>
-      <div id={id} ref={ref} className="w-full h-full rounded-xl overflow-hidden" />
-    </div>
-  );
+
+  return <div ref={hostRef} className={`omni-tv-host ${className}`.trim()} />;
 }
 
-/** Full-screen multi-symbol charts desk */
-function ChartsTab({ signals, prices, quotes, levels, mode }) {
+/** Full-screen TradingView desk */
+function ChartsTab({ quotes, mode }) {
   const [chartSymbol, setChartSymbol] = useState('XAUUSD');
-  const [engine, setEngine] = useState('tv'); // tv | omni — TV for broker-like depth by default
   const q = quotes?.[chartSymbol];
-  const chartSignals = useMemo(
-    () => (signals || []).filter(s => s.symbol === chartSymbol && (s.action === 'BUY' || s.action === 'SELL')),
-    [signals, chartSymbol],
-  );
   return (
-    <div className="p-2 sm:p-3 space-y-2 w-full max-w-[100vw]">
-      <div className="omni-panel px-3 py-2 flex flex-wrap gap-1.5 items-center">
+    <div className="omni-charts-page">
+      <div className="omni-panel omni-charts-toolbar px-3 py-2 flex flex-wrap gap-1.5 items-center">
         <span className="font-mono text-[10px] uppercase tracking-wider mr-1" style={{ color: 'var(--textFaint)' }}>Symbol</span>
         {SYMBOLS.map(sym => (
           <button
             key={sym}
             type="button"
             onClick={() => setChartSymbol(sym)}
-            className="omni-chip font-mono text-[11px] px-2.5 py-1.5 rounded-full min-h-[36px]"
+            className="omni-chip font-mono text-[11px] px-2.5 py-1.5 rounded-full min-h-[40px]"
             style={{
               color: chartSymbol === sym ? '#0b1220' : 'var(--textDim)',
               background: chartSymbol === sym ? 'var(--emerald)' : 'rgba(15,23,42,0.5)',
@@ -2968,55 +3058,18 @@ function ChartsTab({ signals, prices, quotes, levels, mode }) {
           </button>
         ))}
         <span className="ml-auto font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
-          {q?.source === 'mt5_ea' ? 'MT5 bid' : q?.source || (mode === 'live' ? 'feed' : '—')}
+          {q?.source === 'mt5_ea' ? 'MT5 bid' : q?.source === 'tradingview' ? 'TradingView' : q?.source || (mode === 'live' ? 'feed' : '—')}
+          {q?.bid != null && q?.ask != null && (
+            <> · <span style={{ color: 'var(--coral)' }}>{fmtPrice(chartSymbol, q.bid)}</span>
+            {' / '}
+            <span style={{ color: 'var(--emerald)' }}>{fmtPrice(chartSymbol, q.ask)}</span></>
+          )}
         </span>
       </div>
-      <div className="omni-panel px-3 py-2 flex flex-wrap gap-2 items-center">
-        <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>Engine</span>
-        {[
-          { k: 'tv', label: 'TradingView' },
-          { k: 'omni', label: 'Omnicee' },
-        ].map(opt => (
-          <button
-            key={opt.k}
-            type="button"
-            onClick={() => setEngine(opt.k)}
-            className="font-mono text-[11px] px-3 py-1.5 rounded-full min-h-[36px]"
-            style={{
-              color: engine === opt.k ? '#0b1220' : 'var(--textDim)',
-              background: engine === opt.k ? 'var(--emerald)' : 'rgba(15,23,42,0.5)',
-              border: '1px solid rgba(148,163,184,0.2)',
-              fontWeight: engine === opt.k ? 700 : 500,
-            }}
-          >
-            {opt.label}
-          </button>
-        ))}
-        <span className="ml-auto font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>
-          {engine === 'tv' ? 'Live broker-style data via TradingView' : 'Omnicee OHLC + signal markers'}
-        </span>
-      </div>
-      <div className="omni-panel p-2 md:p-3" style={{ minHeight: 'min(70vh, 640px)' }}>
-        <div className="flex items-center justify-between gap-2 mb-2 font-mono text-[11px]" style={{ color: 'var(--textDim)' }}>
-          <span>
-            <span style={{ color: 'var(--text)' }}>{symLabel(chartSymbol)}</span>
-            {q?.bid != null && q?.ask != null && (
-              <> · <span style={{ color: 'var(--coral)' }}>{fmtPrice(chartSymbol, q.bid)}</span>
-              {' / '}
-              <span style={{ color: 'var(--emerald)' }}>{fmtPrice(chartSymbol, q.ask)}</span></>
-            )}
-          </span>
-          <span style={{ color: 'var(--textFaint)' }}>{chartSignals.length} signal marker{chartSignals.length === 1 ? '' : 's'}</span>
-        </div>
-        {engine === 'tv' ? (
-          <ErrorBoundary key={'tv-' + chartSymbol} label="TradingView">
-            <TradingViewChart symbol={chartSymbol} />
-          </ErrorBoundary>
-        ) : (
-          <ErrorBoundary key={'omni-' + chartSymbol} label="the chart">
-            <LiveChart symbol={chartSymbol} quote={q} signals={chartSignals} levels={levels} onSymbolChange={setChartSymbol} />
-          </ErrorBoundary>
-        )}
+      <div className="omni-panel omni-charts-stage">
+        <ErrorBoundary key={'tv-' + chartSymbol} label="TradingView">
+          <TradingViewChart symbol={chartSymbol} />
+        </ErrorBoundary>
       </div>
     </div>
   );
@@ -3030,7 +3083,6 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
   }).slice(0, 16);
   const [chartSymbol, setChartSymbol] = useState('XAUUSD');
   const q = quotes?.[chartSymbol];
-  const chartSignals = useMemo(() => signals.filter(s => s.symbol === chartSymbol), [signals, chartSymbol]);
 
   return (
     <div className="p-2 sm:p-3 space-y-2 w-full">
@@ -3077,9 +3129,12 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
               )}
             </span>
             {q?.source === 'mt5_ea' && <Pill tone="up">MT5</Pill>}
+            {q?.source === 'tradingview' && <Pill tone="up">TV</Pill>}
           </div>
-          <ErrorBoundary key={chartSymbol} label="the chart">
-            <LiveChart symbol={chartSymbol} quote={q} signals={chartSignals} levels={levels} onSymbolChange={setChartSymbol} />
+          <ErrorBoundary key={chartSymbol} label="TradingView">
+            <div className="omni-home-tv rounded-xl overflow-hidden">
+              <TradingViewChart symbol={chartSymbol} />
+            </div>
           </ErrorBoundary>
         </div>
 
@@ -3716,9 +3771,13 @@ function MonitorTab({ auditLog, feedHealth, uptimeSec, mode, fetchErrors, analys
         />
         {(!feedHealth || !feedHealth.length) && mode === 'live' ? (
           <div className="font-mono text-[11px] mb-3" style={{ color: 'var(--gold)' }}>
-            Feed status not loaded yet. Log in, wait a few seconds, or open Monitor again after the server finishes booting.
+            Feed status not loaded yet. Log in, wait a few seconds, or open System again after the server finishes booting.
           </div>
         ) : null}
+        <div className="font-mono text-[11px] mb-3 flex flex-wrap gap-3" style={{ color: 'var(--textDim)' }}>
+          <span style={{ color: socketLive ? 'var(--emerald)' : 'var(--textFaint)' }}>{socketLive ? '● socket + heartbeat' : '○ socket reconnecting'}</span>
+          {analysisLive ? <span style={{ color: 'var(--gold)' }}>scan {analysisLive.symbol} {analysisLive.timeframe}</span> : null}
+        </div>
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5">
           {feeds.map(f => (
             <div key={f.name} className="omni-panel2 p-3">
@@ -3847,6 +3906,10 @@ function StructureCard({ label, accent, value, valueColor, sub, pill, pillTone, 
       )}
     </div>
   );
+}
+
+function IntelTab({ now, outlook, mode, calendar }) {
+  return <WhatToExpect outlook={outlook} calendar={calendar} now={now || Date.now()} mode={mode} />;
 }
 
 function AnalysisTab({ mode }) {
@@ -4765,7 +4828,7 @@ export default function OmniceeDashboard() {
 
   return (
     <AppErrorBoundary>
-    <div className="omni-root text-sm" style={{ minHeight: '100dvh', background: 'var(--void, #0f172a)', color: 'var(--text, #f1f5f9)' }}>
+    <div className={`omni-root text-sm${activeTab === 'CHARTS' ? ' is-charts' : ''}`} style={{ minHeight: '100dvh', background: 'var(--void, #0f172a)', color: 'var(--text, #f1f5f9)' }}>
       <ThemeStyle />
       {feed.signalToast ? <SignalToast toast={feed.signalToast} onDismiss={feed.dismissSignalToast} /> : null}
       <TopBar
@@ -4790,7 +4853,7 @@ export default function OmniceeDashboard() {
       )}
       {pricesDead && (
         <div className="px-4 py-2 font-mono text-[11px] border-b" style={{ borderColor: 'var(--coral)', color: 'var(--coral)', background: 'rgba(255,84,112,0.08)' }}>
-          No live prices. Attach OmniceeEA in MT5 and/or ensure Deriv is enabled (DISABLE_DERIV≠1). Open System tab for feed health. Charts and signals stay empty until ticks arrive.
+          No live prices. TradingView quotes load after the server wakes. Attach OmniceeEA in MT5 for broker-true gold/FX.
         </div>
       )}
       {feed.eaAuthIssue && (
@@ -4804,7 +4867,7 @@ export default function OmniceeDashboard() {
         <div className="omni-main omni-scroll">
           <ErrorBoundary key={activeTab} label={activeTab}>
             {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} analysisLive={feed.analysisLive} socketLive={feed.socketLive} cryptoVolAlerts={feed.cryptoVolAlerts} calendar={feed.calendar} deskBrief={feed.deskBrief} />}
-            {activeTab === 'CHARTS' && <ChartsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} levels={feed.levels} mode={feed.mode} />}
+            {activeTab === 'CHARTS' && <ChartsTab quotes={feed.quotes} mode={feed.mode} />}
             {activeTab === 'SIGNALS' && (
               <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} auditLog={feed.auditLog} analysisLive={feed.analysisLive} />
             )}

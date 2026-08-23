@@ -101,6 +101,7 @@ const { FinnhubFeed }        = loadModule('./feeds/finnhub-feed',               
 const { FMPFeed }            = loadModule('./feeds/fmp-feed',                    'FMPFeed')           || {};
 const { ForexFactoryCalendar } = loadModule('./feeds/forex-factory-calendar',   'ForexFactoryCalendar') || {};
 const { BinancePublicFeed }   = loadModule('./feeds/binance-public-feed',       'BinancePublicFeed')   || {};
+const { TradingViewQuoteFeed } = loadModule('./feeds/tradingview-quote-feed',   'TradingViewQuoteFeed') || {};
 const { DerivFeed }            = loadModule('./feeds/deriv-feed',               'DerivFeed')            || {};
 const { CryptoVolatilityAlert } = loadModule('./feeds/crypto-volatility-alert', 'CryptoVolatilityAlert') || {};
 const { CFTCCotFeed }        = loadModule('./feeds/cftc-cot-feed',               'CFTCCotFeed')       || {};
@@ -1329,7 +1330,7 @@ function onCandle({ symbol, timeframe, candle, isClosed }) {
 // FIX: see the comment above where this replaced onCandle()'s inlined version.
 const PRICE_SOURCE_RANK = {
   mt5_ea: 100,
-  tradingview: 90,
+  tradingview: 92,
   deriv: 70,
   binance: 58,
   finnhub: 60,
@@ -2227,6 +2228,23 @@ function buildFeeds() {
     binanceFeed.on('error', (err) => log.warn(`BinancePublicFeed: ${feedErrorMessage(err)}`));
     feeds.push({ name: 'BinancePublicFeed', instance: binanceFeed, symbols: cryptoSymbols });
     log.info(`BinancePublicFeed for: ${cryptoSymbols.join(', ')}`);
+  }
+
+  // TradingView scanner quotes — same venues as the embedded chart
+  if (TradingViewQuoteFeed && SYMBOLS.length && process.env.DISABLE_TRADINGVIEW !== '1') {
+    const tvFeed = new TradingViewQuoteFeed({ symbols: SYMBOLS, intervalMs: 2500 });
+    tvFeed.on('price', ({ symbol, price, bid, ask, change }) => {
+      const last = lastPriceBySymbol[symbol];
+      if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < 1500) return;
+      onLivePrice(symbol, price, { source: 'tradingview', change, bid, ask });
+      applyTickToCandles(symbol, price, 'tradingview');
+    });
+    tvFeed.on('connected', () => log.info('TradingViewQuoteFeed connected — OANDA/Binance/TVC quotes'));
+    tvFeed.on('error', (err) => log.warn(`TradingViewQuoteFeed: ${feedErrorMessage(err)}`));
+    tvFeed.start();
+    feeds.push({ name: 'TradingView', instance: tvFeed, symbols: SYMBOLS });
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('TradingView', tvFeed, SYMBOLS);
+    log.info(`TradingViewQuoteFeed for: ${SYMBOLS.join(', ')}`);
   }
 
   // Yahoo never overwrites a symbol that has a recent mt5_ea tick.

@@ -1345,8 +1345,8 @@ function startServer(config = {}) {
     cors: { origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : true },
     transports: ['websocket', 'polling'],
     // Keep mobile / Render free-tier clients alive through sleep + cold starts
-    pingInterval: 20000,
-    pingTimeout: 25000,
+    pingInterval: 15000,
+    pingTimeout: 20000,
     connectTimeout: 20000,
     allowUpgrades: true,
     perMessageDeflate: false,
@@ -1429,7 +1429,14 @@ function startServer(config = {}) {
 
     socket.on('subscribe', () => {
       // Channels are broadcast globally today; ack so client knows subscription is live
-      socket.emit('subscribed', { ok: true, channels: ['market', 'signal', 'balance'] });
+      socket.emit('subscribed', { ok: true, channels: ['market', 'signal', 'balance', 'heartbeat'] });
+    });
+    socket.on('heartbeat', (payload) => {
+      socket.emit('heartbeat_ack', {
+        t: Date.now(),
+        echo: payload && payload.t != null ? payload.t : null,
+        authMethod: socket.authMethod || null,
+      });
     });
     socket.on('setting', payload => bus.emit('setting_change', { socketId: socket.id, ...payload }));
     socket.on('get_history', async payload => {
