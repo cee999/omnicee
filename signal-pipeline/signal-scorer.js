@@ -15,9 +15,9 @@ const AGENT_WEIGHTS = {
   PATTERN:        0.07,
 };
 
-const MIN_SCORE_TO_FIRE    = 55;
+const MIN_SCORE_TO_FIRE    = 50;
 const MIN_SCORE_GRADE_A    = 85;
-const MIN_SCORE_GRADE_B    = 55;
+const MIN_SCORE_GRADE_B    = 50;
 
 const SESSIONS = {
   ASIA: {

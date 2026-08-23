@@ -203,7 +203,7 @@ function ThemeStyle() {
       /* fonts loaded from index.html — avoid double-fetch */
       /* Lighter institutional dark — readable slate, not pure black */
       .omni-root {
-        --void: #0f172a; --panel: #1e293b; --panel2: #243044;
+        --void: #0b1220; --panel: #1e293b; --panel2: #243044;
         --border: #334155; --borderBright: #475569;
         --emerald: #34d399; --emeraldDim: #059669;
         --gold: #fbbf24; --coral: #f87171; --blue: #60a5fa;
@@ -211,7 +211,9 @@ function ThemeStyle() {
         --text: #f1f5f9; --textDim: #cbd5e1; --textFaint: #94a3b8;
         --ring: #34d399;
         --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
-        background: var(--void); color: var(--text);
+        background: radial-gradient(1200px 600px at 10% -10%, rgba(52,211,153,0.08), transparent 50%),
+          radial-gradient(900px 500px at 100% 0%, rgba(96,165,250,0.07), transparent 45%),
+          var(--void); color: var(--text);
         font-family: 'Inter', system-ui, sans-serif;
         font-size: 16px;
         line-height: 1.45;
@@ -255,18 +257,26 @@ function ThemeStyle() {
         .omni-root input, .omni-root select, .omni-root textarea { font-size: 16px !important; }
       }
       .omni-panel {
-        background: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: 10px;
+        background: rgba(30, 41, 59, 0.72);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 14px;
         max-width: 100%;
-        transition: border-color 180ms ease, box-shadow 180ms ease;
+        backdrop-filter: blur(16px) saturate(1.2);
+        -webkit-backdrop-filter: blur(16px) saturate(1.2);
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255,255,255,0.04);
+        transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
       }
-      .omni-panel:hover { border-color: var(--borderBright); }
+      .omni-panel:hover {
+        border-color: rgba(52, 211, 153, 0.28);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255,255,255,0.06);
+      }
       .omni-panel2 {
-        background: var(--panel2);
-        border: 1px solid var(--border);
-        border-radius: 8px;
+        background: rgba(36, 48, 68, 0.65);
+        border: 1px solid rgba(148, 163, 184, 0.14);
+        border-radius: 12px;
         max-width: 100%;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
       }
       .omni-badge {
         display: inline-flex; align-items: center; gap: 4px;
@@ -301,11 +311,13 @@ function ThemeStyle() {
         flex-shrink: 0;
         display: flex;
         width: 100%;
-        border-top: 1px solid var(--border);
-        background: var(--panel);
+        border-top: 1px solid rgba(148, 163, 184, 0.16);
+        background: rgba(15, 23, 42, 0.82);
+        backdrop-filter: blur(20px) saturate(1.3);
+        -webkit-backdrop-filter: blur(20px) saturate(1.3);
         padding-bottom: env(safe-area-inset-bottom, 0px);
-        /* App-like bottom bar: tall enough for thumbs */
         min-height: 56px;
+        box-shadow: 0 -8px 32px rgba(0,0,0,0.35);
       }
       .omni-nav button {
         flex: 1 1 0;
@@ -1515,10 +1527,10 @@ function useLiveFeed() {
 /* ── Navigation model ───────────────────────────────────────────────── */
 const TABS = [
   { key: 'DASH', label: 'Home', fkey: 'F1', icon: LayoutDashboard },
-  { key: 'SIGNALS', label: 'Signals', fkey: 'F2', icon: Radio },
-  { key: 'ANALYSIS', label: 'Analysis', fkey: 'F3', icon: Layers },
+  { key: 'CHARTS', label: 'Charts', fkey: 'F2', icon: TrendingUp },
+  { key: 'SIGNALS', label: 'Signals', fkey: 'F3', icon: Radio },
   { key: 'NEWS', label: 'News', fkey: 'F4', icon: Newspaper },
-  { key: 'VALID', label: 'Valid', fkey: 'F5', icon: FlaskConical },
+  { key: 'ANALYSIS', label: 'Desk', fkey: 'F5', icon: Layers },
   { key: 'MONITOR', label: 'System', fkey: 'F6', icon: Activity },
 ];
 
@@ -2756,9 +2768,65 @@ function DeskBriefPanel({ brief, mode }) {
 }
 
 /* ── DASH ───────────────────────────────────────────────────────────── */
+
+/** Full-screen multi-symbol charts desk */
+function ChartsTab({ signals, prices, quotes, levels, mode }) {
+  const [chartSymbol, setChartSymbol] = useState('XAUUSD');
+  const q = quotes?.[chartSymbol];
+  const chartSignals = useMemo(
+    () => (signals || []).filter(s => s.symbol === chartSymbol && (s.action === 'BUY' || s.action === 'SELL')),
+    [signals, chartSymbol],
+  );
+  return (
+    <div className="p-2 sm:p-3 space-y-2 w-full max-w-[100vw]">
+      <div className="omni-panel px-3 py-2 flex flex-wrap gap-1.5 items-center">
+        <span className="font-mono text-[10px] uppercase tracking-wider mr-1" style={{ color: 'var(--textFaint)' }}>Symbol</span>
+        {SYMBOLS.map(sym => (
+          <button
+            key={sym}
+            type="button"
+            onClick={() => setChartSymbol(sym)}
+            className="omni-chip font-mono text-[11px] px-2.5 py-1.5 rounded-full min-h-[36px]"
+            style={{
+              color: chartSymbol === sym ? '#0b1220' : 'var(--textDim)',
+              background: chartSymbol === sym ? 'var(--emerald)' : 'rgba(15,23,42,0.5)',
+              border: '1px solid rgba(148,163,184,0.2)',
+              fontWeight: chartSymbol === sym ? 700 : 500,
+            }}
+          >
+            {symLabel(sym)}
+          </button>
+        ))}
+        <span className="ml-auto font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
+          {q?.source === 'mt5_ea' ? 'MT5 bid' : q?.source || (mode === 'live' ? 'feed' : '—')}
+        </span>
+      </div>
+      <div className="omni-panel p-2 md:p-3" style={{ minHeight: 'min(70vh, 640px)' }}>
+        <div className="flex items-center justify-between gap-2 mb-2 font-mono text-[11px]" style={{ color: 'var(--textDim)' }}>
+          <span>
+            <span style={{ color: 'var(--text)' }}>{symLabel(chartSymbol)}</span>
+            {q?.bid != null && q?.ask != null && (
+              <> · <span style={{ color: 'var(--coral)' }}>{fmtPrice(chartSymbol, q.bid)}</span>
+              {' / '}
+              <span style={{ color: 'var(--emerald)' }}>{fmtPrice(chartSymbol, q.ask)}</span></>
+            )}
+          </span>
+          <span style={{ color: 'var(--textFaint)' }}>{chartSignals.length} signal marker{chartSignals.length === 1 ? '' : 's'}</span>
+        </div>
+        <ErrorBoundary key={chartSymbol} label="the chart">
+          <LiveChart symbol={chartSymbol} quote={q} signals={chartSignals} levels={levels} onSymbolChange={setChartSymbol} />
+        </ErrorBoundary>
+      </div>
+    </div>
+  );
+}
+
 function DashTab({ signals, accountBalance, journalStats, prices, quotes, changes, mode, outlook, now, levels, analysisLive, socketLive, cryptoVolAlerts, calendar, deskBrief }) {
   const approved = signals.filter(s => s.gate?.status === 'approved' || s.gate?.status === 'APPROVED');
-  const recent = signals.slice(0, 12);
+  const recent = [...signals].sort((a, b) => {
+    const rank = (s) => (s.action === 'BUY' || s.action === 'SELL' ? 0 : 1);
+    return rank(a) - rank(b) || (b.timestamp || 0) - (a.timestamp || 0);
+  }).slice(0, 16);
   const [chartSymbol, setChartSymbol] = useState('XAUUSD');
   const q = quotes?.[chartSymbol];
   const chartSignals = useMemo(() => signals.filter(s => s.symbol === chartSymbol), [signals, chartSymbol]);
@@ -3103,83 +3171,8 @@ function SignalsTab({ signals, prices, quotes, auditLog, analysisLive }) {
         </div>
       </div>
 
-      <div className="omni-panel p-3">
-        <SectionHeader icon={ScrollText} title="Gate checks" sub={`${nearMiss.length} near miss · ${fired.length} fired recently`} />
-        {checks.length === 0 ? (
-          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
-            No checks logged yet. Wait for analysis (needs candles from Deriv or MT5).
-          </div>
-        ) : (
-          <div className="space-y-1 max-h-56 overflow-y-auto omni-scroll">
-            {checks.map((e, i) => (
-              <div key={e.id || i} className="flex flex-wrap items-start gap-2 font-mono text-[10px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
-                <span style={{ color: 'var(--textFaint)' }} className="w-10 shrink-0">{timeAgo(e.timestamp || Date.now())}</span>
-                <span style={{ color: 'var(--text)' }} className="w-16 shrink-0">{e.symbol}</span>
-                {e.fired
-                  ? <span style={{ color: 'var(--emerald)' }}>FIRED</span>
-                  : <span style={{ color: e.nearMiss || Number(e.score) >= 50 ? 'var(--gold)' : 'var(--textFaint)' }}>{e.nearMiss || Number(e.score) >= 50 ? 'NEAR' : 'block'}</span>}
-                {e.score != null && <span style={{ color: 'var(--textDim)' }}>score {e.score}</span>}
-                <span style={{ color: 'var(--textDim)' }} className="min-w-0 break-words flex-1">
-                  {(Array.isArray(e.gatesFailed) && e.gatesFailed.length) ? `failed: ${e.gatesFailed.join(', ')}` : ''}
-                  {(Array.isArray(e.gatesPassed) && e.gatesPassed.length) ? ` · passed: ${e.gatesPassed.join(', ')}` : ''}
-                  {' · '}{(Array.isArray(e.reasons) ? e.reasons : []).join(', ') || 'checked'}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      
-    </div>
-  );
-}
-
-function IntelTab({ now, outlook, mode, calendar, levels }) {
-  const live = mode === 'live' && outlook;
-
-  const session = live ? (outlook.session || null) : null;
-  const narrativeLines = live
-    ? (Array.isArray(outlook.narrativeLines) && outlook.narrativeLines.length
-        ? outlook.narrativeLines
-        : String(outlook.narrative || '').split(/(?<=\.)\s+/).filter(Boolean))
-    : null;
-
-  const regimeRows = live ? (outlook.symbols || []).map(s => ({
-    symbol: s.symbol,
-    regime: s.regime || '—',
-    tradeability: s.tradeability,
-    sessionStatus: s.sessionStatus,
-    sessionReason: s.sessionReason || s.sessionStatus,
-    dataNote: s.dataNote,
-    candleCount: s.candleCount,
-    regimeTimeframe: s.regimeTimeframe,
-  })) : null;
-
-  const cotRows = live
-    ? (outlook.symbols || []).filter(s => s.institutionalPositioning).map(s => ({
-        currency: s.symbol,
-        nonComm: s.institutionalPositioning.largeSpecNet ?? 0,
-        signal: s.institutionalPositioning.signal,
-        note: s.institutionalPositioning.note,
-      }))
-    : null;
-  const calendarRows = Array.isArray(calendar) && calendar.length
-    ? calendar.slice(0, 60).map(e => ({
-        name: e.name,
-        currency: e.currency,
-        impact: e.impact || '—',
-        hoursAway: e.hoursAway,
-      }))
-    : [];
-
-  const highSoon = calendarRows.filter(e =>
-    String(e.impact).toLowerCase() === 'high' && e.hoursAway != null && e.hoursAway >= 0 && e.hoursAway <= 48
-  ).slice(0, 6);
-
-  return (
-    <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
-      <div className="omni-panel p-4">
+            {/* Gate checks stay on server */}
+<div className="omni-panel p-4">
         <SectionHeader icon={Globe2} title="What to expect" sub={session ? session.label : (live ? 'live' : undefined)} />
         {!live ? (
           <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>Waiting for outlook…</div>
@@ -3544,37 +3537,7 @@ function MonitorTab({ auditLog, feedHealth, uptimeSec, mode, fetchErrors, analys
         </div>
       </div>
 
-      <div className="omni-panel p-4">
-        <SectionHeader icon={ScrollText} title="What the system checked" sub="each pass — signal or no signal" />
-        {!Array.isArray(auditLog) || auditLog.length === 0 ? (
-          <div className="font-mono text-[11px] leading-relaxed" style={{ color: 'var(--textFaint)' }}>
-            No checks logged yet. This list fills when the system scores each pair (after candle data loads).
-          </div>
-        ) : (
-          <div className="space-y-1 max-h-72 overflow-y-auto omni-scroll">
-            {auditLog.map((e, idx) => {
-              const reasons = Array.isArray(e.reasons) ? e.reasons
-                : e.blockedReason ? [e.blockedReason]
-                : e.action ? [String(e.action)]
-                : ['checked'];
-              return (
-                <div key={e.id || idx} className="flex items-start gap-2 font-mono text-[10px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
-                  <span style={{ color: 'var(--textFaint)' }} className="w-10 shrink-0">{timeAgo(e.timestamp || Date.now())}</span>
-                  <span style={{ color: 'var(--text)' }} className="w-16 shrink-0">{e.symbol || '—'}</span>
-                  {e.fired || e.signalFired
-                    ? <CheckCircle2 size={11} style={{ color: 'var(--emerald)', marginTop: 1, flexShrink: 0 }} />
-                    : <XCircle size={11} style={{ color: 'var(--textFaint)', marginTop: 1, flexShrink: 0 }} />}
-                  <span style={{ color: 'var(--textDim)' }} className="min-w-0 break-words">{reasons.join(', ')}</span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
+            {/* Gate audit trail kept server-side only */}
 /* ── HEAT ───────────────────────────────────────────────────────────── */
 function tileBiasSign(bias) {
   if (bias === 'BUY' || bias === 'LONG_LEANING') return 1;
@@ -4521,7 +4484,7 @@ export default function OmniceeDashboard() {
   const [activeTab, setActiveTab] = useState(() => {
     try {
       const tab = new URLSearchParams(window.location.search).get('tab');
-      if (tab && ['DASH', 'SIGNALS', 'ANALYSIS', 'NEWS', 'VALID', 'MONITOR'].includes(tab)) return tab;
+      if (tab && ['DASH', 'CHARTS', 'SIGNALS', 'ANALYSIS', 'NEWS', 'MONITOR'].includes(tab)) return tab;
     } catch (_) {}
     return 'DASH';
   });
@@ -4638,11 +4601,12 @@ export default function OmniceeDashboard() {
         <div className="omni-main omni-scroll">
           <ErrorBoundary key={activeTab} label={activeTab}>
             {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} analysisLive={feed.analysisLive} socketLive={feed.socketLive} cryptoVolAlerts={feed.cryptoVolAlerts} calendar={feed.calendar} deskBrief={feed.deskBrief} />}
+            {activeTab === 'CHARTS' && <ChartsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} levels={feed.levels} mode={feed.mode} />}
             {activeTab === 'SIGNALS' && (
               <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} auditLog={feed.auditLog} analysisLive={feed.analysisLive} />
             )}
             {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}
-            {activeTab === 'VALID' && (
+            {false && activeTab === 'VALID' && (
               <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} hurstBoard={feed.hurstBoard} />
             )}
             {activeTab === 'ANALYSIS' && (

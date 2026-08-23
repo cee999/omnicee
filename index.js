@@ -30,9 +30,9 @@ const SYMBOLS         = (requireEnv('SYMBOLS', 'XAUUSD,BTCUSDT,ETHUSDT,EURUSD,GB
   .split(',').map(s => s.trim()).filter(Boolean);
 const TIMEFRAMES_STR  = (requireEnv('TIMEFRAMES', 'H1,H4') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
-const MIN_SCORE       = parseFloat(requireEnv('MIN_SIGNAL_SCORE', '55'));
+const MIN_SCORE       = parseFloat(requireEnv('MIN_SIGNAL_SCORE', '50'));
 // Gold (XAUUSD) can use a slightly lower floor — liquid, high-ATR commodity desks
-const GOLD_MIN_SCORE  = parseFloat(requireEnv('GOLD_MIN_SCORE', String(Math.max(48, MIN_SCORE - 5))));
+const GOLD_MIN_SCORE  = parseFloat(requireEnv('GOLD_MIN_SCORE', String(Math.max(45, MIN_SCORE - 5))));
 const RISK_PCT        = parseFloat(requireEnv('RISK_PCT_PER_TRADE', '1.0'));
 const MAX_DAILY_LOSS  = parseFloat(requireEnv('MAX_DAILY_LOSS_PCT', '3.0'));
 const MAX_DRAWDOWN    = parseFloat(requireEnv('MAX_DRAWDOWN_PCT', '10.0'));
@@ -1384,7 +1384,7 @@ async function bootstrapBinanceKlines(symbols) {
       const interval = map[tf];
       if (!interval) continue;
       try {
-        const rows = await get(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=200`);
+        const rows = await get(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=500`);
         if (!Array.isArray(rows) || rows.length < 10) continue;
         const candles = rows.map(r => ({
           open: Number(r[1]), high: Number(r[2]), low: Number(r[3]), close: Number(r[4]),
@@ -1410,7 +1410,7 @@ async function bootstrapFinnhubCandles(symbols) {
     for (const tf of ['M15', 'H1', 'H4', 'D1']) {
       if (!TIMEFRAMES_STR.includes(tf)) continue;
       try {
-        const candles = await finnhubFeed.getCandles(symbol, tf, 200);
+        const candles = await finnhubFeed.getCandles(symbol, tf, 400);
         if (!Array.isArray(candles) || candles.length < 10) continue;
         if (!candleStores[symbol]) candleStores[symbol] = {};
         const prev = candleStores[symbol][tf] || [];
@@ -2238,6 +2238,103 @@ function setupShutdown(feeds) {
   });
 }
 
+
+async function bootstrapYahooCandles(symbols) {
+  // Free public Yahoo chart API — fills FX/gold/oil when Deriv/Finnhub lag or fail.
+  // BTC still prefers Binance; this is the reason only crypto charts had depth.
+  const https = require('https');
+  const YAHOO_MAP = {
+    EURUSD: 'EURUSD=X', GBPUSD: 'GBPUSD=X', USDJPY: 'USDJPY=X',
+    AUDUSD: 'AUDUSD=X', USDCAD: 'USDCAD=X', NZDUSD: 'NZDUSD=X', USDCHF: 'USDCHF=X',
+    XAUUSD: 'GC=F',   // COMEX gold futures — liquid proxy for spot gold charts
+    XAGUSD: 'SI=F',
+    USOIL: 'CL=F',
+    UUP: 'UUP',
+  };
+  const TF_MAP = {
+    M15: { interval: '15m', range: '1mo' },
+    H1:  { interval: '60m', range: '3mo' },
+    H4:  { interval: '60m', range: '6mo' }, // aggregate later if needed
+    D1:  { interval: '1d',  range: '2y' },
+  };
+  const get = (url) => new Promise((resolve, reject) => {
+    const req = https.get(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 OmniceeCandleSeed/1.0', Accept: 'application/json' },
+    }, (res) => {
+      let d = '';
+      res.on('data', c => d += c);
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, body: JSON.parse(d) }); }
+        catch (e) { reject(e); }
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(20000, () => { req.destroy(); reject(new Error('yahoo timeout')); });
+  });
+
+  for (const symbol of symbols) {
+    const ysym = YAHOO_MAP[symbol];
+    if (!ysym) continue;
+    if (symbol.endsWith('USDT')) continue; // Binance owns crypto
+    for (const tf of TIMEFRAMES_STR) {
+      const cfg = TF_MAP[tf];
+      if (!cfg) continue;
+      try {
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ysym)}?interval=${cfg.interval}&range=${cfg.range}`;
+        const { status, body } = await get(url);
+        if (status !== 200) continue;
+        const result = body?.chart?.result?.[0];
+        const ts = result?.timestamp;
+        const q = result?.indicators?.quote?.[0];
+        if (!Array.isArray(ts) || !q) continue;
+        let candles = [];
+        for (let i = 0; i < ts.length; i++) {
+          const open = Number(q.open?.[i]);
+          const high = Number(q.high?.[i]);
+          const low = Number(q.low?.[i]);
+          const close = Number(q.close?.[i]);
+          const volume = Number(q.volume?.[i]) || 0;
+          const timestamp = Number(ts[i]) * 1000;
+          if (![open, high, low, close, timestamp].every(Number.isFinite)) continue;
+          candles.push({ open, high, low, close, volume, timestamp, isClosed: true, source: 'yahoo' });
+        }
+        // H4 from H1-ish 60m: fold every 4 bars
+        if (tf === 'H4' && candles.length >= 8) {
+          const folded = [];
+          for (let i = 0; i + 3 < candles.length; i += 4) {
+            const chunk = candles.slice(i, i + 4);
+            folded.push({
+              open: chunk[0].open,
+              high: Math.max(...chunk.map(c => c.high)),
+              low: Math.min(...chunk.map(c => c.low)),
+              close: chunk[chunk.length - 1].close,
+              volume: chunk.reduce((s, c) => s + (c.volume || 0), 0),
+              timestamp: chunk[0].timestamp,
+              isClosed: true,
+              source: 'yahoo',
+            });
+          }
+          candles = folded;
+        }
+        if (candles.length < 10) continue;
+        if (!candleStores[symbol]) candleStores[symbol] = {};
+        const prev = candleStores[symbol][tf] || [];
+        // Prefer longer history; don't overwrite fresher mt5/deriv if they already have more
+        const prevSrc = prev[prev.length - 1]?.source;
+        if (candles.length > (prev.length || 0) || !prev.length) {
+          if (prevSrc === 'mt5_ea' && prev.length >= candles.length) continue;
+          candleStores[symbol][tf] = candles.slice(-600);
+          log.info(`Yahoo seed: ${symbol} ${tf} ${candles.length} bars (${ysym})`);
+          setImmediate(() => { lastAnalysisAt.delete(`${symbol}:${tf}`); scheduleLiveAnalysis(symbol, 'seed'); });
+        }
+      } catch (e) {
+        log.warn(`Yahoo seed ${symbol} ${tf}: ${e.message}`);
+      }
+    }
+  }
+}
+
+
 async function main() {
   log.info('╔══════════════════════════════════════╗');
   log.info('║  OMNICEE  — Institutional Grade v2   ║');
@@ -2275,6 +2372,7 @@ async function main() {
     const fx = SYMBOLS.filter(s => !s.endsWith('USDT'));
     bootstrapBinanceKlines(crypto).catch(e => log.warn(`Binance bootstrap: ${e.message}`));
     bootstrapFinnhubCandles(fx).catch(e => log.warn(`Finnhub bootstrap: ${e.message}`));
+    bootstrapYahooCandles(fx.length ? fx : SYMBOLS).catch(e => log.warn(`Yahoo bootstrap: ${e.message}`));
   });
 
   // Always-on analysis loop (chart-like): keeps checking while server is up
