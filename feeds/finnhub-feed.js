@@ -190,15 +190,23 @@ class FinnhubFeed extends EventEmitter {
   }
 
   async _fetchCandles(symbol, resolution, count) {
-    const tdLikeSymbol = this.forexSymbolMap[symbol] || symbol;
+    // FIX: this always hit /forex/candle regardless of symbol type. UUP and
+    // USOIL->USO (added for the symbols Deriv doesn't cover — see
+    // equitySymbolMap above) are equities/ETFs, not forex pairs; Finnhub's
+    // REST API serves those from a completely different endpoint
+    // (/stock/candle), so this would have silently returned nothing for
+    // either symbol regardless of API key validity.
+    const isEquity = Boolean(this.equitySymbolMap[symbol]);
+    const apiSymbol = this.equitySymbolMap[symbol] || this.forexSymbolMap[symbol] || symbol;
     const now = Math.floor(Date.now() / 1000);
     const resMinutes = resolution === 'D' ? 1440 : resolution === 'W' ? 10080 : Number(resolution);
     const rangeSeconds = resMinutes * 60 * (count + 5);
     const from = now - rangeSeconds;
 
     try {
+      const endpoint = isEquity ? '/stock/candle' : '/forex/candle';
       const { status, body } = await this._get(
-        `/forex/candle?symbol=${encodeURIComponent(tdLikeSymbol)}&resolution=${resolution}&from=${from}&to=${now}`
+        `${endpoint}?symbol=${encodeURIComponent(apiSymbol)}&resolution=${resolution}&from=${from}&to=${now}`
       );
 
       if (status === 403 || body?.error) {
@@ -227,12 +235,31 @@ class FinnhubFeed extends EventEmitter {
     }
   }
 
+  // FIX: this grouped hourly candles by array position (every 4 elements),
+  // not by actual wall-clock time. Every trading platform aligns H4 bars
+  // to fixed UTC boundaries (00:00, 04:00, 08:00...) — but the fetched
+  // hourly array's first element lands wherever the API's `from` time
+  // happened to compute to, essentially never exactly on one of those
+  // boundaries. Grouping by position instead of time meant every resulting
+  // "H4" candle was shifted by however many hours off-boundary the first
+  // element was, so the H4 chart for USOIL/UUP (the only symbols that
+  // route through this) would never actually line up with a real broker's
+  // H4 chart — the exact kind of mismatch this was supposed to fix.
+  // Buckets by real UTC time instead; also correct if the API ever returns
+  // a gap (a missing hour doesn't silently shift everything after it).
   _aggregateHourly(hourlyCandles) {
+    const FOUR_HOURS_MS = 4 * 3600 * 1000;
+    const buckets = new Map();
+    for (const c of hourlyCandles) {
+      const bucketStart = Math.floor(c.timestamp / FOUR_HOURS_MS) * FOUR_HOURS_MS;
+      if (!buckets.has(bucketStart)) buckets.set(bucketStart, []);
+      buckets.get(bucketStart).push(c);
+    }
     const out = [];
-    for (let i = 0; i + 4 <= hourlyCandles.length; i += 4) {
-      const group = hourlyCandles.slice(i, i + 4);
+    for (const bucketStart of [...buckets.keys()].sort((a, b) => a - b)) {
+      const group = buckets.get(bucketStart).sort((a, b) => a.timestamp - b.timestamp);
       out.push({
-        timestamp: group[0].timestamp,
+        timestamp: bucketStart,
         open: group[0].open,
         close: group[group.length - 1].close,
         high: Math.max(...group.map(c => c.high)),
