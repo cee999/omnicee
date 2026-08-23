@@ -6,7 +6,7 @@ import {
   Circle, Zap, Database,
   Terminal, Newspaper,
   Layers, Target,
-  Volume2, VolumeX, Sun, Moon,
+  Volume2, VolumeX, Sun, Moon, Maximize2,
 } from 'lucide-react';
 
 const SYMBOLS = ['XAUUSD', 'BTCUSDT', 'ETHUSDT', 'EURUSD', 'GBPUSD', 'USDJPY', 'USOIL', 'UUP'];
@@ -2340,7 +2340,7 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
   );
 }
 
-function DashTab({ signals, accountBalance, journalStats, prices, quotes, changes, mode, outlook, now, levels, analysisLive, socketLive, cryptoVolAlerts, calendar, deskBrief, onOpenChart }) {
+function DashTab({ signals, accountBalance, journalStats, prices, quotes, changes, mode, outlook, now, levels, analysisLive, socketLive, cryptoVolAlerts, calendar, deskBrief, onOpenChart, chartSymbol, onSymbolChange, theme }) {
   const list = Array.isArray(signals) ? signals : [];
   const approved = list.filter(s => s.gate?.status === 'approved' || s.gate?.status === 'APPROVED');
   const recent = [...list].sort((a, b) => {
@@ -2376,6 +2376,51 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
       )}
       <DeskBriefPanel brief={deskBrief} mode={mode} />
       <WhatToExpect outlook={outlook} calendar={calendar} now={now || Date.now()} mode={mode} />
+      {/* FIX: TradingViewChart only ever existed full-page inside ChartsTab
+          — DASH had no chart at all, just quote cards that navigate away
+          to it. That's the "doesn't fit into the system when not
+          expanded" gap: there was no not-expanded state to speak of.
+          Compact embedded version here, bound to the same top-level
+          chartSymbol state ChartsTab already uses, with an explicit
+          expand action into the real full-page view — not a second,
+          divergent chart implementation. */}
+      <div className="omni-panel p-2 sm:p-3">
+        <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+          <div className="flex gap-1 flex-wrap">
+            {SYMBOLS.map(sym => (
+              <button
+                key={sym}
+                type="button"
+                onClick={() => onSymbolChange?.(sym)}
+                className="omni-chip font-mono text-[10px] px-2 py-1 rounded-full"
+                aria-pressed={chartSymbol === sym}
+                style={{
+                  color: chartSymbol === sym ? 'var(--inkOnAccent)' : 'var(--textDim)',
+                  background: chartSymbol === sym ? 'var(--emerald)' : 'var(--panel2)',
+                  border: '1px solid var(--glassBorder)',
+                  fontWeight: chartSymbol === sym ? 700 : 500,
+                }}
+              >
+                {symLabel(sym)}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => onOpenChart?.(chartSymbol)}
+            className="font-mono text-[10px] px-2 py-1 rounded flex items-center gap-1 flex-shrink-0"
+            style={{ color: 'var(--textDim)', border: '1px solid var(--glassBorder)', background: 'var(--panel2)' }}
+            aria-label="Expand chart to full screen"
+          >
+            <Maximize2 size={11} /> Expand
+          </button>
+        </div>
+        <div className="h-[240px] sm:h-[320px]">
+          <ErrorBoundary key={'dash-tv-' + chartSymbol} label="TradingView">
+            <TradingViewChart symbol={chartSymbol} theme={theme} />
+          </ErrorBoundary>
+        </div>
+      </div>
       <div className="omni-home-grid">
             {SYMBOLS.map(sym => {
               const qq = quotes?.[sym];
@@ -3736,7 +3781,7 @@ export default function OmniceeDashboard() {
       <div className="flex flex-col flex-1 min-h-0" style={{ minHeight: 0 }}>
         <div className="omni-main omni-scroll">
           <ErrorBoundary key={activeTab} label={activeTab}>
-            {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} analysisLive={feed.analysisLive} socketLive={feed.socketLive} cryptoVolAlerts={feed.cryptoVolAlerts} calendar={feed.calendar} deskBrief={feed.deskBrief} onOpenChart={openChart} />}
+            {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} analysisLive={feed.analysisLive} socketLive={feed.socketLive} cryptoVolAlerts={feed.cryptoVolAlerts} calendar={feed.calendar} deskBrief={feed.deskBrief} onOpenChart={openChart} chartSymbol={chartSymbol} onSymbolChange={setChartSymbol} theme={theme} />}
             {activeTab === 'CHARTS' && <ChartsTab quotes={feed.quotes} mode={feed.mode} signals={feed.signals} theme={theme} chartSymbol={chartSymbol} onSymbolChange={setChartSymbol} />}
             {activeTab === 'SIGNALS' && (
               <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} analysisLive={feed.analysisLive} socketLive={feed.socketLive} onOpenChart={openChart} />
