@@ -11,18 +11,24 @@ html {
   -webkit-text-size-adjust: 100%;
   color-scheme: dark;
 }
+html[data-theme="light"] { color-scheme: light; }
 body {
   width: 100%;
   height: 100%;
   max-width: 100vw;
   margin: 0;
   overflow-x: hidden;
-  background: #0f172a;
+  background: #0b1220;
   color: #f1f5f9;
   font-family: Inter, system-ui, sans-serif;
   font-size: 16px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
+}
+html[data-theme="light"] body,
+body:has(.omni-root[data-theme="light"]) {
+  background: #eef2f7;
+  color: #0f172a;
 }
 #root {
   width: 100%;

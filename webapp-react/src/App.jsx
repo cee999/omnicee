@@ -1,28 +1,17 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback, Component } from 'react';
 import {
-  BarChart, Bar, XAxis, YAxis,
-  Tooltip, ResponsiveContainer, CartesianGrid, Cell,
-} from 'recharts';
-import {
-  createChart, CandlestickSeries, HistogramSeries, LineSeries, createSeriesMarkers,
-  CrosshairMode, LineStyle,
-} from 'lightweight-charts';
-import {
-  LayoutDashboard, Radio, Globe2, Activity, Flame, FlaskConical,
-  ScrollText, ShieldAlert, ChevronRight, ChevronDown,
+  LayoutDashboard, Radio, Globe2, Activity,
+  ScrollText, ChevronRight, ChevronDown,
   TrendingUp, CheckCircle2, XCircle,
-  Circle, Clock, Zap, Database,
-  Terminal, Newspaper, Gauge as GaugeIcon,
-  Layers, Target, DollarSign, SlidersHorizontal, Maximize2, Minimize2,
-  Download, Share2, Volume2, VolumeX,
+  Circle, Zap, Database,
+  Terminal, Newspaper,
+  Layers, Target,
+  Volume2, VolumeX, Sun, Moon,
 } from 'lucide-react';
 
 const SYMBOLS = ['XAUUSD', 'BTCUSDT', 'ETHUSDT', 'EURUSD', 'GBPUSD', 'USDJPY', 'USOIL', 'UUP'];
 const SYMBOL_LABEL = { UUP: 'DXY', XAUUSD: 'GOLD', USOIL: 'OIL', BTCUSDT: 'BTC', ETHUSDT: 'ETH' };
 function symLabel(s) { return SYMBOL_LABEL[s] || s; }
-
-const TIMEFRAMES = ['M15', 'H1', 'H4', 'D1'];
-const AGENTS = ['SMC', 'MTF', 'Momentum', 'VolumeOI', 'Sentiment', 'Pattern', 'Fractal', 'Microstructure'];
 
 const BASE_PRICE = {
   EURUSD: 1.0842, GBPUSD: 1.2694, USDJPY: 156.32,
@@ -38,6 +27,7 @@ const PIP = { EURUSD: 0.0001, GBPUSD: 0.0001, USDJPY: 0.01, XAUUSD: 0.1, BTCUSDT
  * Preference persisted in localStorage. Respects system mute and user toggle.
  */
 const SOUND_PREF_KEY = 'omnicee_sound_enabled';
+const THEME_KEY = 'omnicee_theme';
 function loadSoundPref() {
   try {
     const v = localStorage.getItem(SOUND_PREF_KEY);
@@ -47,6 +37,31 @@ function loadSoundPref() {
 }
 function saveSoundPref(on) {
   try { localStorage.setItem(SOUND_PREF_KEY, on ? '1' : '0'); } catch (_) {}
+}
+function loadTheme() {
+  try {
+    const v = localStorage.getItem(THEME_KEY);
+    if (v === 'light' || v === 'dark') return v;
+  } catch (_) {}
+  try {
+    if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: light)').matches) return 'light';
+  } catch (_) {}
+  return 'dark';
+}
+function saveTheme(t) {
+  try { localStorage.setItem(THEME_KEY, t === 'light' ? 'light' : 'dark'); } catch (_) {}
+}
+function sourceLabel(src) {
+  if (src === 'mt5_ea') return 'MT5';
+  if (src === 'tradingview') return 'TV';
+  if (src === 'deriv') return 'DERIV';
+  if (src === 'finnhub') return 'FH';
+  if (src === 'binance') return 'BN';
+  return src || '—';
+}
+function isFireAction(action) {
+  const a = String(action || '').toUpperCase();
+  return a === 'BUY' || a === 'SELL' || a === 'LONG' || a === 'SHORT';
 }
 
 let _audioCtx = null;
@@ -154,6 +169,7 @@ function normalizeSignal(s) {
     risk: s.risk || { effectiveRisk: 0, maxLoss: 0, note: 'Awaiting risk evaluation' },
     agents: normalizedAgents,
     agreeCount,
+    status: (action === 'BUY' || action === 'SELL') ? 'FIRE' : 'WAIT',
   };
 }
 
@@ -163,7 +179,6 @@ const FEEDS = [
   { name: 'Deriv',        kind: 'live ticks+OHLC', status: 'unknown' },
 ];
 
-function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 function fmtPrice(symbol, v) {
   if (v == null || !Number.isFinite(Number(v))) return '-';
   const d = DECIMALS[symbol] ?? 2;
@@ -188,16 +203,6 @@ function gradeFor(score) {
   return 'C';
 }
 
-function heatColor(v) {
-  const t = clamp(v, -1, 1);
-  if (t >= 0) {
-    const g = Math.round(20 + t * 100);
-    return `rgba(31,227,168,${0.12 + t * 0.55})`;
-  }
-  const a = Math.abs(t);
-  return `rgba(255,84,112,${0.12 + a * 0.55})`;
-}
-
 function ThemeStyle() {
   return (
     <style>{`
@@ -212,6 +217,10 @@ function ThemeStyle() {
         --text: #f1f5f9; --textDim: #cbd5e1; --textFaint: #94a3b8;
         --ring: #34d399;
         --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+        --glass: rgba(30, 41, 59, 0.72);
+        --glass2: rgba(36, 48, 68, 0.65);
+        --glassBorder: rgba(148, 163, 184, 0.18);
+        --inkOnAccent: #0b1220;
         background: radial-gradient(1200px 600px at 10% -10%, rgba(52,211,153,0.08), transparent 50%),
           radial-gradient(900px 500px at 100% 0%, rgba(96,165,250,0.07), transparent 45%),
           var(--void); color: var(--text);
@@ -232,6 +241,23 @@ function ThemeStyle() {
         padding-right: env(safe-area-inset-right, 0px);
         padding-top: env(safe-area-inset-top, 0px);
         color-scheme: dark;
+      }
+      .omni-root[data-theme="light"] {
+        --void: #eef2f7; --panel: #ffffff; --panel2: #f8fafc;
+        --border: #d8e0ea; --borderBright: #94a3b8;
+        --emerald: #059669; --emeraldDim: #047857;
+        --gold: #d97706; --coral: #dc2626; --blue: #2563eb;
+        --cyan: #0891b2; --violet: #7c3aed;
+        --text: #0f172a; --textDim: #334155; --textFaint: #64748b;
+        --ring: #059669;
+        --glass: rgba(255, 255, 255, 0.82);
+        --glass2: rgba(248, 250, 252, 0.9);
+        --glassBorder: rgba(15, 23, 42, 0.08);
+        --inkOnAccent: #ffffff;
+        background: radial-gradient(1200px 600px at 10% -10%, rgba(5,150,105,0.08), transparent 50%),
+          radial-gradient(900px 500px at 100% 0%, rgba(37,99,235,0.07), transparent 45%),
+          var(--void);
+        color-scheme: light;
       }
       .omni-root .font-display { font-family: 'Orbitron', sans-serif; letter-spacing: 0.06em; }
       .omni-root .font-mono { font-family: 'JetBrains Mono', monospace; }
@@ -258,26 +284,31 @@ function ThemeStyle() {
         .omni-root input, .omni-root select, .omni-root textarea { font-size: 16px !important; }
       }
       .omni-panel {
-        background: rgba(30, 41, 59, 0.72);
-        border: 1px solid rgba(148, 163, 184, 0.18);
+        background: var(--glass);
+        border: 1px solid var(--glassBorder);
         border-radius: 14px;
         max-width: 100%;
         backdrop-filter: blur(16px) saturate(1.2);
         -webkit-backdrop-filter: blur(16px) saturate(1.2);
-        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255,255,255,0.04);
-        transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12), inset 0 1px 0 rgba(255,255,255,0.06);
+        transition: border-color 180ms ease, box-shadow 180ms ease;
       }
       .omni-panel:hover {
-        border-color: rgba(52, 211, 153, 0.28);
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255,255,255,0.06);
+        border-color: color-mix(in srgb, var(--emerald) 40%, var(--glassBorder));
       }
       .omni-panel2 {
-        background: rgba(36, 48, 68, 0.65);
-        border: 1px solid rgba(148, 163, 184, 0.14);
+        background: var(--glass2);
+        border: 1px solid var(--glassBorder);
         border-radius: 12px;
         max-width: 100%;
         backdrop-filter: blur(12px);
         -webkit-backdrop-filter: blur(12px);
+      }
+      .omni-topbar {
+        background: var(--glass);
+        border-color: var(--glassBorder);
+        backdrop-filter: blur(16px) saturate(1.2);
+        -webkit-backdrop-filter: blur(16px) saturate(1.2);
       }
       .omni-badge {
         display: inline-flex; align-items: center; gap: 4px;
@@ -312,13 +343,12 @@ function ThemeStyle() {
         flex-shrink: 0;
         display: flex;
         width: 100%;
-        border-top: 1px solid rgba(148, 163, 184, 0.16);
-        background: rgba(15, 23, 42, 0.82);
+        border-top: 1px solid var(--glassBorder);
+        background: var(--glass);
         backdrop-filter: blur(20px) saturate(1.3);
         -webkit-backdrop-filter: blur(20px) saturate(1.3);
         padding-bottom: env(safe-area-inset-bottom, 0px);
         min-height: 56px;
-        box-shadow: 0 -8px 32px rgba(0,0,0,0.35);
       }
       .omni-nav button {
         flex: 1 1 0;
@@ -455,47 +485,55 @@ function ThemeStyle() {
       .omni-home-grid {
         display: grid;
         width: 100%;
-        gap: 0.5rem;
+        gap: 0.75rem;
         grid-template-columns: 1fr;
       }
-      @media (min-width: 900px) {
+      @media (min-width: 720px) {
         .omni-home-grid {
-          grid-template-columns: minmax(0, 1fr) minmax(200px, 28%);
-          align-items: stretch;
-        }
-        .omni-chart-canvas-wrap {
-          min-height: clamp(260px, 48vh, 560px);
-          height: clamp(260px, 48vh, 560px);
+          grid-template-columns: repeat(2, minmax(0, 1fr));
         }
       }
-      @media (min-width: 1200px) {
-        .omni-chart-canvas-wrap {
-          min-height: clamp(300px, 52vh, 640px);
-          height: clamp(300px, 52vh, 640px);
+      @media (min-width: 1100px) {
+        .omni-home-grid {
+          grid-template-columns: repeat(4, minmax(0, 1fr));
         }
       }
-      /* TradingView fills remaining viewport on every screen */
-      .omni-charts-page {
-        display: flex;
-        flex-direction: column;
+      .omni-charts-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr auto;
+        gap: 8px;
         height: 100%;
         min-height: calc(100dvh - 148px);
         padding: 8px;
-        gap: 8px;
         box-sizing: border-box;
         width: 100%;
         max-width: 100vw;
       }
-      .omni-charts-toolbar {
-        flex: 0 0 auto;
+      @media (min-width: 900px) {
+        .omni-charts-grid {
+          grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
+          grid-template-rows: auto 1fr;
+        }
+        .omni-charts-toolbar { grid-column: 1 / -1; }
+        .omni-charts-stage { grid-column: 1; grid-row: 2; }
+        .omni-charts-rail { grid-column: 2; grid-row: 2; }
       }
+      @media (max-width: 899px) {
+        .omni-charts-rail { max-height: 38vh; }
+      }
+      .omni-charts-toolbar { flex: 0 0 auto; }
       .omni-charts-stage {
-        flex: 1 1 auto;
         min-height: 0;
         overflow: hidden;
         display: flex;
         flex-direction: column;
         padding: 0 !important;
+      }
+      .omni-charts-rail {
+        min-height: 0;
+        overflow: auto;
+        -webkit-overflow-scrolling: touch;
       }
       .omni-tv-host {
         flex: 1 1 auto;
@@ -503,6 +541,8 @@ function ThemeStyle() {
         height: 100%;
         min-height: 240px;
         position: relative;
+        border-radius: 14px;
+        overflow: hidden;
       }
       .omni-tv-host iframe,
       .omni-tv-host > div {
@@ -514,17 +554,89 @@ function ThemeStyle() {
         display: flex;
         flex-direction: column;
       }
-      .omni-home-tv {
+      .omni-charts-stage {
+        position: relative;
+        background: var(--glass);
+        border: 1px solid var(--glassBorder);
+      }
+      .omni-chart-hud {
+        position: absolute;
+        left: 10px;
+        bottom: 10px;
+        z-index: 6;
+        max-width: min(340px, calc(100% - 20px));
+        pointer-events: auto;
+        background: var(--glass);
+        border: 1px solid var(--glassBorder);
+        backdrop-filter: blur(14px) saturate(1.2);
+        -webkit-backdrop-filter: blur(14px) saturate(1.2);
+        border-radius: 12px;
+        padding: 10px 12px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+      }
+      .omni-signals-list {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+      @media (min-width: 900px) {
+        .omni-signals-list {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+      .omni-analysis-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+      @media (min-width: 720px) {
+        .omni-analysis-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
+      @media (min-width: 1100px) {
+        .omni-analysis-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      }
+      .omni-heat-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+      @media (min-width: 720px) {
+        .omni-heat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      }
+      .omni-sr-only {
+        position: absolute;
+        width: 1px; height: 1px;
+        padding: 0; margin: -1px;
+        overflow: hidden; clip: rect(0,0,0,0);
+        white-space: nowrap; border: 0;
+      }
+      .omni-root[data-theme="light"] .omni-row:hover { background: rgba(15, 23, 42, 0.04); }
+      .omni-root[data-theme="light"] .omni-row:active,
+      .omni-root[data-theme="light"] .omni-chip:active { background: rgba(15, 23, 42, 0.08) !important; }
+      .omni-root[data-theme="light"] .omni-panel {
+        box-shadow: 0 4px 20px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255,255,255,0.8);
+      }
+      .omni-quote-card {
+        text-align: left;
         width: 100%;
-        height: clamp(240px, 42vh, 560px);
-        min-height: 220px;
+        min-height: 44px;
       }
-      @media (max-width: 640px) {
-        .omni-charts-page { min-height: calc(100dvh - 132px); padding: 6px; gap: 6px; }
-        .omni-home-tv { height: clamp(220px, 46vh, 480px); }
+      .omni-quote-card:focus-visible {
+        outline: 2px solid var(--ring);
+        outline-offset: 2px;
       }
-      @media (min-width: 1024px) {
-        .omni-home-tv { height: clamp(280px, 48vh, 620px); }
+      @media (min-width: 900px) {
+        .omni-charts-grid {
+          min-height: calc(100dvh - 140px);
+        }
+        .omni-tv-host { min-height: 420px; }
+      }
+      @media (max-width: 899px) {
+        .omni-charts-grid {
+          min-height: calc(100dvh - 132px);
+          grid-template-rows: auto minmax(240px, 1fr) minmax(140px, 32vh);
+        }
+        .omni-tv-host { min-height: 220px; }
       }
     `}</style>
   );
@@ -597,30 +709,6 @@ function StatCard({ label, value, delta, icon: Icon, accent = 'var(--emerald)' }
           {fmtPct(delta)}
         </div>
       )}
-    </div>
-  );
-}
-
-/* Semi-circular arc gauge, 0..100, colored by threshold zones */
-function Gauge({ value, label, zones = [[0, 40, '#ff5470'], [40, 70, '#f0b429'], [70, 101, '#1fe3a8']] }) {
-  const v = clamp(value, 0, 100);
-  const r = 46, cx = 60, cy = 58;
-  const angleFor = (pct) => Math.PI - (pct / 100) * Math.PI;
-  const point = (pct) => {
-    const a = angleFor(pct);
-    return [cx + r * Math.cos(a), cy - r * Math.sin(a)];
-  };
-  const [nx, ny] = point(v);
-  const color = (zones.find(z => v >= z[0] && v < z[1]) || zones[zones.length - 1])[2];
-  return (
-    <div className="flex flex-col items-center">
-      <svg width="120" height="70" viewBox="0 0 120 70">
-        <path d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`} fill="none" stroke="var(--border)" strokeWidth="8" strokeLinecap="round" />
-        <path d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${nx} ${ny}`} fill="none" stroke={color} strokeWidth="8" strokeLinecap="round" />
-        <circle cx={cx} cy={cy} r="3" fill={color} />
-      </svg>
-      <div className="font-mono text-lg font-bold -mt-3" style={{ color }}>{v.toFixed(0)}</div>
-      <div className="font-mono text-[9px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>{label}</div>
     </div>
   );
 }
@@ -806,7 +894,7 @@ async function probeBackend(timeoutMs = 6000) {
   }
 }
 
-function LoginGate({ onAuthed }) {
+function LoginGate({ onAuthed, theme, onToggleTheme }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
@@ -877,16 +965,16 @@ function LoginGate({ onAuthed }) {
     }
   };
 
-  // OLED institutional login (ui-ux-pro-max design system tokens)
-  const bg = '#0f172a';
-  const panel = '#1e293b';
-  const panel2 = '#243044';
-  const border = '#1e293b';
-  const text = '#f8fafc';
-  const dim = '#94a3b8';
-  const faint = '#64748b';
-  const green = '#22c55e';
-  const red = '#ef4444';
+  // Theme tokens (ui-ux-pro-max) — follow data-theme on .omni-root
+  const bg = 'var(--void)';
+  const panel = 'var(--panel)';
+  const panel2 = 'var(--panel2)';
+  const border = 'var(--border)';
+  const text = 'var(--text)';
+  const dim = 'var(--textDim)';
+  const faint = 'var(--textFaint)';
+  const green = 'var(--emerald)';
+  const red = 'var(--coral)';
 
   return (
     <div style={{
@@ -900,7 +988,7 @@ function LoginGate({ onAuthed }) {
       color: text,
       fontFamily: "Inter, system-ui, sans-serif",
       boxSizing: 'border-box',
-      colorScheme: 'dark',
+      colorScheme: theme === 'light' ? 'light' : 'dark',
     }}>
       <div style={{
         width: '100%',
@@ -909,12 +997,29 @@ function LoginGate({ onAuthed }) {
         border: `1px solid ${border}`,
         borderRadius: 14,
         padding: 28,
-        boxShadow: '0 16px 48px rgba(0,0,0,0.55), 0 0 0 1px rgba(34,197,94,0.06)',
+        boxShadow: '0 16px 48px rgba(0,0,0,0.18), 0 0 0 1px var(--glassBorder)',
+        position: 'relative',
       }}>
+        {onToggleTheme && (
+          <button
+            type="button"
+            onClick={onToggleTheme}
+            aria-label={theme === 'light' ? 'Dark mode' : 'Light mode'}
+            className="omni-chip"
+            style={{
+              position: 'absolute', top: 16, right: 16,
+              width: 40, height: 40, borderRadius: 10,
+              border: `1px solid ${border}`, background: panel2, color: text,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            {theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
+          </button>
+        )}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
           <div style={{
             width: 40, height: 40, borderRadius: 10,
-            background: green, color: bg,
+            background: green, color: 'var(--inkOnAccent)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             fontWeight: 800, fontSize: 16,
           }}>Ω</div>
@@ -1706,11 +1811,11 @@ const TABS = [
   { key: 'CHARTS', label: 'Charts', fkey: 'F2', icon: TrendingUp },
   { key: 'SIGNALS', label: 'Signals', fkey: 'F3', icon: Radio },
   { key: 'NEWS', label: 'News', fkey: 'F4', icon: Newspaper },
-  { key: 'ANALYSIS', label: 'Desk', fkey: 'F5', icon: Layers },
+  { key: 'ANALYSIS', label: 'Analysis', fkey: 'F5', icon: Layers },
   { key: 'MONITOR', label: 'System', fkey: 'F6', icon: Activity },
 ];
 
-function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand, soundOn, onToggleSound, userEmail, onLogout }) {
+function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand, soundOn, onToggleSound, userEmail, onLogout, theme, onToggleTheme }) {
   const [cmd, setCmd] = useState('');
   const time = new Date(now).toISOString().slice(11, 19);
   const date = new Date(now).toISOString().slice(0, 10);
@@ -1721,10 +1826,10 @@ function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand,
     live: { label: 'Live', color: 'var(--emerald)', pulse: true },
   }[mode] || { label: 'Offline', color: 'var(--coral)', pulse: false };
   return (
-    <div className="omni-topbar flex items-center gap-2 sm:gap-4 px-2 sm:px-4 py-2.5 border-b shrink-0" style={{ borderColor: 'rgba(148,163,184,0.16)', background: 'rgba(15,23,42,0.78)', backdropFilter: 'blur(16px)' }}>
+    <div className="omni-topbar flex items-center gap-2 sm:gap-4 px-2 sm:px-4 py-2.5 border-b shrink-0">
       <div className="flex items-center gap-2 shrink-0">
         <div className="w-7 h-7 rounded flex items-center justify-center font-display text-[12px] font-bold"
-          style={{ background: 'var(--emerald)', color: '#05070a' }}>Ω</div>
+          style={{ background: 'var(--emerald)', color: 'var(--inkOnAccent)' }}>Ω</div>
         <span className="font-display text-sm tracking-[0.12em] hidden xs:inline sm:inline" style={{ color: 'var(--text)' }}>OMNICEE</span>
       </div>
       <div className="flex-1 flex items-center gap-2 min-w-0 max-w-full sm:max-w-md omni-hide-xs">
@@ -1739,6 +1844,16 @@ function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand,
         />
       </div>
       <div className="flex items-center gap-2 sm:gap-3 ml-auto shrink-0">
+        <button
+          type="button"
+          onClick={onToggleTheme}
+          className="omni-chip flex items-center justify-center rounded p-1.5 min-w-[40px] min-h-[40px]"
+          title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+          aria-label={theme === 'light' ? 'Dark mode' : 'Light mode'}
+          style={{ color: 'var(--text)', background: 'var(--panel2)' }}
+        >
+          {theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
+        </button>
         <button
           type="button"
           onClick={() => { onToggleSound?.(); if (!soundOn) { getAudioCtx()?.resume?.(); playSignalChime('neutral'); } }}
@@ -1832,7 +1947,7 @@ function TickerTape({ prices, changes, flash, quotes }) {
               )}
               {(q?.source === 'mt5_ea' || q?.source === 'deriv' || q?.source === 'tradingview') && (
                 <span style={{ color: 'var(--gold)', fontSize: 9 }}>
-                  {q?.source === 'mt5_ea' ? 'MT5' : q?.source === 'tradingview' ? 'TV' : 'DERIV'}
+                  {sourceLabel(q?.source)}
                 </span>
               )}
             </span>
@@ -1908,916 +2023,6 @@ function MarketVoice({ now, signals, quotes, outlook, mode }) {
           </li>
         ))}
       </ul>
-    </div>
-  );
-}
-
-/* ── LIVE CHART (candlestick, MT5/broker-style) ────────────────────────
- * lightweight-charts@5 does the actual rendering. Historical candles come
- * from GET /api/candles, which reads the exact same candleStores object
- * the live agents run technical analysis on (see api/server.js) — this
- * chart never shows a bar the signal pipeline itself didn't see. Between
- * polls, the still-forming bar is kept live by aggregating the same
- * 'market' tick stream the ticker tape already consumes, bucketed with
- * the identical Math.floor(now/durationMs)*durationMs logic index.js
- * uses server-side (TIMEFRAME_MS), so the client and server never
- * disagree about where one bar ends and the next begins.
- */
-const TIMEFRAME_MS_CLIENT = { M15: 15 * 60e3, H1: 3600e3, H4: 4 * 3600e3, D1: 86400e3 };
-/* Classic TradingView-style candles on a lighter slate board */
-const CHART_COLORS = {
-  up: '#26a69a', down: '#ef5350', grid: '#2a3544', border: '#3d4a5c',
-  text: '#c0c8d4', crosshair: '#9aa5b4', panel2: '#1e293b',
-  ema20: '#60a5fa', ema50: '#c084fc', band: '#64748b',
-};
-
-const INDICATOR_DEFS = [
-  { key: 'ema20', label: 'EMA 20', color: CHART_COLORS.ema20 },
-  { key: 'ema50', label: 'EMA 50', color: CHART_COLORS.ema50 },
-  { key: 'bb', label: 'Bollinger 20/2', color: CHART_COLORS.band },
-  { key: 'vp', label: 'Volume Profile', color: '#22d3ee' },
-  { key: 'vol', label: 'Volume bars', color: '#1fe3a8' },
-];
-
-// Standard EMA — first value is a plain SMA seed, everything after that
-// is the recursive weighted average. Returns a sparse array (undefined
-// until enough candles exist to seed it).
-function computeEMA(closes, period) {
-  if (closes.length < period) return [];
-  const k = 2 / (period + 1);
-  const out = [];
-  let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
-  out[period - 1] = ema;
-  for (let i = period; i < closes.length; i++) {
-    ema = closes[i] * k + ema * (1 - k);
-    out[i] = ema;
-  }
-  return out;
-}
-
-// Bollinger Bands — rolling mean ± (mult × rolling stddev). O(n·period),
-// trivial for the ~300 candles this chart ever holds.
-function computeBollinger(closes, period = 20, mult = 2) {
-  const upper = [], lower = [];
-  for (let i = period - 1; i < closes.length; i++) {
-    const slice = closes.slice(i - period + 1, i + 1);
-    const mean = slice.reduce((a, b) => a + b, 0) / period;
-    const variance = slice.reduce((a, b) => a + (b - mean) ** 2, 0) / period;
-    const sd = Math.sqrt(variance);
-    upper[i] = mean + mult * sd;
-    lower[i] = mean - mult * sd;
-  }
-  return { upper, lower };
-}
-
-/**
- * Fixed-range Volume Profile from OHLCV candles.
- * Distributes each bar's volume across price buckets spanned by high–low
- * (uniform within the range — standard tick-proxy when true T&S is absent).
- * Returns bins + POC + Value Area (≈70% of total volume around POC).
- */
-function computeVolumeProfile(candles, rows = 28) {
-  if (!candles?.length || rows < 4) return null;
-  let lo = Infinity, hi = -Infinity;
-  let totalVol = 0;
-  for (const c of candles) {
-    if (!Number.isFinite(c.low) || !Number.isFinite(c.high)) continue;
-    if (c.low < lo) lo = c.low;
-    if (c.high > hi) hi = c.high;
-    totalVol += Number(c.volume) || 0;
-  }
-  if (!(hi > lo) || totalVol <= 0) {
-    // Fallback: synthetic volume from range so VP still draws when feed omits volume
-    totalVol = 0;
-    for (const c of candles) {
-      const synthetic = Math.max(Math.abs((c.high ?? 0) - (c.low ?? 0)), 1e-12);
-      totalVol += synthetic;
-    }
-    if (!(hi > lo) || totalVol <= 0) return null;
-  }
-  const step = (hi - lo) / rows;
-  if (!(step > 0)) return null;
-  const bins = Array.from({ length: rows }, (_, i) => ({
-    priceLow: lo + i * step,
-    priceHigh: lo + (i + 1) * step,
-    priceMid: lo + (i + 0.5) * step,
-    volume: 0,
-  }));
-  for (const c of candles) {
-    const cLo = Number(c.low), cHi = Number(c.high);
-    if (!Number.isFinite(cLo) || !Number.isFinite(cHi) || cHi < cLo) continue;
-    let vol = Number(c.volume);
-    if (!(vol > 0)) vol = Math.max(Math.abs(cHi - cLo), 1e-12);
-    const i0 = Math.max(0, Math.min(rows - 1, Math.floor((cLo - lo) / step)));
-    const i1 = Math.max(0, Math.min(rows - 1, Math.floor((cHi - lo) / step)));
-    const span = i1 - i0 + 1;
-    const share = vol / span;
-    for (let i = i0; i <= i1; i++) bins[i].volume += share;
-  }
-  let pocIdx = 0;
-  for (let i = 1; i < rows; i++) if (bins[i].volume > bins[pocIdx].volume) pocIdx = i;
-  // Value Area: expand from POC until ~70% of volume is covered
-  let vaLow = pocIdx, vaHigh = pocIdx, covered = bins[pocIdx].volume;
-  const target = totalVol * 0.7;
-  while (covered < target && (vaLow > 0 || vaHigh < rows - 1)) {
-    const up = vaHigh < rows - 1 ? bins[vaHigh + 1].volume : -1;
-    const dn = vaLow > 0 ? bins[vaLow - 1].volume : -1;
-    if (up >= dn) { vaHigh += 1; covered += bins[vaHigh].volume; }
-    else { vaLow -= 1; covered += bins[vaLow].volume; }
-  }
-  return {
-    bins,
-    maxVol: bins[pocIdx].volume,
-    poc: bins[pocIdx].priceMid,
-    vah: bins[vaHigh].priceHigh,
-    val: bins[vaLow].priceLow,
-    totalVol,
-  };
-}
-
-/**
- * ErrorBoundary
- * ─────────────
- * FIX (root cause of "screen goes blank"): this app had NO error boundary
- * anywhere. React's default behavior on any uncaught render/effect
- * exception is to unmount the ENTIRE tree — so a bug in one panel (e.g.
- * the chart hitting a lightweight-charts edge case on a fast symbol
- * switch — see LiveChart's loadedKeyRef fix below for the specific race
- * that was actually doing this) took down the whole app, header and nav
- * included, leaving a blank page with no way back except a manual reload.
- *
- * Wrapped around each tab's content (see OmniceeDashboard's render below)
- * so a crash in one tab shows a contained "Something broke in this view"
- * message instead — the header/ticker/nav stay alive and the person can
- * just switch tabs or retry, which is what "the screen goes blank when I
- * switch [symbols]" should have been able to do all along.
- */
-class ErrorBoundary extends Component {
-  constructor(props) { super(props); this.state = { error: null }; }
-  static getDerivedStateFromError(error) { return { error }; }
-  componentDidCatch(error, info) {
-    console.error('[ErrorBoundary]', this.props.label || '', error, info?.componentStack);
-  }
-  render() {
-    if (this.state.error) {
-      return (
-        <div className="omni-panel p-4 m-2 flex flex-col items-center gap-2 text-center">
-          <span className="font-mono text-[11px]" style={{ color: 'var(--coral)' }}>
-            Something broke in {this.props.label || 'this view'} — the rest of the app is still fine.
-          </span>
-          <span className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>{String(this.state.error.message || this.state.error)}</span>
-          <button
-            onClick={() => this.setState({ error: null })}
-            className="font-mono text-[10px] px-3 py-1 rounded mt-1"
-            style={{ background: 'var(--panel2)', color: 'var(--emerald)', border: '1px solid var(--border)' }}
-          >Try again</button>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
-function LiveChart({ symbol, quote, signals, levels, onSymbolChange }) {
-  const [timeframe, setTimeframe] = useState('M15');
-  const [status, setStatus] = useState('loading'); // loading | ok | empty | error
-  const [ohlcReadout, setOhlcReadout] = useState(null);
-  const [indicators, setIndicators] = useState({ ema20: false, ema50: false, bb: false, vp: false, vol: true });
-  const [showIndicatorMenu, setShowIndicatorMenu] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-
-  const containerRef = useRef(null);
-  const vpCanvasRef = useRef(null);
-  const chartRef = useRef(null);
-  const candleSeriesRef = useRef(null);
-  const volumeSeriesRef = useRef(null);
-  const markersRef = useRef(null);
-  const priceLinesRef = useRef([]);
-  const vpLinesRef = useRef([]);
-  const srLinesRef = useRef([]);
-  const ema20SeriesRef = useRef(null);
-  const ema50SeriesRef = useRef(null);
-  const bbUpperSeriesRef = useRef(null);
-  const bbLowerSeriesRef = useRef(null);
-  const candlesRef = useRef([]);
-  const indicatorMenuRef = useRef(null);
-  const lastBarRef = useRef(null);
-  const lastVolRef = useRef(0);
-  // FIX (root cause of the "screen goes blank when I switch [symbols]"
-  // bug): on a symbol/timeframe switch, the historical reload below is
-  // async — there's a real window where candleSeriesRef.current still
-  // holds the OLD symbol's data while this effect's deps (quote, signals)
-  // have already updated to the NEW symbol. The live-tick effect used to
-  // fire in that window and call series.update() with a bar built from
-  // the new symbol's price/timestamp against the old symbol's still-
-  // loaded series — lightweight-charts requires updates to be time-
-  // ordered relative to what's already in the series, and throws when
-  // they aren't (e.g. the new symbol's bucketed tick time landing earlier
-  // than the old symbol's last loaded bar). That threw INSIDE a useEffect
-  // with no error boundary anywhere in the app (see the new ErrorBoundary
-  // above) — React's default behavior on an uncaught render/effect error
-  // is to unmount the whole tree, which is exactly "the screen goes
-  // blank". loadedKeyRef gates every write to the chart series behind
-  // "does this data actually belong to the symbol/timeframe on screen
-  // right now" so that window can't produce a mismatched write anymore.
-  const loadedKeyRef = useRef(null);
-
-  // Recompute whichever overlays are currently toggled on from the full
-  // candle set. Cheap even at 300 candles (worst case ~6k ops for
-  // Bollinger), so no need to special-case the live-tick path — every
-  // update just recomputes in full rather than maintaining incremental
-  // running state that could drift from a page-load recompute.
-  const applyIndicators = useCallback((candles) => {
-    if (!candles?.length) return;
-    const closes = candles.map(c => c.close);
-    const times = candles.map(c => c.time);
-    const toPoints = (arr) => times.map((t, i) => (arr[i] != null ? { time: t, value: arr[i] } : null)).filter(Boolean);
-
-    if (indicators.ema20 && ema20SeriesRef.current) ema20SeriesRef.current.setData(toPoints(computeEMA(closes, 20)));
-    if (indicators.ema50 && ema50SeriesRef.current) ema50SeriesRef.current.setData(toPoints(computeEMA(closes, 50)));
-    if (indicators.bb && bbUpperSeriesRef.current) {
-      const { upper, lower } = computeBollinger(closes, 20, 2);
-      bbUpperSeriesRef.current.setData(toPoints(upper));
-      bbLowerSeriesRef.current.setData(toPoints(lower));
-    }
-  }, [indicators]);
-
-  // Mount the chart instance once. Symbol/timeframe switches below reuse
-  // it via setData() rather than tearing it down — recreating a canvas
-  // chart on every symbol click is the kind of thing that looks fine in
-  // a demo and then jitters/flickers the moment it's live 24/7.
-  useEffect(() => {
-    if (!containerRef.current) return;
-    let chart;
-    try {
-    chart = createChart(containerRef.current, {
-      autoSize: true,
-      layout: { background: { color: 'transparent' }, textColor: CHART_COLORS.text, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 },
-      grid: { vertLines: { color: CHART_COLORS.grid }, horzLines: { color: CHART_COLORS.grid } },
-      crosshair: {
-        mode: CrosshairMode.Normal,
-        vertLine: { color: CHART_COLORS.crosshair, width: 1, style: LineStyle.Dashed, labelBackgroundColor: CHART_COLORS.panel2 },
-        horzLine: { color: CHART_COLORS.crosshair, width: 1, style: LineStyle.Dashed, labelBackgroundColor: CHART_COLORS.panel2 },
-      },
-      // Broker-style: tight price scale, leave room for volume strip
-      rightPriceScale: {
-        borderColor: CHART_COLORS.border,
-        scaleMargins: { top: 0.06, bottom: 0.18 },
-        entireTextOnly: false,
-      },
-      timeScale: {
-        borderColor: CHART_COLORS.border,
-        timeVisible: true,
-        secondsVisible: false,
-        // More candles on screen (MT5-like density)
-        barSpacing: 7,
-        minBarSpacing: 3,
-        rightOffset: 6,
-        shiftVisibleRangeOnNewBar: true,
-        fixLeftEdge: false,
-        fixRightEdge: false,
-      },
-      handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
-      handleScale: { axisPressedMouseMove: true, mouseWheel: true, pinch: true },
-    });
-
-    // Broker-style filled candles (TradingView / MT5 density)
-    const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: CHART_COLORS.up,
-      downColor: CHART_COLORS.down,
-      borderVisible: true,
-      borderUpColor: CHART_COLORS.up,
-      borderDownColor: CHART_COLORS.down,
-      wickUpColor: CHART_COLORS.up,
-      wickDownColor: CHART_COLORS.down,
-      priceLineVisible: true,
-      lastValueVisible: true,
-      // precision applied on each symbol load via applyOptions
-      priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
-    });
-    // Volume as a squashed overlay in the bottom 20% of the same pane —
-    // the standard lightweight-charts pattern, avoids multi-pane sizing
-    // quirks for a first cut.
-    const volumeSeries = chart.addSeries(HistogramSeries, {
-      priceFormat: { type: 'volume' },
-      priceScaleId: 'volume',
-      color: CHART_COLORS.up,
-    });
-    volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
-
-    let markers = null;
-    try { markers = createSeriesMarkers(candleSeries, []); } catch (e) { console.warn('markers', e); }
-
-    // Overlay indicators — created hidden, toggled visible from the menu.
-    // Kept as separate series (rather than baked into candle data) so
-    // switching them on/off is a plain visibility flip, no refetch.
-    const ema20Series = chart.addSeries(LineSeries, { color: CHART_COLORS.ema20, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, visible: false });
-    const ema50Series = chart.addSeries(LineSeries, { color: CHART_COLORS.ema50, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, visible: false });
-    const bbUpperSeries = chart.addSeries(LineSeries, { color: CHART_COLORS.band, lineWidth: 1, lineStyle: LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false, visible: false });
-    const bbLowerSeries = chart.addSeries(LineSeries, { color: CHART_COLORS.band, lineWidth: 1, lineStyle: LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false, visible: false });
-
-    const onCrosshairMove = (param) => {
-      const bar = param.seriesData?.get(candleSeries);
-      setOhlcReadout(bar ? { o: bar.open, h: bar.high, l: bar.low, c: bar.close } : null);
-    };
-    chart.subscribeCrosshairMove(onCrosshairMove);
-
-    chartRef.current = chart;
-    candleSeriesRef.current = candleSeries;
-    volumeSeriesRef.current = volumeSeries;
-    markersRef.current = markers;
-    ema20SeriesRef.current = ema20Series;
-    ema50SeriesRef.current = ema50Series;
-    bbUpperSeriesRef.current = bbUpperSeries;
-    bbLowerSeriesRef.current = bbLowerSeries;
-    // Force layout after mount — hidden/0-size parents blank the canvas
-    requestAnimationFrame(() => {
-      try {
-        chart.applyOptions({ width: containerRef.current?.clientWidth || 600, height: containerRef.current?.clientHeight || 320 });
-        chart.timeScale().fitContent();
-      } catch (_) {}
-    });
-    } catch (err) {
-      console.error('[OMNICEE] chart mount failed', err);
-      return;
-    }
-
-    return () => {
-      try {
-        if (chart) {
-          try { chart.unsubscribeCrosshairMove(onCrosshairMove); } catch (_) {}
-          try { chart.remove(); } catch (_) {}
-        }
-      } catch (_) {}
-      chartRef.current = null;
-      candleSeriesRef.current = null;
-      volumeSeriesRef.current = null;
-      markersRef.current = null;
-      ema20SeriesRef.current = null;
-      ema50SeriesRef.current = null;
-      bbUpperSeriesRef.current = null;
-      bbLowerSeriesRef.current = null;
-    };
-  }, []);
-
-  // Load history on symbol/timeframe change (race-safe, clears old series)
-  useEffect(() => {
-    if (!symbol) return;
-    let cancelled = false;
-    let reqId = 0;
-    lastBarRef.current = null;
-    setStatus('loading');
-    setOhlcReadout(null);
-    try {
-      candleSeriesRef.current?.setData([]);
-      volumeSeriesRef.current?.setData([]);
-      if (markersRef.current?.setMarkers) markersRef.current.setMarkers([]);
-    } catch (_) {}
-    loadedKeyRef.current = null; // block live-tick writes until THIS combo's history actually lands
-    const key = `${symbol}:${timeframe}`;
-
-    async function load() {
-      const myId = ++reqId;
-      try {
-        const data = await omniFetch(`/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&limit=500`);
-        if (cancelled || myId !== reqId || !candleSeriesRef.current) return;
-        const candles = (data?.candles || []).filter(c =>
-          Number.isFinite(c.time) && Number.isFinite(c.open) && Number.isFinite(c.high)
-          && Number.isFinite(c.low) && Number.isFinite(c.close) && c.time > 1e8
-        );
-        if (!candles.length) {
-          try { candleSeriesRef.current.setData([]); volumeSeriesRef.current?.setData([]); } catch (_) {}
-          setStatus('empty');
-          loadedKeyRef.current = key;
-          return;
-        }
-        // Symbol-native precision (broker-like digits)
-        const prec = DECIMALS[symbol] ?? 2;
-        const minMove = prec === 4 ? 0.0001 : prec === 3 ? 0.001 : prec === 1 ? 0.1 : 0.01;
-        try {
-          candleSeriesRef.current.applyOptions({
-            priceFormat: { type: 'price', precision: prec, minMove },
-          });
-        } catch (_) {}
-        candleSeriesRef.current.setData(candles.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })));
-        volumeSeriesRef.current?.setData(candles.map(c => ({
-          time: c.time,
-          value: c.volume || 0,
-          color: c.close >= c.open ? 'rgba(38,166,154,0.35)' : 'rgba(239,83,80,0.35)',
-        })));
-        candlesRef.current = candles.map(({ time, open, high, low, close, volume }) => ({
-          time, open, high, low, close, volume: volume || 0,
-        }));
-        applyIndicators(candlesRef.current);
-        const last = candles[candles.length - 1];
-        lastBarRef.current = { time: last.time, open: last.open, high: last.high, low: last.low, close: last.close };
-        lastVolRef.current = last.volume || 0;
-        setOhlcReadout({ o: last.open, h: last.high, l: last.low, c: last.close });
-        // Show many recent candles (not fit-all which compresses history to a smear)
-        try {
-          const n = candles.length;
-          // Target ~100–140 bars on screen for MT5/TV density
-          const visible = Math.min(Math.max(80, Math.floor(n * 0.45)), 140, n);
-          const from = Math.max(0, n - visible) - 0.5;
-          const to = n - 1 + 3; // small right padding for live bar
-          chartRef.current?.timeScale()?.setVisibleLogicalRange({ from, to });
-        } catch (_) {
-          try { chartRef.current?.timeScale()?.fitContent?.(); } catch (__) {}
-        }
-        loadedKeyRef.current = key;
-        setStatus('ok');
-      } catch (e) {
-        if (!cancelled && myId === reqId) setStatus('error');
-        // deliberately NOT setting loadedKeyRef here — an errored load means
-        // we don't actually know the series is in a good state for this
-        // symbol/timeframe, so live ticks stay gated off until the next
-        // successful poll rather than risk writing over unknown contents.
-      }
-    }
-    load();
-    const poll = setInterval(load, 45000);
-    return () => { cancelled = true; clearInterval(poll); };
-  }, [symbol, timeframe]);
-
-  // Keep the current bar live between polls using the same tick stream
-  // the header bid/ask readout already uses. Bucketing mirrors index.js's
-  // TIMEFRAME_MS math exactly so this bar and the server's eventual
-  // closed bar for the same window never disagree on boundaries.
-  // FIX: was using quote.price (mid) here while historical bars now come
-  // bid-based from /api/candles — would've put a visibly different-
-  // looking bar right at the point where the eye compares it to the
-  // ticker most. Use bid (matching the ticker/header's own coral figure)
-  // whenever it exists, same fallback order the ticker itself uses.
-  useEffect(() => {
-    // Broker charts (MT5) typically build candles from bid; if ask is present and
-    // the spread is sane, still prefer bid so the series matches MT5 bid OHLC.
-    const bid = Number(quote?.bid);
-    const ask = Number(quote?.ask);
-    const mid = Number(quote?.price);
-    let tickPrice = Number.isFinite(bid) ? bid : mid;
-    if (Number.isFinite(bid) && Number.isFinite(ask) && bid > 0) {
-      const spr = (ask - bid) / bid;
-      // only fall back to mid if spread looks broken (>2%)
-      if (spr > 0.02 && Number.isFinite(mid)) tickPrice = mid;
-    }
-    if (!candleSeriesRef.current || !Number.isFinite(tickPrice)) return;
-    // FIX (screen-blanks-on-switch, see ErrorBoundary/loadedKeyRef comments
-    // above): don't write into the series until the history for THIS
-    // symbol:timeframe has actually landed — otherwise a live tick can hit
-    // a series that's still showing the PREVIOUS symbol's data, and
-    // lightweight-charts throws (uncaught, with no boundary = blank app)
-    // if the computed bucket time lands before that stale series' last bar.
-    if (loadedKeyRef.current !== `${symbol}:${timeframe}`) return;
-    const durationMs = TIMEFRAME_MS_CLIENT[timeframe];
-    const bucketTime = Math.floor((quote.ts || Date.now()) / durationMs) * (durationMs / 1000);
-    const prev = lastBarRef.current;
-    const bar = (!prev || prev.time !== bucketTime)
-      ? { time: bucketTime, open: prev ? prev.close : tickPrice, high: tickPrice, low: tickPrice, close: tickPrice }
-      : { ...prev, high: Math.max(prev.high, tickPrice), low: Math.min(prev.low, tickPrice), close: tickPrice };
-    // Belt-and-suspenders: even with loadedKeyRef gating the common case,
-    // still never let a chart-library assertion (e.g. an out-of-order
-    // time from a delayed/reordered tick) throw uncaught here — that's
-    // exactly the class of error that used to blank the whole screen.
-    try {
-      candleSeriesRef.current.update(bar);
-      volumeSeriesRef.current?.update({ time: bar.time, value: lastVolRef.current, color: bar.close >= bar.open ? 'rgba(31,227,168,0.35)' : 'rgba(255,84,112,0.35)' });
-      lastBarRef.current = bar;
-      const cs = candlesRef.current;
-      if (cs.length && cs[cs.length - 1].time === bar.time) cs[cs.length - 1] = bar;
-      else cs.push(bar);
-      applyIndicators(cs);
-    } catch (err) {
-      console.warn('[LiveChart] skipped an out-of-order tick update:', err.message);
-    }
-  }, [quote?.bid, quote?.price, quote?.ts, timeframe, symbol]);
-
-  // Signal overlay: arrows for every signal on this symbol, entry/SL/TP1
-  // price lines for only the most recent one (all of them would just be
-  // clutter on a live-forever chart).
-  useEffect(() => {
-    if (!markersRef.current || !candleSeriesRef.current) return;
-    if (loadedKeyRef.current !== `${symbol}:${timeframe}`) return; // same guard — don't draw against a series mid-transition
-    try {
-      const durationMs = TIMEFRAME_MS_CLIENT[timeframe];
-      const list = (signals || []).filter(s => s.action === 'BUY' || s.action === 'SELL');
-
-      markersRef.current.setMarkers(list.map(s => {
-        const ts = Number(s.timestamp || Date.now());
-        const sec = Math.floor((ts > 1e12 ? ts : ts * 1000) / durationMs) * (durationMs / 1000);
-        return {
-          time: sec,
-          position: s.action === 'BUY' ? 'belowBar' : 'aboveBar',
-          color: s.action === 'BUY' ? CHART_COLORS.up : CHART_COLORS.down,
-          shape: s.action === 'BUY' ? 'arrowUp' : 'arrowDown',
-          text: `${s.action}${s.score != null ? ' ' + Math.round(Number(s.score)) : ''}`,
-          size: 2,
-        };
-      }));
-
-      priceLinesRef.current.forEach(l => { try { candleSeriesRef.current.removePriceLine(l); } catch (_) {} });
-      priceLinesRef.current = [];
-      const latest = list[0];
-      if (latest) {
-        const lines = [];
-        if (Number.isFinite(latest.entry)) lines.push({ price: latest.entry, color: CHART_COLORS.text, lineStyle: LineStyle.Solid, title: 'entry' });
-        if (Number.isFinite(latest.stopLoss)) lines.push({ price: latest.stopLoss, color: CHART_COLORS.down, lineStyle: LineStyle.Dashed, title: 'SL' });
-        if (Number.isFinite(latest.targets?.[0])) lines.push({ price: latest.targets[0], color: CHART_COLORS.up, lineStyle: LineStyle.Dashed, title: 'TP1' });
-        priceLinesRef.current = lines.map(opts => candleSeriesRef.current.createPriceLine({ ...opts, lineWidth: 1, axisLabelVisible: true }));
-      }
-    } catch (err) {
-      console.warn('[LiveChart] skipped a marker/price-line update:', err.message);
-    }
-  }, [signals, timeframe, symbol]);
-
-  // Support/resistance drawn straight on the price axis (H1 swing high/low
-  // from /api/levels) so it moves with the chart instead of living in a
-  // separate text panel.
-  useEffect(() => {
-    if (!candleSeriesRef.current) return;
-    srLinesRef.current.forEach(l => { try { candleSeriesRef.current.removePriceLine(l); } catch (_) {} });
-    srLinesRef.current = [];
-    const lv = levels?.[symbol];
-    if (!lv) return;
-    const lines = [];
-    if (Number.isFinite(lv.resistance)) lines.push({ price: lv.resistance, color: CHART_COLORS.up, lineStyle: LineStyle.Dotted, title: 'R' });
-    if (Number.isFinite(lv.support)) lines.push({ price: lv.support, color: CHART_COLORS.down, lineStyle: LineStyle.Dotted, title: 'S' });
-    srLinesRef.current = lines.map(opts => candleSeriesRef.current.createPriceLine({ ...opts, lineWidth: 1, axisLabelVisible: true }));
-  }, [levels, symbol]);
-
-  // Flip visibility + recompute whenever the indicator toggles change.
-  useEffect(() => {
-    ema20SeriesRef.current?.applyOptions({ visible: indicators.ema20 });
-    ema50SeriesRef.current?.applyOptions({ visible: indicators.ema50 });
-    bbUpperSeriesRef.current?.applyOptions({ visible: indicators.bb });
-    bbLowerSeriesRef.current?.applyOptions({ visible: indicators.bb });
-    volumeSeriesRef.current?.applyOptions({ visible: indicators.vol !== false });
-    applyIndicators(candlesRef.current);
-  }, [indicators, applyIndicators]);
-
-  // Volume Profile overlay — canvas bars on the left + POC / VAH / VAL price lines
-  useEffect(() => {
-    const canvas = vpCanvasRef.current;
-    const chart = chartRef.current;
-    const series = candleSeriesRef.current;
-    if (!canvas || !chart || !series) return undefined;
-
-    // Clear any previous VP price lines (separate from signal entry/SL lines)
-    const clearVpLines = () => {
-      (vpLinesRef.current || []).forEach((l) => {
-        try { series.removePriceLine(l); } catch (_) {}
-      });
-      vpLinesRef.current = [];
-    };
-
-    const draw = () => {
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-      const wrap = canvas.parentElement;
-      const w = wrap?.clientWidth || 0;
-      const h = wrap?.clientHeight || 0;
-      if (w < 8 || h < 8) return;
-      const dpr = window.devicePixelRatio || 1;
-      if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
-        canvas.width = Math.floor(w * dpr);
-        canvas.height = Math.floor(h * dpr);
-        canvas.style.width = `${w}px`;
-        canvas.style.height = `${h}px`;
-      }
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, w, h);
-
-      if (!indicators.vp) {
-        clearVpLines();
-        return;
-      }
-
-      const profile = computeVolumeProfile(candlesRef.current, 28);
-      if (!profile) {
-        clearVpLines();
-        return;
-      }
-
-      const maxBarW = Math.min(120, Math.floor(w * 0.28));
-      const { bins, maxVol, poc, vah, val } = profile;
-
-      for (const bin of bins) {
-        const y1 = series.priceToCoordinate(bin.priceHigh);
-        const y2 = series.priceToCoordinate(bin.priceLow);
-        if (y1 == null || y2 == null) continue;
-        const top = Math.min(y1, y2);
-        const bot = Math.max(y1, y2);
-        const bh = Math.max(1, bot - top - 0.5);
-        const bw = maxVol > 0 ? (bin.volume / maxVol) * maxBarW : 0;
-        if (bw < 0.5) continue;
-        const inVA = bin.priceMid >= val && bin.priceMid <= vah;
-        const isPoc = Math.abs(bin.priceMid - poc) < (bins[0].priceHigh - bins[0].priceLow) * 0.6;
-        ctx.fillStyle = isPoc
-          ? 'rgba(240, 180, 41, 0.55)'
-          : inVA
-            ? 'rgba(34, 211, 238, 0.28)'
-            : 'rgba(94, 168, 255, 0.14)';
-        ctx.fillRect(0, top, bw, bh);
-      }
-
-      // POC / VAH / VAL as dashed price lines (recreate when profile changes)
-      clearVpLines();
-      try {
-        vpLinesRef.current = [
-          series.createPriceLine({
-            price: poc,
-            color: '#f0b429',
-            lineWidth: 1,
-            lineStyle: LineStyle.Solid,
-            axisLabelVisible: true,
-            title: 'POC',
-          }),
-          series.createPriceLine({
-            price: vah,
-            color: '#22d3ee',
-            lineWidth: 1,
-            lineStyle: LineStyle.Dashed,
-            axisLabelVisible: true,
-            title: 'VAH',
-          }),
-          series.createPriceLine({
-            price: val,
-            color: '#22d3ee',
-            lineWidth: 1,
-            lineStyle: LineStyle.Dashed,
-            axisLabelVisible: true,
-            title: 'VAL',
-          }),
-        ];
-      } catch (_) { /* series may be mid-swap */ }
-    };
-
-    draw();
-    // Redraw when user pans/zooms so bars stay locked to price levels
-    const onRange = () => { requestAnimationFrame(draw); };
-    try { chart.timeScale().subscribeVisibleLogicalRangeChange(onRange); } catch (_) {}
-    try { chart.subscribeCrosshairMove(onRange); } catch (_) {}
-    window.addEventListener('resize', onRange);
-    const ro = typeof ResizeObserver !== 'undefined' && canvas.parentElement
-      ? new ResizeObserver(() => requestAnimationFrame(draw))
-      : null;
-    if (ro && canvas.parentElement) ro.observe(canvas.parentElement);
-
-    return () => {
-      try { chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange); } catch (_) {}
-      window.removeEventListener('resize', onRange);
-      if (ro) ro.disconnect();
-      clearVpLines();
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        const w = canvas.parentElement?.clientWidth || 0;
-        const h = canvas.parentElement?.clientHeight || 0;
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-      }
-    };
-  }, [indicators.vp, symbol, timeframe, status, expanded]);
-
-  // Close the indicator picker on an outside click.
-  useEffect(() => {
-    if (!showIndicatorMenu) return;
-    const onClick = (e) => { if (indicatorMenuRef.current && !indicatorMenuRef.current.contains(e.target)) setShowIndicatorMenu(false); };
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, [showIndicatorMenu]);
-
-  // Esc exits full-screen; hide ticker/topbar via body class; lock scroll.
-  useEffect(() => {
-    if (expanded) {
-      document.body.classList.add('omni-chart-expanded');
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.classList.remove('omni-chart-expanded');
-      document.body.style.overflow = '';
-    }
-    const onKey = (e) => { if (e.key === 'Escape') setExpanded(false); };
-    if (expanded) window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('keydown', onKey);
-      document.body.classList.remove('omni-chart-expanded');
-      document.body.style.overflow = '';
-    };
-  }, [expanded]);
-
-  // Keep lightweight-charts sized to the fluid container on every layout change
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return undefined;
-    const fit = () => {
-      try {
-        if (!chartRef.current) return;
-        const w = el.clientWidth || 1;
-        const h = el.clientHeight || 1;
-        if (w < 2 || h < 2) return;
-        chartRef.current.applyOptions({ width: w, height: h });
-      } catch (_) {}
-    };
-    fit();
-    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => {
-      requestAnimationFrame(fit);
-    }) : null;
-    if (ro) ro.observe(el);
-    window.addEventListener('resize', fit);
-    window.addEventListener('orientationchange', fit);
-    const t = setTimeout(fit, 50);
-    const t2 = setTimeout(fit, 300);
-    return () => {
-      if (ro) ro.disconnect();
-      window.removeEventListener('resize', fit);
-      window.removeEventListener('orientationchange', fit);
-      clearTimeout(t);
-      clearTimeout(t2);
-    };
-  }, [expanded, symbol, timeframe]);
-
-  // Force chart to re-measure after expand/collapse. On mobile (Telegram /
-  // PWA) the fixed full-screen shell often mounts at 0×0 for a frame; without
-  // staggered refits the canvas stays blank until a manual orientation change.
-  useEffect(() => {
-    const fit = () => {
-      try {
-        if (!chartRef.current || !containerRef.current) return;
-        const w = containerRef.current.clientWidth;
-        const h = containerRef.current.clientHeight;
-        if (w < 8 || h < 8) return;
-        chartRef.current.applyOptions({ width: w, height: h });
-        chartRef.current.timeScale().fitContent();
-      } catch (_) {}
-    };
-    fit();
-    const t1 = setTimeout(fit, 50);
-    const t2 = setTimeout(fit, 200);
-    const t3 = setTimeout(fit, 500);
-    window.addEventListener('resize', fit);
-    try { window.visualViewport?.addEventListener('resize', fit); } catch (_) {}
-    return () => {
-      clearTimeout(t1); clearTimeout(t2); clearTimeout(t3);
-      window.removeEventListener('resize', fit);
-      try { window.visualViewport?.removeEventListener('resize', fit); } catch (_) {}
-    };
-  }, [expanded, symbol, timeframe]);
-
-  return (
-    <div
-      className={`omni-chart-shell ${expanded ? 'is-expanded fixed inset-0 z-[9999] p-2 sm:p-3 flex flex-col' : 'w-full'}`}
-      style={expanded ? {
-        background: 'var(--void)',
-        // Extra top pad so symbol/TF row clears Telegram header + old ticker space
-        paddingTop: 'max(12px, calc(env(safe-area-inset-top, 0px) + 8px))',
-        paddingBottom: 'max(12px, env(safe-area-inset-bottom, 0px))',
-      } : undefined}
-    >
-      {/* Symbols + timeframes always visible (preview AND full). Indicators + VP in both. */}
-      <div
-        className={`shrink-0 space-y-1.5 ${expanded ? 'pb-2 mb-1 border-b' : 'mb-1.5'}`}
-        style={expanded ? { borderColor: 'var(--border)' } : undefined}
-      >
-        {/* Symbol chips — horizontal scroll on phones */}
-        <div className="flex gap-1.5 items-center overflow-x-auto omni-scroll" style={{ WebkitOverflowScrolling: 'touch' }}>
-          {typeof onSymbolChange === 'function' && SYMBOLS.map(sym => (
-            <button
-              key={sym}
-              type="button"
-              onClick={() => onSymbolChange(sym)}
-              className={`omni-chip font-mono rounded transition-colors shrink-0 ${expanded ? 'text-[13px] px-3 py-2.5 min-h-[44px]' : 'text-[11px] px-2.5 py-1.5 min-h-[34px]'}`}
-              style={{
-                background: symbol === sym ? 'var(--emerald)' : 'var(--panel2)',
-                color: symbol === sym ? '#05070a' : 'var(--textDim)',
-              }}
-            >
-              {symLabel(sym)}
-            </button>
-          ))}
-        </div>
-        {/* Timeframes + VP + Indicators + Full/Close */}
-        <div className="flex items-center gap-1.5 flex-wrap">
-          {TIMEFRAMES.map(tf => (
-            <button
-              key={tf}
-              type="button"
-              onClick={() => setTimeframe(tf)}
-              className={`omni-chip font-mono rounded ${expanded ? 'text-[13px] px-3 py-2.5 min-h-[44px]' : 'text-[11px] px-2.5 py-1.5 min-h-[34px]'}`}
-              style={{
-                background: timeframe === tf ? 'var(--panel2)' : 'transparent',
-                color: timeframe === tf ? 'var(--emerald)' : 'var(--textFaint)',
-                border: '1px solid var(--border)',
-              }}
-            >
-              {tf}
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => setIndicators(s => ({ ...s, vp: !s.vp }))}
-            className={`omni-chip font-mono rounded ${expanded ? 'text-[13px] px-3 py-2.5 min-h-[44px]' : 'text-[11px] px-2.5 py-1.5 min-h-[34px]'}`}
-            style={{
-              background: indicators.vp ? 'rgba(34,211,238,0.18)' : 'transparent',
-              color: indicators.vp ? '#22d3ee' : 'var(--textFaint)',
-              border: `1px solid ${indicators.vp ? '#22d3ee' : 'var(--border)'}`,
-            }}
-            title="Volume Profile"
-          >
-            VP
-          </button>
-          <div className="relative" ref={indicatorMenuRef}>
-            <button
-              type="button"
-              onClick={() => setShowIndicatorMenu(v => !v)}
-              className={`omni-chip font-mono rounded flex items-center gap-1 ${expanded ? 'text-[13px] px-3 py-2.5 min-h-[44px]' : 'text-[11px] px-2.5 py-1.5 min-h-[34px]'}`}
-              style={{
-                background: showIndicatorMenu ? 'var(--panel2)' : 'transparent',
-                color: showIndicatorMenu ? 'var(--emerald)' : 'var(--textFaint)',
-                border: '1px solid var(--border)',
-              }}
-            >
-              <SlidersHorizontal size={expanded ? 16 : 14} />
-              {expanded ? 'Indicators' : 'Ind'}
-            </button>
-            {showIndicatorMenu && (
-              <div
-                className="absolute z-30 mt-1 left-0 rounded-lg p-3 space-y-2 shadow-lg"
-                style={{ background: 'var(--panel2)', border: '1px solid var(--border)', minWidth: 200 }}
-              >
-                {INDICATOR_DEFS.map(ind => (
-                  <label
-                    key={ind.key}
-                    className="flex items-center gap-2.5 font-mono text-[13px] cursor-pointer whitespace-nowrap min-h-[40px]"
-                    style={{ color: 'var(--textDim)' }}
-                  >
-                    <input
-                      type="checkbox"
-                      className="w-4 h-4"
-                      checked={!!indicators[ind.key]}
-                      onChange={() => setIndicators(s => ({ ...s, [ind.key]: !s[ind.key] }))}
-                    />
-                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: ind.color }} />
-                    {ind.label}
-                  </label>
-                ))}
-              </div>
-            )}
-          </div>
-          <div className="flex-1" />
-          {ohlcReadout && expanded && (
-            <div className="font-mono text-[11px] flex gap-2 shrink-0 hidden sm:flex" style={{ color: 'var(--textDim)' }}>
-              <span>O <span style={{ color: 'var(--text)' }}>{fmtPrice(symbol, ohlcReadout.o)}</span></span>
-              <span>H <span style={{ color: 'var(--emerald)' }}>{fmtPrice(symbol, ohlcReadout.h)}</span></span>
-              <span>L <span style={{ color: 'var(--coral)' }}>{fmtPrice(symbol, ohlcReadout.l)}</span></span>
-              <span>C <span style={{ color: 'var(--text)' }}>{fmtPrice(symbol, ohlcReadout.c)}</span></span>
-            </div>
-          )}
-          {expanded ? (
-            <button
-              type="button"
-              onClick={() => setExpanded(false)}
-              title="Close full chart"
-              className="font-mono px-3 py-2.5 rounded flex items-center gap-1.5 min-h-[44px] min-w-[44px] text-[12px] shrink-0"
-              style={{ color: 'var(--text)', border: '1px solid var(--border)', background: 'var(--panel2)' }}
-            >
-              <Minimize2 size={18} /> Close
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setExpanded(true)}
-              className="font-mono rounded flex items-center gap-1.5 text-[12px] px-3 py-2 min-h-[40px] min-w-[40px] shrink-0"
-              style={{ color: '#05070a', background: 'var(--emerald)', border: 'none', fontWeight: 700, boxShadow: '0 0 0 1px rgba(31,227,168,0.35)' }}
-              title="Expand chart full screen"
-            >
-              <Maximize2 size={18} strokeWidth={2.5} /> Full
-            </button>
-          )}
-        </div>
-      </div>
-      <div className="omni-chart-canvas-wrap flex-1 min-h-0">
-        {status === 'empty' && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center">
-            <WaitingForBackend height={120} label="No chart data yet — try H1 or wait a minute" />
-          </div>
-        )}
-        {status === 'error' && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center">
-            <WaitingForBackend height={120} label="Chart temporarily unavailable — retrying…" />
-          </div>
-        )}
-        {status === 'loading' && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center">
-            <WaitingForBackend height={120} label="Loading candles…" />
-          </div>
-        )}
-        <div ref={containerRef} className="omni-chart-canvas" style={{ opacity: status === 'ok' ? 1 : 0.2 }} />
-        {/* Volume Profile overlay — left-side histogram locked to price scale */}
-        <canvas
-          ref={vpCanvasRef}
-          className="pointer-events-none absolute inset-0 z-[5]"
-          style={{ display: indicators.vp ? 'block' : 'none' }}
-          aria-hidden
-        />
-      </div>
     </div>
   );
 }
@@ -2962,13 +2167,14 @@ const TV_SYMBOL = {
   UUP: 'AMEX:UUP',
 };
 
-function TradingViewChart({ symbol, className = '' }) {
+function TradingViewChart({ symbol, className = '', theme = 'dark' }) {
   const hostRef = useRef(null);
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return undefined;
     let cancelled = false;
     const id = `tv_${symbol}_${Math.random().toString(36).slice(2, 8)}`;
+    const tvTheme = theme === 'light' ? 'light' : 'dark';
 
     const boot = () => {
       if (cancelled || !window.TradingView || !hostRef.current) return;
@@ -2985,15 +2191,15 @@ function TradingViewChart({ symbol, className = '' }) {
           symbol: TV_SYMBOL[symbol] || symbol,
           interval: '15',
           timezone: 'Etc/UTC',
-          theme: 'dark',
+          theme: tvTheme,
           style: '1',
           locale: 'en',
-          toolbar_bg: '#0b1220',
+          toolbar_bg: tvTheme === 'light' ? '#eef2f7' : '#0b1220',
           enable_publishing: false,
           hide_top_toolbar: false,
           hide_legend: false,
           hide_side_toolbar: typeof window !== 'undefined' && window.innerWidth < 768,
-          allow_symbol_change: true,
+          allow_symbol_change: false,
           withdateranges: true,
           details: false,
           hotlist: false,
@@ -3028,61 +2234,119 @@ function TradingViewChart({ symbol, className = '' }) {
       cancelled = true;
       try { if (hostRef.current) hostRef.current.innerHTML = ''; } catch (_) {}
     };
-  }, [symbol]);
+  }, [symbol, theme]);
 
   return <div ref={hostRef} className={`omni-tv-host ${className}`.trim()} />;
 }
 
-/** Full-screen TradingView desk */
-function ChartsTab({ quotes, mode }) {
-  const [chartSymbol, setChartSymbol] = useState('XAUUSD');
-  const q = quotes?.[chartSymbol];
+/** Full-screen TradingView desk + live signal rail (only chart in the app) */
+function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }) {
+  const [localSymbol, setLocalSymbol] = useState(chartSymbol || 'XAUUSD');
+  useEffect(() => {
+    if (chartSymbol) setLocalSymbol(chartSymbol);
+  }, [chartSymbol]);
+  const active = chartSymbol || localSymbol;
+  const setActive = (sym) => {
+    setLocalSymbol(sym);
+    onSymbolChange?.(sym);
+  };
+  const q = quotes?.[active];
+  const liveSignals = useMemo(
+    () => (signals || [])
+      .filter(s => s.symbol === active && isFireAction(s.action))
+      .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+      .slice(0, 12),
+    [signals, active],
+  );
+  const latest = liveSignals[0];
   return (
-    <div className="omni-charts-page">
+    <div className="omni-charts-grid">
       <div className="omni-panel omni-charts-toolbar px-3 py-2 flex flex-wrap gap-1.5 items-center">
         <span className="font-mono text-[10px] uppercase tracking-wider mr-1" style={{ color: 'var(--textFaint)' }}>Symbol</span>
         {SYMBOLS.map(sym => (
           <button
             key={sym}
             type="button"
-            onClick={() => setChartSymbol(sym)}
+            onClick={() => setActive(sym)}
             className="omni-chip font-mono text-[11px] px-2.5 py-1.5 rounded-full min-h-[40px]"
+            aria-pressed={active === sym}
             style={{
-              color: chartSymbol === sym ? '#0b1220' : 'var(--textDim)',
-              background: chartSymbol === sym ? 'var(--emerald)' : 'rgba(15,23,42,0.5)',
-              border: '1px solid rgba(148,163,184,0.2)',
-              fontWeight: chartSymbol === sym ? 700 : 500,
+              color: active === sym ? 'var(--inkOnAccent)' : 'var(--textDim)',
+              background: active === sym ? 'var(--emerald)' : 'var(--panel2)',
+              border: '1px solid var(--glassBorder)',
+              fontWeight: active === sym ? 700 : 500,
             }}
           >
             {symLabel(sym)}
           </button>
         ))}
         <span className="ml-auto font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
-          {q?.source === 'mt5_ea' ? 'MT5 bid' : q?.source === 'tradingview' ? 'TradingView' : q?.source || (mode === 'live' ? 'feed' : '—')}
+          {sourceLabel(q?.source) || (mode === 'live' ? 'feed' : '—')}
           {q?.bid != null && q?.ask != null && (
-            <> · <span style={{ color: 'var(--coral)' }}>{fmtPrice(chartSymbol, q.bid)}</span>
+            <> · <span style={{ color: 'var(--coral)' }}>{fmtPrice(active, q.bid)}</span>
             {' / '}
-            <span style={{ color: 'var(--emerald)' }}>{fmtPrice(chartSymbol, q.ask)}</span></>
+            <span style={{ color: 'var(--emerald)' }}>{fmtPrice(active, q.ask)}</span></>
           )}
         </span>
       </div>
       <div className="omni-panel omni-charts-stage">
-        <ErrorBoundary key={'tv-' + chartSymbol} label="TradingView">
-          <TradingViewChart symbol={chartSymbol} />
+        <ErrorBoundary key={'tv-' + active + (theme || 'dark')} label="TradingView">
+          <TradingViewChart symbol={active} theme={theme} />
         </ErrorBoundary>
+        {latest && (
+          <div className="omni-chart-hud" role="status" aria-live="polite">
+            <div className="flex items-center gap-2 font-mono text-[12px]">
+              <span style={{ color: latest.action === 'BUY' || latest.action === 'LONG' ? 'var(--emerald)' : 'var(--coral)', fontWeight: 700 }}>
+                {latest.action}
+              </span>
+              <span style={{ color: 'var(--text)' }}>{symLabel(latest.symbol)}</span>
+              <span style={{ color: 'var(--textDim)' }}>{latest.timeframe}</span>
+              <span className="ml-auto" style={{ color: 'var(--gold)' }}>{gradeFor(signalScore(latest))} {signalScore(latest)}</span>
+            </div>
+            <div className="font-mono text-[10px] mt-1" style={{ color: 'var(--textDim)' }}>
+              Entry {fmtPrice(latest.symbol, latest.entry)} · SL {fmtPrice(latest.symbol, latest.stopLoss)} · TP {fmtPrice(latest.symbol, latest.targets?.[0])}
+            </div>
+            <div className="font-mono text-[9px] mt-0.5" style={{ color: 'var(--textFaint)' }}>
+              Live FIRE · {timeAgo(latest.timestamp)} · {latest.gate?.status || 'pending'}
+            </div>
+          </div>
+        )}
+      </div>
+      <div className="omni-panel omni-charts-rail p-3 flex flex-col min-h-0">
+        <div className="font-mono text-[10px] uppercase tracking-wider mb-2" style={{ color: 'var(--textFaint)' }}>
+          Signals on chart · {symLabel(active)}
+        </div>
+        <div className="flex-1 overflow-y-auto omni-scroll space-y-2 min-h-0">
+          {liveSignals.length === 0 ? (
+            <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
+              No FIRE yet for this symbol. When agents agree, BUY/SELL overlays the chart in real time.
+            </div>
+          ) : liveSignals.map(s => (
+            <div key={s.id} className="omni-panel2 p-2.5">
+              <div className="flex items-center gap-2 font-mono text-[12px]">
+                <span style={{ color: s.action === 'BUY' || s.action === 'LONG' ? 'var(--emerald)' : 'var(--coral)', fontWeight: 700 }}>{s.action}</span>
+                <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
+                <span className="ml-auto" style={{ color: 'var(--gold)' }}>{signalScore(s)}</span>
+              </div>
+              <div className="font-mono text-[10px] mt-1" style={{ color: 'var(--textDim)' }}>
+                {fmtPrice(s.symbol, s.entry)} · SL {fmtPrice(s.symbol, s.stopLoss)} · TP {fmtPrice(s.symbol, s.targets?.[0])}
+              </div>
+              <div className="font-mono text-[9px] mt-1" style={{ color: 'var(--textFaint)' }}>{timeAgo(s.timestamp)} · {s.gate?.status || 'pending'}</div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
 }
 
-function DashTab({ signals, accountBalance, journalStats, prices, quotes, changes, mode, outlook, now, levels, analysisLive, socketLive, cryptoVolAlerts, calendar, deskBrief }) {
-  const approved = signals.filter(s => s.gate?.status === 'approved' || s.gate?.status === 'APPROVED');
-  const recent = [...signals].sort((a, b) => {
+function DashTab({ signals, accountBalance, journalStats, prices, quotes, changes, mode, outlook, now, levels, analysisLive, socketLive, cryptoVolAlerts, calendar, deskBrief, onOpenChart }) {
+  const list = Array.isArray(signals) ? signals : [];
+  const approved = list.filter(s => s.gate?.status === 'approved' || s.gate?.status === 'APPROVED');
+  const recent = [...list].sort((a, b) => {
     const rank = (s) => (s.action === 'BUY' || s.action === 'SELL' ? 0 : 1);
     return rank(a) - rank(b) || (b.timestamp || 0) - (a.timestamp || 0);
   }).slice(0, 16);
-  const [chartSymbol, setChartSymbol] = useState('XAUUSD');
-  const q = quotes?.[chartSymbol];
 
   return (
     <div className="p-2 sm:p-3 space-y-2 w-full">
@@ -3112,89 +2376,63 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
       )}
       <DeskBriefPanel brief={deskBrief} mode={mode} />
       <WhatToExpect outlook={outlook} calendar={calendar} now={now || Date.now()} mode={mode} />
-      {/* LIVE TICKS FIRST — no scroll required */}
       <div className="omni-home-grid">
-        {/* Chart first — symbol/TF controls only inside Full chart (no duplicate chips here) */}
-        <div className="omni-panel p-2 md:p-3 order-1 lg:order-1">
-          <div className="flex items-center justify-between gap-2 mb-1 font-mono text-[11px]" style={{ color: 'var(--textDim)' }}>
-            <span>
-              Chart · <span style={{ color: 'var(--text)' }}>{symLabel(chartSymbol)}</span>
-              {q?.bid != null && q?.ask != null && (
-                <>
-                  {' '}
-                  <span style={{ color: 'var(--coral)' }}>{fmtPrice(chartSymbol, q.bid)}</span>
-                  {' / '}
-                  <span style={{ color: 'var(--emerald)' }}>{fmtPrice(chartSymbol, q.ask)}</span>
-                </>
-              )}
-            </span>
-            {q?.source === 'mt5_ea' && <Pill tone="up">MT5</Pill>}
-            {q?.source === 'tradingview' && <Pill tone="up">TV</Pill>}
-          </div>
-          <ErrorBoundary key={chartSymbol} label="TradingView">
-            <div className="omni-home-tv rounded-xl overflow-hidden">
-              <TradingViewChart symbol={chartSymbol} />
-            </div>
-          </ErrorBoundary>
-        </div>
-
-        <div className="omni-panel overflow-hidden order-2 xl:order-2 flex flex-col max-h-[min(55vh,480px)] sm:max-h-[min(50vh,520px)] xl:max-h-[min(60vh,720px)] min-h-[280px]">
-          <div className="px-3 py-2 border-b" style={{ borderColor: 'var(--border)' }}>
-            <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>Market Watch · live</span>
-          </div>
-          <div className="overflow-y-auto omni-scroll flex-1 min-w-0">
             {SYMBOLS.map(sym => {
               const qq = quotes?.[sym];
               const ch = changes?.[sym];
               const up = ch == null ? null : ch >= 0;
               const bid = qq?.bid ?? qq?.price ?? prices?.[sym];
               const ask = qq?.ask ?? qq?.price ?? prices?.[sym];
+              const src = qq?.source;
+              const lv = levels?.[sym];
               return (
                 <button
-                  key={sym}
                   type="button"
-                  onClick={() => setChartSymbol(sym)}
-                  className="omni-row w-full px-3 py-2.5 font-mono text-left border-b min-w-0"
-                  style={{
-                    borderColor: 'var(--border)',
-                    background: chartSymbol === sym ? 'var(--panel2)' : 'transparent',
-                    minHeight: 52,
-                  }}
+                  key={sym}
+                  className="omni-panel omni-quote-card p-3 font-mono"
+                  onClick={() => onOpenChart?.(sym)}
+                  aria-label={`Open ${symLabel(sym)} chart`}
                 >
-                  <div className="flex items-center justify-between gap-2 mb-1">
+                  <div className="flex items-center justify-between gap-2 mb-2">
                     <span className="text-[13px] font-semibold truncate" style={{ color: 'var(--text)' }}>
                       {symLabel(sym)}
-                      {qq?.source === 'mt5_ea' && <span className="ml-1 text-[9px] font-normal" style={{ color: 'var(--gold)' }}>MT5</span>}
                     </span>
-                    {ch != null && (
-                      <span className="text-[11px] shrink-0 tabular-nums" style={{ color: up ? 'var(--emerald)' : 'var(--coral)' }}>
-                        {fmtPct(ch)}
-                      </span>
-                    )}
+                    <span className="text-[9px] uppercase" style={{ color: 'var(--gold)' }}>
+                      {sourceLabel(src)}
+                    </span>
                   </div>
+                  {ch != null && (
+                    <div className="text-[11px] tabular-nums mb-2" style={{ color: up ? 'var(--emerald)' : 'var(--coral)' }}>
+                      {fmtPct(ch)}
+                    </div>
+                  )}
                   <div className="grid grid-cols-2 gap-2">
-                    <div className="rounded px-2 py-1.5 min-w-0" style={{ background: 'rgba(255,84,112,0.08)' }}>
-                      <div className="text-[9px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>Buy · Bid</div>
-                      <div className="text-[12px] sm:text-[13px] tabular-nums font-semibold truncate" style={{ color: 'var(--coral)' }}>
+                    <div className="rounded px-2 py-1.5 min-w-0" style={{ background: 'color-mix(in srgb, var(--coral) 12%, transparent)' }}>
+                      <div className="text-[9px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>Bid</div>
+                      <div className="text-[13px] tabular-nums font-semibold truncate" style={{ color: 'var(--coral)' }}>
                         {fmtPrice(sym, bid)}
                       </div>
                     </div>
-                    <div className="rounded px-2 py-1.5 min-w-0" style={{ background: 'rgba(31,227,168,0.08)' }}>
-                      <div className="text-[9px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>Sell · Ask</div>
-                      <div className="text-[12px] sm:text-[13px] tabular-nums font-semibold truncate" style={{ color: 'var(--emerald)' }}>
+                    <div className="rounded px-2 py-1.5 min-w-0" style={{ background: 'color-mix(in srgb, var(--emerald) 12%, transparent)' }}>
+                      <div className="text-[9px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>Ask</div>
+                      <div className="text-[13px] tabular-nums font-semibold truncate" style={{ color: 'var(--emerald)' }}>
                         {fmtPrice(sym, ask)}
                       </div>
                     </div>
                   </div>
+                  {lv?.support != null && lv?.resistance != null && (
+                    <div className="font-mono text-[9px] mt-2 flex justify-between" style={{ color: 'var(--textFaint)' }}>
+                      <span>S {fmtPrice(sym, lv.support)}</span>
+                      <span>R {fmtPrice(sym, lv.resistance)}</span>
+                    </div>
+                  )}
                 </button>
               );
             })}
-          </div>
-        </div>
       </div>
 
       {/* Market voice includes S/R — below ticks */}
-      <MarketVoice now={now || Date.now()} signals={signals} quotes={quotes} outlook={outlook} mode={mode} />
+      <MarketVoice now={now || Date.now()} signals={list} quotes={quotes} outlook={outlook} mode={mode} />
 
       <div className="omni-panel overflow-hidden">
         <SectionHeader icon={Radio} title="Recent signals" sub={`${recent.length} latest · approved ${approved.length} · all saved to MongoDB`} />
@@ -3233,7 +2471,7 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-        <StatCard label="Signals" value={signals.length} icon={Zap} accent="var(--violet)" />
+        <StatCard label="Signals" value={list.length} icon={Zap} accent="var(--violet)" />
         <StatCard label="Approved" value={approved.length} icon={CheckCircle2} />
         <StatCard label="Balance" value={accountBalance != null ? `$${Number(accountBalance).toLocaleString()}` : '—'} icon={Target} accent="var(--gold)" />
         <StatCard label="Win rate" value={journalStats?.winRate != null ? `${journalStats.winRate}%` : '—'} icon={Activity} accent="var(--blue)" />
@@ -3242,9 +2480,10 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
   );
 }
 
-function SignalsTab({ signals, prices, quotes, auditLog, analysisLive }) {
+function SignalsTab({ signals, prices, quotes, analysisLive, socketLive, onOpenChart }) {
   const [expanded, setExpanded] = useState(null);
   const [desk, setDesk] = useState('ALL');
+  const [onlyFire, setOnlyFire] = useState(true);
   const DESKS = {
     ALL: SYMBOLS,
     GOLD: ['XAUUSD'],
@@ -3254,45 +2493,66 @@ function SignalsTab({ signals, prices, quotes, auditLog, analysisLive }) {
     FX: ['EURUSD', 'GBPUSD', 'USDJPY'],
   };
   const deskSymbols = DESKS[desk] || SYMBOLS;
-  const filtered = signals.filter(s => deskSymbols.includes(s.symbol));
-  const checks = (Array.isArray(auditLog) ? auditLog : [])
-    .filter(e => deskSymbols.includes(e.symbol) || desk === 'ALL')
-    .slice(0, 25);
-  const nearMiss = checks.filter(e => !e.fired && (e.nearMiss || Number(e.score) >= 50));
-  const fired = checks.filter(e => e.fired);
+  const filtered = useMemo(() => {
+    const allow = DESKS[desk] || SYMBOLS;
+    const list = (signals || []).filter(s => {
+      if (!allow.includes(s.symbol)) return false;
+      if (onlyFire && !isFireAction(s.action)) return false;
+      return true;
+    });
+    return list.slice().sort((a, b) => {
+      const fa = isFireAction(a.action) ? 0 : 1;
+      const fb = isFireAction(b.action) ? 0 : 1;
+      return fa - fb || signalScore(b) - signalScore(a) || (b.timestamp || 0) - (a.timestamp || 0);
+    });
+  }, [signals, desk, onlyFire]);
+  const fireCount = (signals || []).filter(s => isFireAction(s.action)).length;
 
   return (
     <div className="p-2 sm:p-3 space-y-2 sm:space-y-3 w-full max-w-[100vw]">
-<div className="flex items-center gap-2 flex-wrap">
-        <SectionHeader icon={Radio} title="Signal Desks" sub={`${filtered.length} signal(s) · MT5 or Deriv prices`} />
+      <div className="omni-sr-only" aria-live="polite">{fireCount} live fire signals</div>
+      <div className="flex items-center gap-2 flex-wrap">
+        <SectionHeader
+          icon={Radio}
+          title="Live signals"
+          sub={`${filtered.length} · ${socketLive ? 'push' : 'poll'} · ${analysisLive ? `scan ${analysisLive.symbol || ''} ${analysisLive.timeframe || ''}`.trim() : 'idle'}`}
+        />
         <div className="ml-auto flex gap-1 flex-wrap">
+          <button type="button" onClick={() => setOnlyFire(v => !v)}
+            className="omni-chip font-mono text-[10px] px-2.5 py-1 rounded uppercase min-h-[40px]"
+            aria-pressed={onlyFire}
+            style={{ background: onlyFire ? 'var(--emerald)' : 'var(--panel2)', color: onlyFire ? 'var(--inkOnAccent)' : 'var(--textDim)' }}>
+            {onlyFire ? 'FIRE only' : 'Include WAIT'}
+          </button>
           {Object.keys(DESKS).map(d => (
-            <button key={d} onClick={() => setDesk(d)}
-              className="font-mono text-[10px] px-2.5 py-1 rounded uppercase"
-              style={{ background: desk === d ? 'var(--emerald)' : 'var(--panel2)', color: desk === d ? '#05070a' : 'var(--textDim)' }}>
+            <button key={d} type="button" onClick={() => setDesk(d)}
+              className="omni-chip font-mono text-[10px] px-2.5 py-1 rounded uppercase min-h-[40px]"
+              aria-pressed={desk === d}
+              style={{ background: desk === d ? 'var(--emerald)' : 'var(--panel2)', color: desk === d ? 'var(--inkOnAccent)' : 'var(--textDim)' }}>
               {d}
             </button>
           ))}
         </div>
       </div>
 
-      {/* Per-symbol quote strip for this desk */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
         {deskSymbols.map(sym => {
           const q = quotes?.[sym];
           const mid = q?.price ?? prices?.[sym];
-          const n = signals.filter(s => s.symbol === sym).length;
+          const n = (signals || []).filter(s => s.symbol === sym && isFireAction(s.action)).length;
           return (
-            <div key={sym} className="omni-panel2 px-2.5 py-2 font-mono text-[10px]">
+            <button
+              key={sym}
+              type="button"
+              className="omni-panel2 omni-quote-card px-2.5 py-2 font-mono text-[10px]"
+              onClick={() => onOpenChart?.(sym)}
+              aria-label={`Open ${symLabel(sym)} chart`}
+            >
               <div className="flex justify-between mb-1">
-                <span style={{ color: 'var(--text)' }}>{sym}</span>
-                <span style={{ color: q?.source === 'mt5_ea' ? 'var(--gold)' : 'var(--textFaint)' }}>{
-                  q?.source === 'mt5_ea' ? 'MT5'
-                  : q?.source === 'deriv' ? 'Deriv'
-                  : q?.source === 'finnhub' ? 'Finnhub'
-                  : q?.source === 'binance' ? 'Binance'
-                  : (q?.source || '—')
-                }</span>
+                <span style={{ color: 'var(--text)' }}>{symLabel(sym)}</span>
+                <span style={{ color: q?.source === 'mt5_ea' || q?.source === 'tradingview' ? 'var(--gold)' : 'var(--textFaint)' }}>
+                  {sourceLabel(q?.source)}
+                </span>
               </div>
               {q?.bid != null && q?.ask != null ? (
                 <div className="flex gap-2">
@@ -3302,233 +2562,154 @@ function SignalsTab({ signals, prices, quotes, auditLog, analysisLive }) {
               ) : (
                 <div style={{ color: 'var(--textDim)' }}>{fmtPrice(sym, mid)}</div>
               )}
-              <div className="mt-1" style={{ color: 'var(--textFaint)' }}>{n} signal{n === 1 ? '' : 's'}</div>
-            </div>
+              <div className="mt-1" style={{ color: 'var(--textFaint)' }}>{n} FIRE</div>
+            </button>
           );
         })}
       </div>
 
-      <div className="omni-panel overflow-hidden">
-        <div className="omni-table-scroll">
-          <div className="omni-table-grid">
-            <div className="grid grid-cols-[70px_46px_44px_44px_1fr_1fr_1fr_70px_50px] gap-2 px-3 py-2 font-mono text-[9px] uppercase tracking-wider border-b" style={{ color: 'var(--textFaint)', borderColor: 'var(--border)' }}>
-              <span>Symbol</span><span>TF</span><span>Dir</span><span>Grade</span><span>Entry</span><span>Stop</span><span>Targets</span><span>Gate</span><span>Age</span>
-            </div>
-            <div className="max-h-[min(520px,55vh)] overflow-y-auto omni-scroll">
-              {filtered.length === 0 ? (
-                <div className="p-6 font-mono text-[11px] text-center" style={{ color: 'var(--textFaint)' }}>
-                  No signals for this desk yet. The engine only fires when score ≥ min, agents agree, and risk gates pass — not on every tick.
-                </div>
-              ) : filtered.map(s => (
-                <div key={s.id}>
-                  <div onClick={() => setExpanded(expanded === s.id ? null : s.id)}
-                    className="omni-row grid grid-cols-[70px_46px_44px_44px_1fr_1fr_1fr_70px_50px] gap-2 px-3 py-2.5 font-mono text-[11px] cursor-pointer border-b items-center"
-                    style={{ borderColor: 'var(--border)' }}>
-                    <span style={{ color: 'var(--text)' }}>{s.symbol}</span>
-                    <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
-                    <span style={{ color: s.action === 'BUY' ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
-                    <span style={{ color: 'var(--gold)' }}>{gradeFor(s.score)}</span>
-                    <span style={{ color: 'var(--textDim)' }}>{fmtPrice(s.symbol, s.entry)}</span>
-                    <span style={{ color: 'var(--coral)' }}>{fmtPrice(s.symbol, s.stopLoss)}</span>
-                    <span style={{ color: 'var(--emerald)' }}>{fmtPrice(s.symbol, s.targets[0])} / {fmtPrice(s.symbol, s.targets[1])}</span>
-                    <Pill tone={s.gate.status === 'approved' ? 'up' : s.gate.status === 'gated' ? 'warn' : 'down'}>{s.gate.status}</Pill>
-                    <span className="flex items-center gap-1" style={{ color: 'var(--textFaint)' }}>
-                      {timeAgo(s.timestamp)}<ChevronDown size={11} style={{ transform: expanded === s.id ? 'rotate(180deg)' : 'none' }} />
-                    </span>
-                  </div>
-              {expanded === s.id && (
-                <div className="border-b" style={{ borderColor: 'var(--border)', background: '#080a0d' }}>
-                  {/* Identity strip always visible on expand — fixes mobile where table columns scroll away */}
-                  <div className="px-3 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b" style={{ borderColor: 'var(--border)', background: 'var(--panel2)' }}>
-                    <span className="font-mono text-[13px] font-semibold tracking-wide" style={{ color: 'var(--text)' }}>{s.symbol}</span>
-                    <span className="font-mono text-[11px] px-1.5 py-0.5 rounded" style={{ color: 'var(--textDim)', background: 'var(--panel)' }}>{s.timeframe}</span>
-                    <span className="font-mono text-[12px] font-semibold" style={{ color: (s.action === 'BUY' || s.action === 'LONG') ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
-                    <span className="font-mono text-[12px]" style={{ color: 'var(--gold)' }}>{gradeFor(s.score)} · {signalScore(s)}</span>
-                    <Pill tone={s.gate?.status === 'approved' ? 'up' : s.gate?.status === 'gated' ? 'warn' : 'down'}>{s.gate?.status || '—'}</Pill>
-                    <span className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>{timeAgo(s.timestamp)}</span>
-                    <div className="w-full flex flex-wrap gap-x-4 gap-y-0.5 font-mono text-[11px]">
+      {filtered.length === 0 ? (
+        <div className="omni-panel p-6 font-mono text-[12px] text-center" style={{ color: 'var(--textFaint)' }}>
+          {socketLive
+            ? 'Live feed is connected. No FIRE on this desk yet — the engine only speaks when score, agents, and gates clear.'
+            : 'Reconnecting to live feed… last-known signals will appear here.'}
+        </div>
+      ) : (
+        <div className="omni-signals-list">
+          {filtered.map(s => {
+            const open = expanded === s.id;
+            const fire = isFireAction(s.action);
+            const actColor = s.action === 'BUY' || s.action === 'LONG' ? 'var(--emerald)' : s.action === 'SELL' || s.action === 'SHORT' ? 'var(--coral)' : 'var(--textFaint)';
+            const agents = Array.isArray(s.agents) ? s.agents : [];
+            const reasons = Array.isArray(s.reasons) ? s.reasons : [];
+            const checklist = s.gate?.checklist && typeof s.gate.checklist === 'object' ? s.gate.checklist : {};
+            return (
+              <article key={s.id} className="omni-panel overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setExpanded(open ? null : s.id)}
+                  className="omni-row w-full text-left px-3 py-3 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[12px]"
+                  aria-expanded={open}
+                >
+                  <span className="font-semibold" style={{ color: 'var(--text)' }}>{symLabel(s.symbol)}</span>
+                  <span style={{ color: 'var(--textDim)' }}>{s.timeframe || 'H1'}</span>
+                  <span style={{ color: actColor, fontWeight: 700 }}>{s.action}</span>
+                  <span style={{ color: 'var(--gold)' }}>{gradeFor(signalScore(s))} · {signalScore(s)}</span>
+                  {fire && <span style={{ color: 'var(--textDim)' }}>@ {fmtPrice(s.symbol, s.entry)}</span>}
+                  <Pill tone={s.gate?.status === 'approved' || s.gate?.status === 'APPROVED' ? 'up' : fire ? 'warn' : 'neutral'}>
+                    {s.gate?.status || (fire ? 'FIRE' : 'WAIT')}
+                  </Pill>
+                  <span className="ml-auto text-[10px] flex items-center gap-1" style={{ color: 'var(--textFaint)' }}>
+                    {timeAgo(s.timestamp)}
+                    <ChevronDown size={12} style={{ transform: open ? 'rotate(180deg)' : 'none' }} aria-hidden="true" />
+                  </span>
+                </button>
+                {open && (
+                  <div className="px-3 pb-3 border-t space-y-3" style={{ borderColor: 'var(--border)', background: 'var(--panel2)' }}>
+                    <div className="pt-3 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[11px]">
                       <span style={{ color: 'var(--textDim)' }}>Entry <b style={{ color: 'var(--text)' }}>{fmtPrice(s.symbol, s.entry)}</b></span>
                       <span style={{ color: 'var(--textDim)' }}>SL <b style={{ color: 'var(--coral)' }}>{fmtPrice(s.symbol, s.stopLoss)}</b></span>
                       <span style={{ color: 'var(--textDim)' }}>TP1 <b style={{ color: 'var(--emerald)' }}>{fmtPrice(s.symbol, s.targets?.[0])}</b></span>
                       <span style={{ color: 'var(--textDim)' }}>TP2 <b style={{ color: 'var(--emerald)' }}>{fmtPrice(s.symbol, s.targets?.[1])}</b></span>
                     </div>
-                  </div>
-                  <div className="px-4 py-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                  <div>
-                    <div className="font-mono text-[9px] uppercase mb-2" style={{ color: 'var(--textFaint)' }}>Agent Breakdown ({s.agreeCount}/8 aligned)</div>
-                    <div className="space-y-1">
-                      {s.agents.map(a => (
-                        <div key={a.agent} className="flex items-center gap-2 font-mono text-[10px]">
-                          <span className="w-24" style={{ color: 'var(--textDim)' }}>{a.agent}</span>
-                          <div className="flex-1 h-1 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
-                            <div className="h-full" style={{ width: `${a.score}%`, background: a.direction === s.action ? 'var(--emerald)' : 'var(--coral)' }} />
-                          </div>
-                          <span style={{ color: a.direction === s.action ? 'var(--emerald)' : 'var(--coral)' }}>{a.direction}</span>
-                        </div>
-                      ))}
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className="omni-chip font-mono text-[10px] px-3 py-2 rounded min-h-[40px]"
+                        style={{ color: 'var(--inkOnAccent)', background: 'var(--emerald)' }}
+                        onClick={() => onOpenChart?.(s.symbol)}
+                      >
+                        View on chart
+                      </button>
+                      <button
+                        type="button"
+                        className="omni-chip font-mono text-[10px] px-3 py-2 rounded min-h-[40px]"
+                        style={{ color: 'var(--blue)', border: '1px solid var(--border)', background: 'var(--panel)' }}
+                        onClick={() => copySignalExport(s)}
+                      >
+                        Copy
+                      </button>
                     </div>
-                  </div>
-                  <div>
-                    <div className="font-mono text-[9px] uppercase mb-2" style={{ color: 'var(--textFaint)' }}>Institutional Gates</div>
-                    <div className="space-y-1.5">
-                      {Object.entries(s.gate.checklist).map(([k, ok]) => (
-                        <div key={k} className="flex items-center gap-2 font-mono text-[10px]" style={{ color: ok ? 'var(--textDim)' : 'var(--coral)' }}>
-                          {ok ? <CheckCircle2 size={12} style={{ color: 'var(--emerald)' }} /> : <XCircle size={12} style={{ color: 'var(--coral)' }} />}
-                          {k}
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                      <div>
+                        <div className="font-mono text-[9px] uppercase mb-2" style={{ color: 'var(--textFaint)' }}>
+                          Agents ({s.agreeCount ?? agents.filter(a => a.direction === s.action).length}/{agents.length || 8} aligned)
                         </div>
-                      ))}
-                    </div>
-                    <div className="mt-2 font-mono text-[10px]" style={{ color: 'var(--textDim)' }}>
-                      Risk: {s.risk.effectiveRisk}% · max loss ${s.risk.maxLoss} · {s.risk.note}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="font-mono text-[9px] uppercase mb-2" style={{ color: 'var(--textFaint)' }}>Validation Engines</div>
-                    {s.validation ? (
-                      <div className="space-y-1.5 font-mono text-[10px]">
-                        <div className="flex items-center justify-between">
-                          <span style={{ color: 'var(--textDim)' }}>Monte Carlo</span>
-                          <Pill tone={s.validation.monteCarlo?.approved ? 'up' : 'down'}>{s.validation.monteCarlo?.winProbability ?? '—'}% win</Pill>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span style={{ color: 'var(--textDim)' }}>Bayesian posterior</span>
-                          <Pill tone={s.validation.bayesian?.approved ? 'up' : 'down'}>{s.validation.bayesian?.posterior ?? '—'}</Pill>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span style={{ color: 'var(--textDim)' }}>Statistical tests</span>
-                          <Pill tone={s.validation.statistical?.approved ? 'up' : 'down'}>{s.validation.statistical?.passed ?? '—'}/{s.validation.statistical?.total ?? '—'}</Pill>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span style={{ color: 'var(--textDim)' }}>Walk-forward</span>
-                          <Pill tone={s.validation.walkForward?.robust ? 'up' : 'warn'}>wfe {s.validation.walkForward?.wfe ?? '—'}</Pill>
+                        <div className="space-y-1">
+                          {agents.length === 0 ? (
+                            <div className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>No agent breakdown on this signal.</div>
+                          ) : agents.map(a => (
+                            <div key={a.agent} className="flex items-center gap-2 font-mono text-[10px]">
+                              <span className="w-24 truncate" style={{ color: 'var(--textDim)' }}>{a.agent}</span>
+                              <div className="flex-1 h-1 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
+                                <div className="h-full" style={{ width: `${Math.max(0, Math.min(100, Number(a.score) || 0))}%`, background: a.direction === s.action ? 'var(--emerald)' : 'var(--coral)' }} />
+                              </div>
+                              <span style={{ color: a.direction === s.action ? 'var(--emerald)' : 'var(--coral)' }}>{a.direction}</span>
+                            </div>
+                          ))}
                         </div>
                       </div>
-                    ) : (
-                      <div className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>No validation data on this signal.</div>
-                    )}
+                      <div>
+                        <div className="font-mono text-[9px] uppercase mb-2" style={{ color: 'var(--textFaint)' }}>Institutional gates</div>
+                        <div className="space-y-1.5">
+                          {Object.keys(checklist).length === 0 ? (
+                            <div className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>Awaiting gate evaluation.</div>
+                          ) : Object.entries(checklist).map(([k, ok]) => (
+                            <div key={k} className="flex items-center gap-2 font-mono text-[10px]" style={{ color: ok ? 'var(--textDim)' : 'var(--coral)' }}>
+                              {ok ? <CheckCircle2 size={12} style={{ color: 'var(--emerald)' }} /> : <XCircle size={12} style={{ color: 'var(--coral)' }} />}
+                              {k}
+                            </div>
+                          ))}
+                        </div>
+                        <div className="mt-2 font-mono text-[10px]" style={{ color: 'var(--textDim)' }}>
+                          Risk: {s.risk?.effectiveRisk ?? '—'}% · max loss ${s.risk?.maxLoss ?? '—'} · {s.risk?.note || '—'}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="font-mono text-[9px] uppercase mb-2" style={{ color: 'var(--textFaint)' }}>Validation</div>
+                        {s.validation ? (
+                          <div className="space-y-1.5 font-mono text-[10px]">
+                            <div className="flex items-center justify-between">
+                              <span style={{ color: 'var(--textDim)' }}>Monte Carlo</span>
+                              <Pill tone={s.validation.monteCarlo?.approved ? 'up' : 'down'}>{s.validation.monteCarlo?.winProbability ?? '—'}% win</Pill>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span style={{ color: 'var(--textDim)' }}>Bayesian</span>
+                              <Pill tone={s.validation.bayesian?.approved ? 'up' : 'down'}>{s.validation.bayesian?.posterior ?? '—'}</Pill>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span style={{ color: 'var(--textDim)' }}>Statistical</span>
+                              <Pill tone={s.validation.statistical?.approved ? 'up' : 'down'}>{s.validation.statistical?.passed ?? '—'}/{s.validation.statistical?.total ?? '—'}</Pill>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span style={{ color: 'var(--textDim)' }}>Walk-forward</span>
+                              <Pill tone={s.validation.walkForward?.robust ? 'up' : 'warn'}>wfe {s.validation.walkForward?.wfe ?? '—'}</Pill>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>No validation payload on this signal.</div>
+                        )}
+                      </div>
+                      <div>
+                        <div className="font-mono text-[9px] uppercase mb-2" style={{ color: 'var(--textFaint)' }}>Why it fired</div>
+                        <ul className="space-y-1">
+                          {reasons.length === 0 ? (
+                            <li className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>No explainer lines.</li>
+                          ) : reasons.map((r, i) => (
+                            <li key={i} className="font-mono text-[10px] flex gap-1.5" style={{ color: 'var(--textDim)' }}>
+                              <ChevronRight size={11} style={{ color: 'var(--violet)', flexShrink: 0, marginTop: 1 }} aria-hidden="true" />{r}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <div className="font-mono text-[9px] uppercase mb-2" style={{ color: 'var(--textFaint)' }}>Signal Explainer</div>
-                    <ul className="space-y-1">
-                      {s.reasons.map((r, i) => (
-                        <li key={i} className="font-mono text-[10px] flex gap-1.5" style={{ color: 'var(--textDim)' }}>
-                          <ChevronRight size={11} style={{ color: 'var(--violet)', flexShrink: 0, marginTop: 1 }} />{r}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          ))}
-            </div>
-          </div>
+                )}
+              </article>
+            );
+          })}
         </div>
-      </div>
-
-            {/* Gate checks stay on server */}
-<div className="omni-panel p-4">
-        <SectionHeader icon={Globe2} title="What to expect" sub={session ? session.label : (live ? 'live' : undefined)} />
-        {!live ? (
-          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>Waiting for outlook…</div>
-        ) : (
-          <div className="space-y-3">
-            {session && (
-              <div className="font-mono text-[12px] leading-relaxed" style={{ color: 'var(--text)' }}>
-                <span style={{ color: 'var(--emerald)' }}>{session.name}</span>
-                <span style={{ color: 'var(--textFaint)' }}> · {String(session.utcHour).padStart(2, '0')}:00 UTC — </span>
-                <span style={{ color: 'var(--textDim)' }}>{session.note}</span>
-              </div>
-            )}
-            {narrativeLines && narrativeLines.length > 0 ? (
-              <ul className="space-y-1.5 list-none p-0 m-0">
-                {narrativeLines.map((line, i) => (
-                  <li key={i} className="text-[12px] leading-relaxed flex gap-2" style={{ color: i === 0 ? 'var(--text)' : 'var(--textDim)' }}>
-                    <span style={{ color: 'var(--emerald)', flexShrink: 0 }}>▸</span>
-                    <span>{line}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No briefing yet.</div>
-            )}
-            {highSoon.length > 0 && (
-              <div className="pt-2 border-t" style={{ borderColor: 'var(--border)' }}>
-                <div className="font-mono text-[9px] uppercase mb-1.5" style={{ color: 'var(--textFaint)' }}>High impact within 48h</div>
-                {highSoon.map((e, i) => (
-                  <div key={i} className="flex items-center gap-2 font-mono text-[11px] py-0.5">
-                    <Pill tone="down">high</Pill>
-                    <span className="flex-1 min-w-0 truncate" style={{ color: 'var(--textDim)' }}>{e.name}</span>
-                    <span style={{ color: 'var(--textFaint)' }}>{e.currency}</span>
-                    <span style={{ color: 'var(--textFaint)' }}>{e.hoursAway}h</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div className="omni-panel p-4">
-        <SectionHeader icon={Activity} title="Regime / Tradeability" sub="per symbol" />
-        {!regimeRows ? (
-          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>Waiting…</div>
-        ) : (
-          <div className="space-y-1 max-h-64 overflow-y-auto omni-scroll">
-            {regimeRows.map(s => (
-              <div key={s.symbol} className="flex items-center gap-2 font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
-                <span className="w-16" style={{ color: 'var(--text)' }}>{s.symbol}</span>
-                <span className="flex-1" style={{ color: 'var(--textDim)' }}>{s.regime}</span>
-                <span style={{ color: 'var(--textFaint)' }}>{s.tradeability != null ? Math.round(Number(s.tradeability)) : '—'}</span>
-                <Pill tone={s.sessionStatus === 'CLEAR' ? 'up' : s.sessionStatus ? 'warn' : 'neutral'}>{s.sessionStatus || '—'}</Pill>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="omni-panel p-4">
-        <SectionHeader icon={Target} title="COT / Positioning" sub="when available" />
-        {!cotRows ? (
-          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>Waiting…</div>
-        ) : cotRows.length === 0 ? (
-          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No COT rows yet.</div>
-        ) : (
-          <div className="space-y-1">
-            {cotRows.map(c => (
-              <div key={c.currency} className="flex items-center justify-between font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
-                <span style={{ color: 'var(--text)' }}>{c.currency}</span>
-                <span style={{ color: 'var(--textDim)' }}>{c.nonComm}</span>
-                <Pill tone={String(c.signal || '').toLowerCase().includes('long') ? 'up' : String(c.signal || '').toLowerCase().includes('short') ? 'down' : 'neutral'}>{c.signal || '—'}</Pill>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="omni-panel p-4">
-        <SectionHeader icon={Clock} title="Economic Calendar" sub="Forex Factory · this week · High first" />
-        {calendarRows.length > 0 ? (
-          <div className="space-y-1.5 max-h-80 overflow-y-auto omni-scroll">
-            {calendarRows.map((e, i) => (
-              <div key={`${e.name}-${i}`} className="flex items-center gap-2 font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
-                <Pill tone={String(e.impact).toLowerCase() === 'high' ? 'down' : String(e.impact).toLowerCase() === 'medium' ? 'warn' : 'neutral'}>{e.impact || '—'}</Pill>
-                <span className="flex-1 min-w-0 truncate" style={{ color: 'var(--textDim)' }}>{e.name}</span>
-                <span style={{ color: 'var(--textFaint)' }}>{e.currency}</span>
-                <span className="shrink-0" style={{ color: 'var(--textFaint)' }}>
-                  {e.hoursAway != null ? (e.hoursAway < 0 ? `${Math.abs(e.hoursAway)}h ago` : `in ${e.hoursAway}h`) : ''}
-                </span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="font-mono text-[11px] leading-relaxed space-y-1" style={{ color: 'var(--textFaint)' }}>
-            <div>No calendar rows yet.</div>
-            <div>Source: Forex Factory via /api/calendar after deploy.</div>
-          </div>
-        )}
-      </div>
+      )}
     </div>
   );
 }
@@ -3645,7 +2826,7 @@ function NewsTab({ news, mode }) {
               onClick={() => openExternal(selected.url)}
               className="omni-chip font-mono text-[12px] px-4 py-2.5 rounded min-h-[44px] w-full sm:w-auto"
               style={{
-                color: readable ? 'var(--textDim)' : '#05070a',
+                color: readable ? 'var(--textDim)' : 'var(--inkOnAccent)',
                 background: readable ? 'var(--panel)' : 'var(--emerald)',
                 border: '1px solid var(--border)',
                 fontWeight: readable ? 500 : 700,
@@ -3670,7 +2851,7 @@ function NewsTab({ news, mode }) {
         {CATS.map(c => (
           <button key={c.id} type="button" onClick={() => setCat(c.id)}
             className="font-mono text-[10px] px-2.5 py-1.5 rounded uppercase min-h-[32px]"
-            style={{ background: cat === c.id ? 'var(--emerald)' : 'var(--panel2)', color: cat === c.id ? '#05070a' : 'var(--textDim)' }}>{c.label}</button>
+            style={{ background: cat === c.id ? 'var(--emerald)' : 'var(--panel2)', color: cat === c.id ? 'var(--inkOnAccent)' : 'var(--textDim)' }}>{c.label}</button>
         ))}
       </div>
 
@@ -3778,6 +2959,11 @@ function MonitorTab({ auditLog, feedHealth, uptimeSec, mode, fetchErrors, analys
           <span style={{ color: socketLive ? 'var(--emerald)' : 'var(--textFaint)' }}>{socketLive ? '● socket + heartbeat' : '○ socket reconnecting'}</span>
           {analysisLive ? <span style={{ color: 'var(--gold)' }}>scan {analysisLive.symbol} {analysisLive.timeframe}</span> : null}
         </div>
+        {activeErrors.length > 0 && (
+          <div className="font-mono text-[10px] mb-3" style={{ color: 'var(--coral)' }}>
+            {activeErrors.slice(0, 4).map(([k, v]) => <div key={k}>{k}: {String(v).slice(0, 80)}</div>)}
+          </div>
+        )}
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5">
           {feeds.map(f => (
             <div key={f.name} className="omni-panel2 p-3">
@@ -3796,99 +2982,23 @@ function MonitorTab({ auditLog, feedHealth, uptimeSec, mode, fetchErrors, analys
           ))}
         </div>
       </div>
-    </div>
-  );
-}
-
-/* ── HEAT ───────────────────────────────────────────────────────────── */
-function tileBiasSign(bias) {
-  if (bias === 'BUY' || bias === 'LONG_LEANING') return 1;
-  if (bias === 'SELL' || bias === 'SHORT_LEANING') return -1;
-  return 0;
-}
-
-function biasPlain(bias) {
-  if (bias === 'BUY' || bias === 'LONG' || bias === 'LONG_LEANING') return 'Buy lean';
-  if (bias === 'SELL' || bias === 'SHORT' || bias === 'SHORT_LEANING') return 'Sell lean';
-  return 'Wait';
-}
-
-function HeatTab({ heatmapTiles, mode, sentiment }) {
-  const live = mode === 'live' && Array.isArray(heatmapTiles);
-  const fg = sentiment?.fearGreed;
-
-  if (live) {
-    return (
-      <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
-        {fg && (
-          <div className="omni-panel p-4 flex items-center justify-between gap-4 flex-wrap">
-            <div>
-              <SectionHeader icon={Flame} title="Crypto mood" sub="Fear & Greed index · free data" />
-              <p className="text-[12px] mt-1" style={{ color: 'var(--textDim)' }}>
-                A low number means traders are scared. A high number means they are greedy.
-              </p>
-            </div>
-            <div className="text-right">
-              <div className="font-mono text-3xl font-bold" style={{ color: fg.value <= 40 ? 'var(--coral)' : fg.value >= 60 ? 'var(--emerald)' : 'var(--gold)' }}>
-                {fg.value}
-              </div>
-              <div className="font-mono text-[11px] uppercase" style={{ color: 'var(--textFaint)' }}>{fg.label}</div>
-            </div>
-          </div>
-        )}
+      {Array.isArray(auditLog) && auditLog.length > 0 && (
         <div className="omni-panel p-4">
-          <SectionHeader icon={Flame} title="Market heat" sub="Which pairs look hot or cold right now" />
-          <p className="text-[11px] mb-3" style={{ color: 'var(--textFaint)' }}>
-            Higher score = more interesting setup or stronger move. Needs live candles to fill in.
-          </p>
-          {!heatmapTiles || heatmapTiles.length === 0 ? (
-            <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
-              Nothing to show yet. Heat fills in after the system has candle data and ranks each symbol.
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5">
-              {heatmapTiles.map(t => {
-                const sign = tileBiasSign(t.bias);
-                return (
-                  <div key={t.symbol} className="omni-panel2 p-3">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-mono text-[11px]" style={{ color: 'var(--text)' }}>{t.symbol}</span>
-                      <span className="font-mono text-[9px]" style={{ color: 'var(--textFaint)' }}>rank #{t.overallRank}</span>
-                    </div>
-                    <div className="rounded px-2 py-2 mb-2 flex items-center justify-between" style={{ background: heatColor(sign * (t.heatScore / 100)) }}>
-                      <span className="font-mono text-lg font-bold" style={{ color: 'var(--text)' }}>{Math.round(t.heatScore)}</span>
-                      <span className="font-mono text-[9px] uppercase" style={{ color: 'var(--textDim)' }}>{t.bucket || '—'}</span>
-                    </div>
-                    <div className="font-mono text-[10px] flex items-center justify-between" style={{ color: 'var(--textDim)' }}>
-                      <span>{biasPlain(t.bias)}</span>
-                      {t.opportunity && <Pill tone={t.opportunity.fired ? 'up' : 'neutral'}>{t.opportunity.grade || '—'}</Pill>}
-                    </div>
-                    {t.relativeStrength && (
-                      <div className="font-mono text-[9px] mt-1" style={{ color: 'var(--textFaint)' }}>
-                        Strength #{t.relativeStrength.rank} · {fmtPct(t.relativeStrength.changePct)}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
+          <SectionHeader icon={ScrollText} title="Recent events" sub={`${auditLog.length} · near-miss + trail`} />
+          <div className="max-h-56 overflow-y-auto omni-scroll space-y-1">
+            {auditLog.slice(0, 24).map((e, i) => (
+              <div key={e.id || i} className="font-mono text-[10px] flex flex-wrap gap-2 py-1 border-b" style={{ borderColor: 'var(--border)', color: 'var(--textDim)' }}>
+                <span style={{ color: 'var(--textFaint)' }}>{e.timestamp ? timeAgo(e.timestamp) : ''}</span>
+                <span style={{ color: 'var(--text)' }}>{e.symbol || e.type || 'event'}</span>
+                <span className="truncate">{e.reason || e.message || e.status || e.action || JSON.stringify(e).slice(0, 80)}</span>
+              </div>
+            ))}
+          </div>
         </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="p-2 sm:p-3 w-full max-w-[100vw]">
-      <div className="omni-panel p-4">
-        <SectionHeader icon={Flame} title="Market Heat Map" />
-        <WaitingForBackend height={200} />
-      </div>
+      )}
     </div>
   );
 }
-
-/* ── ANALYSIS (standalone advanced fractal layer) ───────────────────── */
 function StructureCard({ label, accent, value, valueColor, sub, pill, pillTone, note }) {
   return (
     <div className="rounded-lg border p-2.5 space-y-1.5" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
@@ -3908,11 +3018,7 @@ function StructureCard({ label, accent, value, valueColor, sub, pill, pillTone, 
   );
 }
 
-function IntelTab({ now, outlook, mode, calendar }) {
-  return <WhatToExpect outlook={outlook} calendar={calendar} now={now || Date.now()} mode={mode} />;
-}
-
-function AnalysisTab({ mode }) {
+function AnalysisTab({ mode, heatmapTiles, relativeStrength, hurstBoard }) {
   const live = mode === 'live';
   const [board, setBoard] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -3966,8 +3072,68 @@ function AnalysisTab({ mode }) {
     return 'neutral';
   };
 
+  const rows = board.length ? board : (Array.isArray(hurstBoard) ? hurstBoard : []);
+
   return (
     <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
+      <div className="omni-panel p-4">
+        <SectionHeader icon={Activity} title="Market heat" sub="opportunity × relative strength" />
+        {!Array.isArray(heatmapTiles) || heatmapTiles.length === 0 ? (
+          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
+            Heatmap fills once the ranker has enough candles. Waiting on live data — not a dead panel.
+          </div>
+        ) : (
+          <div className="omni-heat-grid">
+            {heatmapTiles.slice(0, 8).map((t) => {
+              const score = Number(t.heatScore) || 0;
+              const tone = score >= 70 ? 'var(--emerald)' : score >= 45 ? 'var(--gold)' : 'var(--textDim)';
+              return (
+                <div key={t.symbol} className="omni-panel2 p-2.5">
+                  <div className="flex items-center justify-between font-mono text-[11px]">
+                    <span style={{ color: 'var(--text)' }}>{symLabel(t.symbol)}</span>
+                    <span style={{ color: tone }}>{score.toFixed(0)}</span>
+                  </div>
+                  <div className="font-mono text-[9px] mt-1 uppercase" style={{ color: 'var(--textFaint)' }}>
+                    {String(t.bucket || t.bias || '—').replace(/_/g, ' ')}
+                  </div>
+                  {t.relativeStrength?.changePct != null && (
+                    <div className="font-mono text-[10px] mt-1" style={{ color: t.relativeStrength.changePct >= 0 ? 'var(--emerald)' : 'var(--coral)' }}>
+                      {fmtPct(t.relativeStrength.changePct)}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {relativeStrength && (relativeStrength.leaders || relativeStrength.laggards) ? (
+        <div className="omni-panel p-4">
+          <SectionHeader icon={TrendingUp} title="Relative strength" sub="leaders · laggards" />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <div className="font-mono text-[9px] uppercase mb-1.5" style={{ color: 'var(--emerald)' }}>Leaders</div>
+              {(relativeStrength.leaders || []).slice(0, 6).map((r, i) => (
+                <div key={r.symbol || i} className="flex justify-between font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
+                  <span style={{ color: 'var(--text)' }}>{symLabel(r.symbol)}</span>
+                  <span style={{ color: 'var(--emerald)' }}>{r.changePct != null ? fmtPct(r.changePct) : (r.volAdjScore ?? '—')}</span>
+                </div>
+              ))}
+            </div>
+            <div>
+              <div className="font-mono text-[9px] uppercase mb-1.5" style={{ color: 'var(--coral)' }}>Laggards</div>
+              {(relativeStrength.laggards || []).slice(0, 6).map((r, i) => (
+                <div key={r.symbol || i} className="flex justify-between font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
+                  <span style={{ color: 'var(--text)' }}>{symLabel(r.symbol)}</span>
+                  <span style={{ color: 'var(--coral)' }}>{r.changePct != null ? fmtPct(r.changePct) : (r.volAdjScore ?? '—')}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="omni-panel p-4">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           <SectionHeader
@@ -3992,13 +3158,13 @@ function AnalysisTab({ mode }) {
         {err && (
           <div className="font-mono text-[11px] mb-2" style={{ color: 'var(--coral)' }}>Error: {err}</div>
         )}
-        {board.length === 0 && !loading ? (
+        {rows.length === 0 && !loading ? (
           <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
             No analysis yet — need enough H1/H4 candles per symbol.
           </div>
         ) : (
           <div className="space-y-2">
-            {board.map((row) => {
+            {rows.map((row) => {
               const H = row.hurst?.H;
               const dfa = row.dfa;
               const frama = row.frama;
@@ -4097,7 +3263,7 @@ function AnalysisTab({ mode }) {
       </div>
 
       <div className="omni-panel p-4">
-        <SectionHeader icon={FlaskConical} title="About this layer" sub="fully decoupled from signal pipeline" />
+        <SectionHeader icon={Layers} title="About this layer" sub="fully decoupled from signal pipeline" />
         <ul className="font-mono text-[10px] space-y-1" style={{ color: 'var(--textFaint)' }}>
           <li>• Own endpoint <span style={{ color: 'var(--gold)' }}>/api/analysis</span> + module <span style={{ color: 'var(--gold)' }}>advanced-analysis.js</span></li>
           <li>• R/S Hurst, hardened DFA (α + R²), FRAMA dimension/speed, Lyapunov λ</li>
@@ -4109,245 +3275,6 @@ function AnalysisTab({ mode }) {
   );
 }
 
-/* ── VALID ──────────────────────────────────────────────────────────── */
-function ValidTab({ signals, journalStats, learningProfiles, mode, hurstBoard }) {
-  const live = mode === 'live';
-
-  if (!live) {
-    return (
-      <div className="p-2 sm:p-3 w-full max-w-[100vw]">
-        <div className="omni-panel p-4">
-          <SectionHeader icon={FlaskConical} title="Validation" />
-          <WaitingForBackend height={240} />
-        </div>
-      </div>
-    );
-  }
-
-  /* Live mode — everything below is derived from real data: the
-     validation sub-object db.js now persists per signal (Monte Carlo /
-     Bayesian / Statistical / Walk-Forward, computed live in index.js),
-     GET /api/journal (SignalJournal.getStats — real closed-trade
-     outcomes), and GET /api/learning (per-pattern adaptive-learning
-     profiles from actual trade_outcomes). No invented numbers. */
-  const avg = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
-  const validated = (signals || []).filter(s => s.validation);
-  const mcWinProbs = validated.map(s => s.validation.monteCarlo?.winProbability).filter(v => v != null);
-  const bayesPosteriors = validated.map(s => s.validation.bayesian?.posterior).filter(v => v != null);
-  const wfeVals = validated.map(s => s.validation.walkForward?.wfe).filter(v => v != null);
-  const statRates = validated.map(s => s.validation.statistical ? (s.validation.statistical.passed / s.validation.statistical.total) * 100 : null).filter(v => v != null);
-  const avgMc = avg(mcWinProbs), avgBayes = avg(bayesPosteriors), avgWfe = avg(wfeVals), avgStat = avg(statRates);
-
-  const hasJournal = journalStats && journalStats.total > 0;
-  const kellyPct = hasJournal && journalStats.avgLoss > 0 && journalStats.avgWin > 0
-    ? clamp((journalStats.winRate / 100) - ((1 - journalStats.winRate / 100) / (journalStats.avgWin / journalStats.avgLoss)), 0, 1) * 100
-    : null;
-
-  const hasValidationData = validated.length > 0;
-  const hasAnyValidContent = hasValidationData || hasJournal || (learningProfiles && learningProfiles.length > 0);
-
-  const mcChartData = validated.slice(0, 20).reverse().map((s, i) => ({ label: `${s.symbol}#${i + 1}`, prob: s.validation.monteCarlo?.winProbability ?? 0 }));
-
-  const hurstTone = (pb) => {
-    if (pb === 'TREND_FOLLOW') return 'up';
-    if (pb === 'MEAN_REVERT') return 'warn';
-    return 'neutral';
-  };
-
-  return (
-    <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
-      {/* Dedicated Hurst analysis layer — not a trade signal */}
-      <div className="omni-panel p-3 sm:p-4">
-        <SectionHeader
-          icon={Activity}
-          title="Hurst analysis"
-          sub="regime playbook · separate from signal votes"
-        />
-        <p className="font-mono text-[10px] mb-3 leading-relaxed" style={{ color: 'var(--textFaint)' }}>
-          Path-dependence only. H&gt;0.55 trend-follow · H&lt;0.45 mean-revert (range fades) · ~0.5 stand aside.
-          Does not fire trades — use with structure at range edges or trend pullbacks.
-        </p>
-        {!Array.isArray(hurstBoard) || hurstBoard.length === 0 ? (
-          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
-            Waiting for candle history… Hurst board fills after H1/H4 bars load.
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {hurstBoard.map((row) => (
-              <div
-                key={row.symbol}
-                className="omni-panel2 p-3 flex flex-col gap-1.5"
-              >
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-mono text-[13px] font-semibold" style={{ color: 'var(--text)' }}>
-                    {typeof symLabel === 'function' ? symLabel(row.symbol) : row.symbol}
-                  </span>
-                  <span className="font-mono text-[10px]" style={{ color: 'var(--textDim)' }}>{row.timeframe || 'H1'}</span>
-                  <Pill tone={hurstTone(row.playbook)}>{row.playbook?.replace('_', ' ') || '—'}</Pill>
-                  {row.bias && row.bias !== 'NONE' && (
-                    <span className="font-mono text-[11px] font-semibold" style={{ color: row.bias === 'LONG' ? 'var(--emerald)' : 'var(--coral)' }}>
-                      {row.bias}
-                    </span>
-                  )}
-                  <span className="ml-auto font-mono text-[12px]" style={{ color: 'var(--gold)' }}>
-                    H={row.H != null ? Number(row.H).toFixed(3) : '—'}
-                  </span>
-                  {row.confidenceTier && (
-                    <span className="font-mono text-[9px] px-1.5 py-0.5 rounded uppercase"
-                      style={{
-                        color: row.confidenceTier === 'HIGH' ? 'var(--emerald)' : row.confidenceTier === 'MEDIUM' ? 'var(--gold)' : 'var(--textFaint)',
-                        border: '1px solid var(--border)',
-                      }}
-                    >{row.confidenceTier}</span>
-                  )}
-                </div>
-                <div className="font-mono text-[11px]" style={{ color: 'var(--textDim)' }}>
-                  {row.label || row.regime || '—'}
-                  {row.confidence != null ? ` · conf ${Math.round(row.confidence)}%` : ''}
-                </div>
-                <div className="text-[11px] leading-relaxed" style={{ color: 'var(--textFaint)' }}>
-                  {row.detail || row.note || ''}
-                </div>
-                {row.multi && (row.multi.H4 || row.multi.H1) && (
-                  <div className="flex flex-wrap gap-2 mt-0.5 font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>
-                    {['H1', 'H4'].map((tf) => row.multi[tf] && (
-                      <span key={tf}>
-                        {tf}: H={row.multi[tf].H != null ? Number(row.multi[tf].H).toFixed(2) : '—'} ({row.multi[tf].playbook || '—'})
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {!hasAnyValidContent && (
-        <div className="omni-panel p-4">
-          <SectionHeader icon={FlaskConical} title="Validation" sub="waits on live signals + closed outcomes" />
-          <p className="text-[12px] leading-relaxed" style={{ color: 'var(--textDim)' }}>
-            This tab is empty on purpose until the pipeline scores signals and you (or the journal) record outcomes.
-            Walk-forward / Bayesian / Monte Carlo fill per scored signal; Kelly and Learned Setups need closed trades.
-            They are not broken — there is simply nothing to validate yet. Focus on Signals + MT5 candles first.
-          </p>
-        </div>
-      )}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="omni-panel p-3 flex flex-col items-center justify-center">
-          {avgWfe != null ? <Gauge value={avgWfe * 100} label="Avg Walk-Forward Eff." /> : <span className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>Walk-forward: no data yet</span>}
-        </div>
-        <div className="omni-panel p-3 flex flex-col items-center justify-center">
-          {avgBayes != null ? <Gauge value={avgBayes * 100} label="Avg Bayesian Posterior" /> : <span className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>Bayesian: no data yet</span>}
-        </div>
-        <div className="omni-panel p-3 flex flex-col items-center justify-center">
-          {avgMc != null ? <Gauge value={avgMc} label="Avg Monte Carlo Win %" /> : <span className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>Monte Carlo: no data yet</span>}
-        </div>
-        <div className="omni-panel p-3 flex flex-col items-center justify-center">
-          {kellyPct != null ? (
-            <>
-              <span className="font-mono text-2xl font-bold" style={{ color: 'var(--gold)' }}>{kellyPct.toFixed(1)}%</span>
-              <span className="font-mono text-[9px] uppercase tracking-wider mt-1" style={{ color: 'var(--textFaint)' }}>Kelly Size (from journal)</span>
-            </>
-          ) : <span className="font-mono text-[10px] text-center" style={{ color: 'var(--textFaint)' }}>Kelly: needs completed trades</span>}
-        </div>
-      </div>
-
-      <div className="omni-panel p-4">
-        <SectionHeader icon={FlaskConical} title="Monte Carlo Win Probability" sub="live · per recent validated signal" />
-        {mcChartData.length === 0 ? (
-          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No signals with validation data yet — this fills in as new signals are scored.</div>
-        ) : (
-          <ResponsiveContainer width="100%" height={180}>
-            <BarChart data={mcChartData}>
-              <CartesianGrid stroke="#1c232d" vertical={false} />
-              <XAxis dataKey="label" tick={{ fill: '#526078', fontSize: 9 }} interval={0} angle={-30} textAnchor="end" height={50} />
-              <YAxis tick={{ fill: '#526078', fontSize: 10 }} width={30} domain={[0, 100]} />
-              <Tooltip contentStyle={{ background: '#10151c', border: '1px solid #1c232d', borderRadius: 8, fontSize: 11 }} />
-              <Bar dataKey="prob" radius={[2, 2, 0, 0]}>
-                {mcChartData.map((b, i) => <Cell key={i} fill={b.prob >= 55 ? '#1fe3a8' : '#ff5470'} />)}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        )}
-      </div>
-
-      <div className="omni-panel p-4">
-        <SectionHeader icon={CheckCircle2} title="Shadow Journal" sub={hasJournal ? `${journalStats.total} completed trades` : 'trading journal'} />
-        {hasJournal ? (
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-            <StatCard label="Win Rate" value={`${journalStats.winRate}%`} />
-            <StatCard label="Profit Factor" value={journalStats.pf} accent="var(--gold)" />
-            <StatCard label="Total P/L (R)" value={journalStats.totalPnlR} accent={journalStats.totalPnlR >= 0 ? 'var(--emerald)' : 'var(--coral)'} />
-            <StatCard label="Avg Win / Loss (R)" value={`${journalStats.avgWin} / -${journalStats.avgLoss}`} accent="var(--blue)" />
-            <StatCard label="Expectancy (R)" value={journalStats.expectancy} accent="var(--violet)" />
-          </div>
-        ) : (
-          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>{journalStats?.message || 'No completed trades recorded yet — this fills in once positions close via the MT5 EA bridge.'}</div>
-        )}
-      </div>
-
-      <div className="omni-panel p-4">
-        <SectionHeader icon={Layers} title="Learned Setups" sub="adaptive-learning-engine · per pattern, from real outcomes" />
-        {!learningProfiles || learningProfiles.length === 0 ? (
-          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No learned patterns yet — needs closed trades to build a profile.</div>
-        ) : (
-          <div className="max-h-64 overflow-y-auto omni-scroll space-y-1">
-            {learningProfiles.map(p => (
-              <div key={p.patternKey} className="omni-row flex items-center gap-3 px-2 py-1.5 rounded font-mono text-[10px]">
-                <span className="flex-1 truncate" style={{ color: 'var(--textDim)' }}>{p.patternKey}</span>
-                <span style={{ color: 'var(--textFaint)' }}>{p.samples} samples</span>
-                <span style={{ color: p.winRate >= 0.5 ? 'var(--emerald)' : 'var(--coral)' }}>{Math.round(p.winRate * 100)}% win</span>
-                <span style={{ color: p.expectancyR >= 0 ? 'var(--emerald)' : 'var(--coral)' }}>{p.expectancyR?.toFixed(2)}R exp</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ── TAPE ───────────────────────────────────────────────────────────── */
-function TapeTab({ signals, prices, mode }) {
-  const approved = useMemo(() => signals.filter(s => s.gate.status === 'approved').slice(0, 20), [signals]);
-
-  return (
-    <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
-      <div className="flex items-center gap-4">
-        <StatCard label="Approved Signals" value={approved.length} icon={Activity} />
-        <StatCard label="Avg Score" value={approved.length ? Math.round(approved.reduce((a, s) => a + s.score, 0) / approved.length) : '—'} icon={GaugeIcon} accent="var(--blue)" />
-      </div>
-      <div className="omni-panel overflow-hidden">
-        <SectionHeader icon={ScrollText} title="Signal Queue" sub="approved, awaiting/pending EA execution — no live fills endpoint yet" />
-        {mode !== 'live' ? <WaitingForBackend height={200} /> : approved.length === 0 ? (
-          <div className="p-4 font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No approved signals yet.</div>
-        ) : (
-          <div className="omni-table-scroll">
-            <div className="omni-table-grid" style={{ minWidth: 360 }}>
-              <div className="grid grid-cols-[70px_46px_44px_1fr_60px] gap-2 px-3 py-2 font-mono text-[9px] uppercase tracking-wider border-b border-t" style={{ color: 'var(--textFaint)', borderColor: 'var(--border)' }}>
-                <span>Symbol</span><span>TF</span><span>Dir</span><span>Entry</span><span>Score</span>
-              </div>
-              <div className="max-h-96 overflow-y-auto omni-scroll">
-                {approved.map(s => (
-                  <div key={s.id} className="omni-row grid grid-cols-[70px_46px_44px_1fr_60px] gap-2 px-3 py-2.5 font-mono text-[11px] border-b items-center" style={{ borderColor: 'var(--border)' }}>
-                    <span style={{ color: 'var(--text)' }}>{s.symbol}</span>
-                    <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
-                    <span style={{ color: s.action === 'BUY' ? 'var(--emerald)' : 'var(--coral)' }}>{s.action}</span>
-                    <span style={{ color: 'var(--textDim)' }}>{fmtPrice(s.symbol, s.entry)}</span>
-                    <span style={{ color: 'var(--gold)' }}>{s.score}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ── DESK (Tape + Risk combined) ───────────────────────────────────── */
 function DeskTab({ signals, prices, quotes, changes, accountBalance, relativeStrength, mode, stats }) {
   const approved = useMemo(() => signals.filter(s => s.gate?.status === 'approved' || s.gate?.status === 'APPROVED').slice(0, 30), [signals]);
   const bySymbol = useMemo(() => {
@@ -4419,126 +3346,11 @@ function DeskTab({ signals, prices, quotes, changes, accountBalance, relativeStr
       </div>
 
       <div className="omni-panel p-3 font-mono text-[11px]" style={{ color: 'var(--textDim)' }}>
-        Manual trading mode: position-size calculator and portfolio exposure removed from Desk — use your broker for size. Validation tab still shows quality checks if you want them.
+        Manual trading mode: size and exposure live in your broker. This queue is gate-approved FIRE only.
       </div>
     </div>
   );
 }
-
-/* ── RISK ───────────────────────────────────────────────────────────── */
-function RiskTab({ prices, changes, accountBalance, relativeStrength, mode }) {
-  const [balance, setBalance] = useState(accountBalance ?? 10000);
-  const [balanceTouched, setBalanceTouched] = useState(false);
-  useEffect(() => {
-    if (!balanceTouched && accountBalance != null) setBalance(accountBalance);
-  }, [accountBalance, balanceTouched]);
-  const [riskPct, setRiskPct] = useState(1.0);
-  const [stopPips, setStopPips] = useState(20);
-  const [symbol, setSymbol] = useState('EURUSD');
-  // FIX (Known gap #3): "DASH/RISK account-balance figures aren't yet
-  // pulled from /api/stats's accountBalance field." Applied once, on the
-  // first real value — this field is also a live what-if calculator input,
-  // so it stays user-editable afterward rather than snapping back on every
-  // 5s poll.
-  const appliedRealBalance = useRef(false);
-  useEffect(() => {
-    if (accountBalance != null && !appliedRealBalance.current) {
-      appliedRealBalance.current = true;
-      setBalance(accountBalance);
-    }
-  }, [accountBalance]);
-
-  const riskAmount = balance * (riskPct / 100);
-  const pipValue = PIP[symbol];
-  const units = stopPips > 0 ? Math.round(riskAmount / (stopPips * pipValue)) : 0;
-  const lots = (units / 100000).toFixed(2);
-
-  const sessions = [
-    { name: 'Asia', start: 0, end: 8 }, { name: 'London', start: 8, end: 16 }, { name: 'New York', start: 13, end: 21 },
-  ];
-  const hour = new Date().getUTCHours();
-  const liveRanked = mode === 'live' && relativeStrength?.all?.length ? relativeStrength.all.map(r => r.symbol) : null;
-  const ranked = liveRanked || [...SYMBOLS].sort((a, b) => (changes[b] ?? 0) - (changes[a] ?? 0));
-
-  return (
-    <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="omni-panel p-4">
-          <SectionHeader icon={GaugeIcon} title="Position Size Calculator" />
-          <div className="grid grid-cols-2 gap-3 mb-3">
-            <label className="text-[10px] font-mono uppercase" style={{ color: 'var(--textFaint)' }}>
-              Account Balance ($)
-              <input type="number" value={balance} onChange={e => { setBalance(+e.target.value); setBalanceTouched(true); }}
-                className="w-full mt-1 px-2 py-1.5 rounded font-mono text-[12px] outline-none"
-                style={{ background: 'var(--panel2)', border: '1px solid var(--border)', color: 'var(--text)' }} />
-            </label>
-            <label className="text-[10px] font-mono uppercase" style={{ color: 'var(--textFaint)' }}>
-              Risk Per Trade (%)
-              <input type="number" step="0.1" value={riskPct} onChange={e => setRiskPct(+e.target.value)}
-                className="w-full mt-1 px-2 py-1.5 rounded font-mono text-[12px] outline-none"
-                style={{ background: 'var(--panel2)', border: '1px solid var(--border)', color: 'var(--text)' }} />
-            </label>
-            <label className="text-[10px] font-mono uppercase" style={{ color: 'var(--textFaint)' }}>
-              Symbol
-              <select value={symbol} onChange={e => setSymbol(e.target.value)}
-                className="w-full mt-1 px-2 py-1.5 rounded font-mono text-[12px] outline-none"
-                style={{ background: 'var(--panel2)', border: '1px solid var(--border)', color: 'var(--text)' }}>
-                {SYMBOLS.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </label>
-            <label className="text-[10px] font-mono uppercase" style={{ color: 'var(--textFaint)' }}>
-              Stop Distance (pips)
-              <input type="number" value={stopPips} onChange={e => setStopPips(+e.target.value)}
-                className="w-full mt-1 px-2 py-1.5 rounded font-mono text-[12px] outline-none"
-                style={{ background: 'var(--panel2)', border: '1px solid var(--border)', color: 'var(--text)' }} />
-            </label>
-          </div>
-          <div className="omni-panel2 p-3 flex justify-around text-center">
-            <div><div className="font-mono text-lg font-bold" style={{ color: 'var(--emerald)' }}>{lots}</div><div className="font-mono text-[9px] uppercase" style={{ color: 'var(--textFaint)' }}>Lots</div></div>
-            <div><div className="font-mono text-lg font-bold" style={{ color: 'var(--gold)' }}>{units.toLocaleString()}</div><div className="font-mono text-[9px] uppercase" style={{ color: 'var(--textFaint)' }}>Units</div></div>
-            <div><div className="font-mono text-lg font-bold" style={{ color: 'var(--coral)' }}>${riskAmount.toFixed(0)}</div><div className="font-mono text-[9px] uppercase" style={{ color: 'var(--textFaint)' }}>Max Loss</div></div>
-          </div>
-        </div>
-
-        <div className="omni-panel p-4">
-          <SectionHeader icon={ShieldAlert} title="Drawdown Circuit Breaker" sub="no live risk-manager endpoint yet" />
-          <WaitingForBackend height={140} label="Risk live data not connected yet" />
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="omni-panel p-4">
-          <SectionHeader icon={Layers} title="Portfolio Exposure" sub="no live fills endpoint yet" />
-          <WaitingForBackend height={140} label="Position data not available yet" />
-        </div>
-
-        <div className="omni-panel p-4">
-          <SectionHeader icon={Clock} title="Session / Blackout Windows" sub={`current hour ${hour}:00 UTC`} />
-          <div className="space-y-2 mb-3">
-            {sessions.map(s => {
-              const active = hour >= s.start && hour < s.end;
-              return (
-                <div key={s.name} className="flex items-center justify-between font-mono text-[11px]">
-                  <span style={{ color: active ? 'var(--emerald)' : 'var(--textDim)' }}>{s.name}</span>
-                  <span style={{ color: 'var(--textFaint)' }}>{s.start}:00–{s.end}:00 UTC</span>
-                  {active && <Pill tone="up">active</Pill>}
-                </div>
-              );
-            })}
-          </div>
-          <div className="font-mono text-[9px] uppercase mb-2" style={{ color: 'var(--textFaint)' }}>Relative Strength Ranking{liveRanked ? ' · risk-engine, live' : ' · demo'}</div>
-          <div className="flex flex-wrap gap-1.5">
-            {ranked.map((s, i) => (
-              <span key={s} className="font-mono text-[10px] px-2 py-1 rounded" style={{ background: 'var(--panel2)', color: i < 2 ? 'var(--emerald)' : i >= ranked.length - 2 ? 'var(--coral)' : 'var(--textDim)' }}>{s}</span>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-
 
 const PWA_DONE_KEY = 'omnicee_pwa_done';
 const PWA_DISMISS_KEY = 'omnicee_pwa_dismissed';
@@ -4656,7 +3468,7 @@ function InstallBanner({ installEvt, onInstalled, loggedIn }) {
           type="button"
           onClick={onInstallClick}
           className="font-mono text-[10px] uppercase px-3 py-1.5 rounded font-semibold"
-          style={{ background: 'var(--emerald)', color: '#05070a' }}
+          style={{ background: 'var(--emerald)', color: 'var(--inkOnAccent)' }}
         >
           {installEvt ? 'Install' : isIosSafari() ? 'How to add' : 'Install'}
         </button>
@@ -4682,7 +3494,7 @@ function InstallBanner({ installEvt, onInstalled, loggedIn }) {
           <button
             type="button"
             className="mt-2 font-mono text-[10px] px-2 py-1 rounded"
-            style={{ background: 'var(--emerald)', color: '#05070a' }}
+            style={{ background: 'var(--emerald)', color: 'var(--inkOnAccent)' }}
             onClick={finishForever}
           >
             I installed it — hide this
@@ -4693,6 +3505,39 @@ function InstallBanner({ installEvt, onInstalled, loggedIn }) {
   );
 }
 
+
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    try { console.error('[OMNICEE]', this.props.label || 'UI', error, info); } catch (_) {}
+  }
+  render() {
+    if (this.state.error) {
+      const msg = this.state.error?.message || String(this.state.error);
+      return (
+        <div className="omni-panel p-4 m-2" role="alert">
+          <div className="font-mono text-[12px]" style={{ color: 'var(--gold)' }}>{this.props.label || 'Panel'} failed to render</div>
+          <div className="font-mono text-[11px] mt-1" style={{ color: 'var(--textDim)' }}>{msg}</div>
+          <button
+            type="button"
+            className="omni-chip mt-3 px-3 py-2 font-mono text-[11px] rounded min-h-[40px]"
+            style={{ background: 'var(--emerald)', color: 'var(--inkOnAccent)' }}
+            onClick={() => this.setState({ error: null })}
+          >
+            Retry
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 class AppErrorBoundary extends React.Component {
   constructor(props) {
@@ -4757,6 +3602,8 @@ export default function OmniceeDashboard() {
   const [installEvt, setInstallEvt] = useState(null);
   const [user, setUser] = useState(() => getSession());
   const [soundOn, setSoundOn] = useState(() => loadSoundPref());
+  const [theme, setTheme] = useState(() => loadTheme());
+  const [chartSymbol, setChartSymbol] = useState('XAUUSD');
   const toggleSound = useCallback(() => {
     setSoundOn(prev => {
       const next = !prev;
@@ -4764,6 +3611,25 @@ export default function OmniceeDashboard() {
       return next;
     });
   }, []);
+  const toggleTheme = useCallback(() => {
+    setTheme(prev => {
+      const next = prev === 'light' ? 'dark' : 'light';
+      saveTheme(next);
+      return next;
+    });
+  }, []);
+  const openChart = useCallback((sym) => {
+    if (sym && SYMBOLS.includes(sym)) setChartSymbol(sym);
+    setActiveTab('CHARTS');
+  }, []);
+  useEffect(() => {
+    try {
+      document.documentElement.setAttribute('data-theme', theme);
+      document.documentElement.style.colorScheme = theme;
+      document.body.style.background = theme === 'light' ? '#eef2f7' : '#0b1220';
+      document.body.style.color = theme === 'light' ? '#0f172a' : '#f1f5f9';
+    } catch (_) {}
+  }, [theme]);
   // Session wiped by omniFetch 401 → drop to LoginGate instead of infinite loading
   useEffect(() => {
     const onAuthRequired = () => setUser(null);
@@ -4799,8 +3665,8 @@ export default function OmniceeDashboard() {
     const val = raw.toUpperCase();
     const tab = TABS.find(t => t.key === val || t.label.toUpperCase() === val);
     if (tab) { setActiveTab(tab.key); return; }
-    if (SYMBOLS.includes(val)) { setActiveTab('SIGNALS'); return; }
-  }, []);
+    if (SYMBOLS.includes(val)) { openChart(val); return; }
+  }, [openChart]);
 
   const handleLogout = useCallback(async () => {
     try {
@@ -4817,7 +3683,9 @@ export default function OmniceeDashboard() {
     return (
       <>
         <ThemeStyle />
-        <LoginGate onAuthed={(u) => setUser(u)} />
+        <div className="omni-root" data-theme={theme} style={{ minHeight: '100dvh' }}>
+          <LoginGate onAuthed={(u) => setUser(u)} theme={theme} onToggleTheme={toggleTheme} />
+        </div>
       </>
     );
   }
@@ -4828,7 +3696,7 @@ export default function OmniceeDashboard() {
 
   return (
     <AppErrorBoundary>
-    <div className={`omni-root text-sm${activeTab === 'CHARTS' ? ' is-charts' : ''}`} style={{ minHeight: '100dvh', background: 'var(--void, #0f172a)', color: 'var(--text, #f1f5f9)' }}>
+    <div className={`omni-root text-sm${activeTab === 'CHARTS' ? ' is-charts' : ''}`} data-theme={theme} style={{ minHeight: '100dvh', background: 'var(--void)', color: 'var(--text)' }}>
       <ThemeStyle />
       {feed.signalToast ? <SignalToast toast={feed.signalToast} onDismiss={feed.dismissSignalToast} /> : null}
       <TopBar
@@ -4842,6 +3710,8 @@ export default function OmniceeDashboard() {
         onToggleSound={toggleSound}
         userEmail={user?.email}
         onLogout={handleLogout}
+        theme={theme}
+        onToggleTheme={toggleTheme}
       />
       <InstallBanner installEvt={installEvt} loggedIn={!!user} onInstalled={() => setInstallEvt(null)} />
       {feed.wakingBackend && (
@@ -4866,22 +3736,18 @@ export default function OmniceeDashboard() {
       <div className="flex flex-col flex-1 min-h-0" style={{ minHeight: 0 }}>
         <div className="omni-main omni-scroll">
           <ErrorBoundary key={activeTab} label={activeTab}>
-            {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} analysisLive={feed.analysisLive} socketLive={feed.socketLive} cryptoVolAlerts={feed.cryptoVolAlerts} calendar={feed.calendar} deskBrief={feed.deskBrief} />}
-            {activeTab === 'CHARTS' && <ChartsTab quotes={feed.quotes} mode={feed.mode} />}
+            {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} analysisLive={feed.analysisLive} socketLive={feed.socketLive} cryptoVolAlerts={feed.cryptoVolAlerts} calendar={feed.calendar} deskBrief={feed.deskBrief} onOpenChart={openChart} />}
+            {activeTab === 'CHARTS' && <ChartsTab quotes={feed.quotes} mode={feed.mode} signals={feed.signals} theme={theme} chartSymbol={chartSymbol} onSymbolChange={setChartSymbol} />}
             {activeTab === 'SIGNALS' && (
-              <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} auditLog={feed.auditLog} analysisLive={feed.analysisLive} />
+              <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} analysisLive={feed.analysisLive} socketLive={feed.socketLive} onOpenChart={openChart} />
             )}
             {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}
-            {false && activeTab === 'VALID' && (
-              <ValidTab signals={feed.signals} journalStats={feed.journalStats} learningProfiles={feed.learningProfiles} mode={feed.mode} hurstBoard={feed.hurstBoard} />
-            )}
             {activeTab === 'ANALYSIS' && (
-              <AnalysisTab mode={feed.mode} />
+              <AnalysisTab mode={feed.mode} heatmapTiles={feed.heatmapTiles} relativeStrength={feed.relativeStrength} hurstBoard={feed.hurstBoard} />
             )}
             {activeTab === 'MONITOR' && (
               <div className="space-y-2">
                 <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} fetchErrors={feed.fetchErrors} analysisLive={feed.analysisLive} socketLive={feed.socketLive} />
-                <IntelTab now={feed.now} outlook={feed.outlook} mode={feed.mode} calendar={feed.calendar} />
                 <DeskTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} stats={feed.stats} accountBalance={feed.accountBalance} relativeStrength={feed.relativeStrength} mode={feed.mode} />
               </div>
             )}
