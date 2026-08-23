@@ -1344,35 +1344,99 @@ function startServer(config = {}) {
     path: '/socket.io',
     cors: { origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : true },
     transports: ['websocket', 'polling'],
+    // Keep mobile / Render free-tier clients alive through sleep + cold starts
+    pingInterval: 20000,
+    pingTimeout: 25000,
+    connectTimeout: 20000,
+    allowUpgrades: true,
+    perMessageDeflate: false,
+    maxHttpBufferSize: 1e6,
   });
 
   io.use(async (socket, next) => {
-    const appToken = socket.handshake.auth?.appToken || socket.handshake.query?.appToken;
-    if (appToken) {
-      const appValidation = validateAppToken(appToken);
-      if (appValidation.ok) {
-        socket.telegramUser = appValidation.user;
-        socket.authMethod = 'app-token';
+    try {
+      const appToken = socket.handshake.auth?.appToken || socket.handshake.query?.appToken;
+      if (appToken) {
+        const appValidation = validateAppToken(appToken);
+        if (appValidation.ok) {
+          socket.telegramUser = appValidation.user;
+          socket.authMethod = 'app-token';
+          return next();
+        }
+      }
+
+      // Email OTP session (desk login) — same token as REST Authorization Bearer
+      const sessionToken = String(
+        socket.handshake.auth?.sessionToken
+        || socket.handshake.headers?.['x-session-token']
+        || ''
+      ).trim();
+      if (sessionToken && db?.getDB) {
+        try {
+          const mongo = await db.getDB();
+          const session = await mongo.collection('sessions').findOne({ token: sessionToken });
+          if (session && (!session.expiresAt || new Date(session.expiresAt).getTime() > Date.now())) {
+            socket.emailUser = { email: session.email };
+            socket.authMethod = 'email-session';
+            return next();
+          }
+        } catch (err) {
+          console.warn('[API] socket session auth:', err.message);
+        }
+      }
+
+      const initData = socket.handshake.auth?.initData || socket.handshake.query?.initData;
+      // Allow unauthenticated socket for public market ticks when dashboard is public
+      const publicRead = process.env.PUBLIC_DASHBOARD_READ === 'true' || process.env.EMAIL_AUTH_REQUIRED === 'false';
+      if (!initData && !appToken && !sessionToken && (process.env.NODE_ENV !== 'production' || publicRead)) {
+        socket.authMethod = 'public';
         return next();
       }
+      if (!initData) {
+        // Still allow connection for price/signal push; REST remains gated
+        socket.authMethod = 'anonymous';
+        return next();
+      }
+      const validation = validateTelegramInitData(initData, process.env.TELEGRAM_BOT_TOKEN);
+      if (!validation.ok) return next(new Error(validation.reason));
+      socket.telegramUser = validation.user;
+      socket.authMethod = 'telegram';
+      try { await db.upsertTelegramUser(validation.user); } catch (err) { console.warn('[API] upsertTelegramUser failed (socket auth):', err.message); }
+      return next();
+    } catch (err) {
+      return next(err);
     }
-
-    const initData = socket.handshake.auth?.initData || socket.handshake.query?.initData;
-    if (!initData && !appToken && process.env.NODE_ENV !== 'production') return next();
-    const validation = validateTelegramInitData(initData, process.env.TELEGRAM_BOT_TOKEN);
-    if (!validation.ok) return next(new Error(validation.reason));
-    socket.telegramUser = validation.user;
-    socket.authMethod = 'telegram';
-    // FIX: same silent-swallow pattern as the REST /api/auth/telegram route above — a DB failure here was invisible.
-    try { await db.upsertTelegramUser(validation.user); } catch (err) { console.warn('[API] upsertTelegramUser failed (socket auth):', err.message); }
-    return next();
   });
 
   io.on('connection', socket => {
-    socket.emit('connected', { serverTime: Date.now(), transport: 'socket.io' });
+    console.log(`[API] socket connected ${socket.id} auth=${socket.authMethod || 'n/a'}`);
+    socket.emit('connected', {
+      serverTime: Date.now(),
+      transport: 'socket.io',
+      authMethod: socket.authMethod || null,
+    });
+    // Snapshot helps clients that just reconnected after sleep
+    try {
+      const prices = {};
+      for (const [sym, snap] of MARKET_SNAPSHOT_CACHE.entries()) {
+        prices[sym] = snap;
+      }
+      socket.emit('market_snapshot', { prices, at: Date.now() });
+      if (RECENT_SIGNALS_CACHE.length) {
+        socket.emit('history', { signals: RECENT_SIGNALS_CACHE.slice(0, 40) });
+      }
+    } catch (_) {}
+
+    socket.on('subscribe', () => {
+      // Channels are broadcast globally today; ack so client knows subscription is live
+      socket.emit('subscribed', { ok: true, channels: ['market', 'signal', 'balance'] });
+    });
     socket.on('setting', payload => bus.emit('setting_change', { socketId: socket.id, ...payload }));
     socket.on('get_history', async payload => {
-      const signals = await db.getRecentSignals({ symbol: payload?.symbol, limit: payload?.limit || 50 }).catch(() => []);
+      let signals = RECENT_SIGNALS_CACHE.slice(0, payload?.limit || 50);
+      if (!signals.length) {
+        signals = await db.getRecentSignals({ symbol: payload?.symbol, limit: payload?.limit || 50 }).catch(() => []);
+      }
       socket.emit('history', { signals });
     });
     socket.on('record_outcome', async payload => {

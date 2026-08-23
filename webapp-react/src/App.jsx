@@ -1330,28 +1330,87 @@ function useLiveFeed() {
 
     import('socket.io-client').then(({ io }) => {
       if (cancelled) return;
+      const session = getSession();
       socket = io(API_BASE || undefined, {
         path: '/socket.io',
-        auth: { appToken: APP_TOKEN || undefined, initData: getTelegramInitData() || undefined },
+        auth: {
+          appToken: APP_TOKEN || undefined,
+          initData: getTelegramInitData() || undefined,
+          sessionToken: session?.token || undefined,
+        },
+        // Prefer websocket; polling is fallback (Render / proxies)
         transports: ['websocket', 'polling'],
+        upgrade: true,
+        // --- Reconnection (desk must survive cold starts + mobile sleep) ---
         reconnection: true,
         reconnectionAttempts: Infinity,
-        reconnectionDelay: 500,
-        reconnectionDelayMin: 500,
-        reconnectionDelayMax: 5000,
-        randomizationFactor: 0.2,
-        timeout: 10000,
+        reconnectionDelay: 800,           // first retry
+        reconnectionDelayMax: 12000,      // cap backoff
+        randomizationFactor: 0.35,        // jitter to avoid thundering herd
+        timeout: 15000,                   // connect timeout
+        autoConnect: true,
+        forceNew: false,
+        withCredentials: false,
       });
 
-      socket.on('connect', () => { if (!cancelled) setSocketLive(true); });
-      socket.on('disconnect', () => { if (!cancelled) setSocketLive(false); });
-      socket.on('connect_error', () => { if (!cancelled) setSocketLive(false); });
-      socket.on('reconnect_attempt', () => { if (!cancelled) setSocketLive(false); });
+      const markLive = () => { if (!cancelled) setSocketLive(true); };
+      const markDown = () => { if (!cancelled) setSocketLive(false); };
+
+      socket.on('connect', () => {
+        markLive();
+        if (!cancelled) setWakingBackend(false);
+        // Re-subscribe / request snapshot after every (re)connect
+        try {
+          socket.emit('subscribe', { channels: ['market', 'signal', 'balance'] });
+          socket.emit('get_history', { limit: 40 });
+        } catch (_) {}
+      });
+      socket.on('disconnect', (reason) => {
+        markDown();
+        // Server-initiated or transport close → client will auto-reconnect
+        // 'io client disconnect' means we called disconnect() on purpose
+        if (reason === 'io server disconnect') {
+          try { socket.connect(); } catch (_) {}
+        }
+      });
+      socket.on('connect_error', () => markDown());
+      socket.on('reconnect_attempt', () => markDown());
+      socket.on('reconnect', () => {
+        markLive();
+        try {
+          // Refresh auth payload in case session rotated while offline
+          const s = getSession();
+          if (s?.token) socket.auth = { ...(socket.auth || {}), sessionToken: s.token };
+          socket.emit('subscribe', { channels: ['market', 'signal', 'balance'] });
+          socket.emit('get_history', { limit: 40 });
+        } catch (_) {}
+      });
+      socket.on('reconnect_error', () => markDown());
+      socket.on('reconnect_failed', () => markDown());
       socket.on('engine_ready', () => { if (!cancelled) setWakingBackend(false); });
-      socket.on('reconnect_error', () => { if (!cancelled) setSocketLive(false); });
-      socket.on('reconnect_failed', () => { if (!cancelled) setSocketLive(false); });
-      socket.on('reconnect_error', () => { if (!cancelled) setSocketLive(false); });
-      socket.on('reconnect_failed', () => { if (!cancelled) setSocketLive(false); });
+      socket.on('connected', () => markLive());
+
+      // Browser went offline/online — force reconnect path
+      const onOffline = () => markDown();
+      const onOnline = () => {
+        try {
+          if (socket && !socket.connected) socket.connect();
+        } catch (_) {}
+      };
+      // Mobile: tab backgrounded for a long time → socket often dead on resume
+      const onVisible = () => {
+        if (document.visibilityState !== 'visible') return;
+        try {
+          if (socket && !socket.connected) socket.connect();
+          else if (socket?.connected) {
+            socket.emit('subscribe', { channels: ['market', 'signal', 'balance'] });
+          }
+        } catch (_) {}
+      };
+      window.addEventListener('offline', onOffline);
+      window.addEventListener('online', onOnline);
+      document.addEventListener('visibilitychange', onVisible);
+      socket._omniNetHandlers = { onOffline, onOnline, onVisible };
 
       socket.on('market', payload => {
         if (cancelled || !payload?.symbol || payload.price == null || !(payload.symbol in BASE_PRICE)) return;
@@ -1448,6 +1507,49 @@ function useLiveFeed() {
         if (!cancelled && payload?.balance != null) setAccountBalance(Number(payload.balance));
       });
 
+      // After reconnect: full price map from server cache
+      socket.on('market_snapshot', payload => {
+        if (cancelled || !payload?.prices) return;
+        const nextPrices = {};
+        const nextQuotes = {};
+        for (const [sym, snap] of Object.entries(payload.prices)) {
+          const price = Number(snap?.price ?? snap?.mid);
+          if (!Number.isFinite(price)) continue;
+          nextPrices[sym] = price;
+          nextQuotes[sym] = {
+            price,
+            bid: snap.bid != null ? Number(snap.bid) : null,
+            ask: snap.ask != null ? Number(snap.ask) : null,
+            source: snap.source || 'snapshot',
+            ts: payload.at || Date.now(),
+          };
+        }
+        if (Object.keys(nextPrices).length) {
+          setPrices(prev => ({ ...prev, ...nextPrices }));
+          setQuotes(prev => ({ ...prev, ...nextQuotes }));
+        }
+      });
+
+      socket.on('history', payload => {
+        if (cancelled || !Array.isArray(payload?.signals)) return;
+        const incoming = payload.signals.map(normalizeSignal).filter(s => s?.id);
+        if (!incoming.length) return;
+        setSignals(prev => {
+          const seen = new Set(prev.map(s => s.id));
+          const merged = [...prev];
+          for (const s of incoming) {
+            if (seen.has(s.id)) continue;
+            seen.add(s.id);
+            merged.push(s);
+          }
+          return merged
+            .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+            .slice(0, 200);
+        });
+      });
+
+      socket.on('subscribed', () => { /* ack — connection is fully live */ });
+
       // Real-time analysis pulse (from scheduleLiveAnalysis / runAnalysisCycle)
       socket.on('telemetry', payload => {
         if (cancelled || !payload) return;
@@ -1510,7 +1612,16 @@ function useLiveFeed() {
 
     return () => {
       cancelled = true;
-      if (socket) socket.disconnect();
+      try {
+        if (socket?._omniNetHandlers) {
+          const { onOffline, onOnline, onVisible } = socket._omniNetHandlers;
+          window.removeEventListener('offline', onOffline);
+          window.removeEventListener('online', onOnline);
+          document.removeEventListener('visibilitychange', onVisible);
+        }
+      } catch (_) {}
+      try { socket?.removeAllListeners?.(); } catch (_) {}
+      try { socket?.disconnect(); } catch (_) {}
       setSocketLive(false);
     };
   }, [mode]);
