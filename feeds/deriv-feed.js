@@ -18,12 +18,19 @@ const DERIV_MAP = {
   // USOIL / UUP not on Deriv public tick API
 };
 
+// FIX: these were well below MAX_CANDLES_PER_TF (500, index.js) — H4/D1
+// especially, at 250 vs the 500 the store can actually hold. Deriv's
+// ticks_history API supports far larger counts than this without any
+// special pricing tier, so there was real backfill depth being left on
+// the table for no reason. Matched to the actual storage cap across the
+// board now, so "how much history a chart shows" is limited by what the
+// broker's own API will hand over, not by an arbitrary request size here.
 const CANDLE_REQS = [
-  { timeframe: 'M5', granularity: 300, count: 300 },
-  { timeframe: 'M15', granularity: 900, count: 350 },
-  { timeframe: 'H1', granularity: 3600, count: 400 },
-  { timeframe: 'H4', granularity: 14400, count: 250 },
-  { timeframe: 'D1', granularity: 86400, count: 250 },
+  { timeframe: 'M5', granularity: 300, count: 500 },
+  { timeframe: 'M15', granularity: 900, count: 500 },
+  { timeframe: 'H1', granularity: 3600, count: 500 },
+  { timeframe: 'H4', granularity: 14400, count: 500 },
+  { timeframe: 'D1', granularity: 86400, count: 500 },
 ];
 
 const URLS = [

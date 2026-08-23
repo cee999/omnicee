@@ -2172,6 +2172,43 @@ function buildFeeds() {
       finnhubFeed.connectPriceStream(fxSymbols);
       feeds.push({ name: 'FinnhubPrice', instance: finnhubFeed, symbols: fxSymbols });
       log.info(`Finnhub price stream for: ${fxSymbols.join(', ')}`);
+
+      // FIX: Deriv backfills real historical candles on connect (see
+      // derivFeed.on('candles', ...) above) — Finnhub-only symbols (UUP,
+      // USOIL, neither on Deriv's public tick API) had no equivalent, so
+      // they only ever got depth from live ticks arriving in real time.
+      // For H4 that's ~83 days to fill a 500-candle store from scratch —
+      // effectively never, especially across Render's periodic restarts.
+      // Same bulk-seed pattern as Deriv's handler: direct write into
+      // candleStores (not per-candle through onCandle — this is a bulk
+      // history load, not a live tick), capped at the same 500 as
+      // MAX_CANDLES_PER_TF, re-run every 5 minutes to stay current.
+      const finnhubEquitySymbols = fxSymbols.filter(s => finnhubFeed.equitySymbolMap[s]);
+      if (finnhubEquitySymbols.length) {
+        const backfillFinnhub = async () => {
+          for (const symbol of finnhubEquitySymbols) {
+            for (const timeframe of TIMEFRAMES_STR) {
+              try {
+                const candles = await finnhubFeed.getLatestCandles(symbol, timeframe, 500);
+                if (!candles.length) continue;
+                if (!candleStores[symbol]) candleStores[symbol] = {};
+                const prev = candleStores[symbol][timeframe] || [];
+                if (candles.length > prev.length * 0.5 || prev.length < 40) {
+                  candleStores[symbol][timeframe] = candles.slice(-500);
+                  log.info(`Finnhub candles: ${symbol} ${timeframe} ${candles.length} bars`);
+                  if (candles.length >= (SIGNAL_SOFT_GATES ? 40 : 50)) {
+                    setImmediate(() => { lastAnalysisAt.delete(`${symbol}:${timeframe}`); scheduleLiveAnalysis(symbol, 'bar_close'); });
+                  }
+                }
+              } catch (e) {
+                log.warn(`Finnhub candle backfill failed [${symbol} ${timeframe}]: ${feedErrorMessage(e)}`);
+              }
+            }
+          }
+        };
+        backfillFinnhub();
+        setInterval(backfillFinnhub, 5 * 60 * 1000);
+      }
     } catch (e) {
       log.warn(`Finnhub price stream failed: ${e.message}`);
     }

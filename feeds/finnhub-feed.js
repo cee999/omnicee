@@ -190,15 +190,23 @@ class FinnhubFeed extends EventEmitter {
   }
 
   async _fetchCandles(symbol, resolution, count) {
-    const tdLikeSymbol = this.forexSymbolMap[symbol] || symbol;
+    // FIX: this always hit /forex/candle regardless of symbol type. UUP and
+    // USOIL->USO (added for the symbols Deriv doesn't cover — see
+    // equitySymbolMap above) are equities/ETFs, not forex pairs; Finnhub's
+    // REST API serves those from a completely different endpoint
+    // (/stock/candle), so this would have silently returned nothing for
+    // either symbol regardless of API key validity.
+    const isEquity = Boolean(this.equitySymbolMap[symbol]);
+    const apiSymbol = this.equitySymbolMap[symbol] || this.forexSymbolMap[symbol] || symbol;
     const now = Math.floor(Date.now() / 1000);
     const resMinutes = resolution === 'D' ? 1440 : resolution === 'W' ? 10080 : Number(resolution);
     const rangeSeconds = resMinutes * 60 * (count + 5);
     const from = now - rangeSeconds;
 
     try {
+      const endpoint = isEquity ? '/stock/candle' : '/forex/candle';
       const { status, body } = await this._get(
-        `/forex/candle?symbol=${encodeURIComponent(tdLikeSymbol)}&resolution=${resolution}&from=${from}&to=${now}`
+        `${endpoint}?symbol=${encodeURIComponent(apiSymbol)}&resolution=${resolution}&from=${from}&to=${now}`
       );
 
       if (status === 403 || body?.error) {
