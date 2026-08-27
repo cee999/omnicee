@@ -638,49 +638,90 @@ function ThemeStyle() {
         }
         .omni-tv-host { min-height: 220px; }
       }
-      /* Full / expanded chart — works on laptop + mobile (CSS overlay; not browser Fullscreen API) */
+      /* MOBILE-FIRST full chart — overlay above chrome (phone primary) */
       .omni-charts-grid.is-chart-expanded {
-        position: fixed;
-        inset: 0;
-        z-index: 80;
-        width: 100vw;
-        max-width: 100vw;
-        height: 100dvh;
-        min-height: 100dvh;
-        margin: 0;
-        padding: 0;
-        gap: 0;
-        grid-template-columns: 1fr;
-        grid-template-rows: auto 1fr;
-        background: var(--void, #05080f);
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        bottom: 0 !important;
+        z-index: 9999 !important;
+        width: 100vw !important;
+        max-width: 100vw !important;
+        height: 100dvh !important;
+        min-height: 100dvh !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        gap: 0 !important;
+        display: flex !important;
+        flex-direction: column !important;
+        grid-template-columns: none !important;
+        grid-template-rows: none !important;
+        background: var(--void, #0b1220) !important;
+        padding-top: env(safe-area-inset-top, 0px) !important;
+        padding-bottom: env(safe-area-inset-bottom, 0px) !important;
       }
       .omni-charts-grid.is-chart-expanded .omni-charts-quote-strip,
       .omni-charts-grid.is-chart-expanded .omni-charts-rail {
         display: none !important;
       }
       .omni-charts-grid.is-chart-expanded .omni-charts-toolbar {
-        grid-column: 1;
-        grid-row: 1;
-        border-radius: 0;
-        border-left: none;
-        border-right: none;
-        border-top: none;
+        flex: 0 0 auto !important;
+        width: 100% !important;
+        border-radius: 0 !important;
+        border: none !important;
+        border-bottom: 1px solid var(--glassBorder) !important;
       }
       .omni-charts-grid.is-chart-expanded .omni-charts-stage {
-        grid-column: 1;
-        grid-row: 2;
-        border-radius: 0;
-        border: none;
-        min-height: 0;
-        height: 100%;
+        flex: 1 1 auto !important;
+        width: 100% !important;
+        min-height: 0 !important;
+        height: auto !important;
+        border-radius: 0 !important;
+        border: none !important;
+        display: flex !important;
+        flex-direction: column !important;
       }
       .omni-charts-grid.is-chart-expanded .omni-tv-host {
-        min-height: 0;
-        height: 100%;
-        border-radius: 0;
+        flex: 1 1 auto !important;
+        min-height: 0 !important;
+        height: 100% !important;
+        border-radius: 0 !important;
+      }
+      .omni-chart-fab {
+        position: absolute;
+        z-index: 20;
+        right: max(12px, env(safe-area-inset-right, 0px));
+        bottom: max(14px, env(safe-area-inset-bottom, 0px));
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        min-height: 48px;
+        min-width: 48px;
+        padding: 12px 16px;
+        border-radius: 999px;
+        border: 1px solid var(--glassBorder);
+        background: rgba(15, 23, 42, 0.92);
+        color: var(--text);
+        font-family: inherit;
+        font-size: 13px;
+        font-weight: 700;
+        box-shadow: 0 8px 28px rgba(0,0,0,0.45);
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+        cursor: pointer;
+      }
+      .omni-chart-fab.is-exit {
+        background: rgba(34, 197, 94, 0.95);
+        color: #0b1220;
+        border-color: transparent;
+        bottom: auto;
+        top: max(10px, env(safe-area-inset-top, 0px));
+        right: max(10px, env(safe-area-inset-right, 0px));
       }
       .omni-chart-expand-btn {
-        display: inline-flex;
+        display: none;
         align-items: center;
         gap: 6px;
         font-family: inherit;
@@ -694,19 +735,32 @@ function ThemeStyle() {
         color: var(--text);
         cursor: pointer;
         flex-shrink: 0;
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
       }
-      .omni-chart-expand-btn:hover {
-        border-color: var(--emerald);
-        color: var(--emerald);
+      @media (min-width: 900px) {
+        .omni-chart-expand-btn { display: inline-flex; }
+        .omni-chart-expand-btn:hover {
+          border-color: var(--emerald);
+          color: var(--emerald);
+        }
+        .omni-chart-expand-btn.is-exit {
+          background: rgba(34, 197, 94, 0.15);
+          border-color: var(--emerald);
+          color: var(--emerald);
+        }
       }
-      .omni-chart-expand-btn.is-exit {
-        background: rgba(34, 197, 94, 0.15);
-        border-color: var(--emerald);
-        color: var(--emerald);
-      }
+      body.omni-chart-expanded,
       body.omni-chart-expanded-lock {
-        overflow: hidden;
+        overflow: hidden !important;
         touch-action: none;
+        overscroll-behavior: none;
+      }
+      body.omni-chart-expanded .omni-topbar,
+      body.omni-chart-expanded .omni-ticker-wrap,
+      body.omni-chart-expanded .omni-nav {
+        display: none !important;
+        pointer-events: none !important;
       }
     `}</style>
   );
@@ -2434,10 +2488,22 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
         })}
       </div>
       <div className="omni-panel omni-charts-stage">
-        <ErrorBoundary key={'tv-' + active + (theme || 'dark')} label="TradingView">
+        {/* Remount TV on expand so widget picks up full mobile height */}
+        <ErrorBoundary key={'tv-' + active + (theme || 'dark') + (chartExpanded ? '-full' : '')} label="TradingView">
           <TradingViewChart symbol={active} theme={theme} />
         </ErrorBoundary>
-        {latest && (
+        {/* Mobile-first: large FAB always on chart (phone primary control) */}
+        <button
+          type="button"
+          className={`omni-chart-fab${chartExpanded ? ' is-exit' : ''}`}
+          onClick={() => setChartExpanded((v) => !v)}
+          aria-pressed={chartExpanded}
+          aria-label={chartExpanded ? 'Exit full chart' : 'Expand chart full screen'}
+        >
+          {chartExpanded ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+          <span>{chartExpanded ? 'Exit' : 'Full'}</span>
+        </button>
+        {latest && !chartExpanded && (
           <div className="omni-chart-hud" role="status" aria-live="polite">
             <div className="flex items-center gap-2 font-mono text-[12px]">
               <span style={{ color: latest.action === 'BUY' || latest.action === 'LONG' ? 'var(--emerald)' : 'var(--coral)', fontWeight: 700 }}>
