@@ -30,12 +30,12 @@ const SYMBOLS         = (requireEnv('SYMBOLS', 'XAUUSD,BTCUSDT,ETHUSDT,EURUSD,GB
   .split(',').map(s => s.trim()).filter(Boolean);
 const TIMEFRAMES_STR  = (requireEnv('TIMEFRAMES', 'M15,H1,H4') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
-const MIN_SCORE       = parseFloat(requireEnv('MIN_SIGNAL_SCORE', '50'));
-// Gold (XAUUSD) can use a slightly lower floor — liquid, high-ATR commodity desks
-const GOLD_MIN_SCORE  = parseFloat(requireEnv('GOLD_MIN_SCORE', String(Math.max(45, MIN_SCORE - 5))));
+const MIN_SCORE       = parseFloat(requireEnv('MIN_SIGNAL_SCORE', '55'));
+// Daily gold scalper floor is higher (see signal-pipeline/daily-gold-profile.js) — do not lower quality for volume
+const GOLD_MIN_SCORE  = parseFloat(requireEnv('GOLD_MIN_SCORE', '72'));
 const RISK_PCT        = parseFloat(requireEnv('RISK_PCT_PER_TRADE', '1.0'));
 const MAX_DAILY_LOSS  = parseFloat(requireEnv('MAX_DAILY_LOSS_PCT', '2.0'));
-const MAX_DRAWDOWN    = parseFloat(requireEnv('MAX_DRAWDOWN_PCT', '10.0'));
+const MAX_DRAWDOWN    = parseFloat(requireEnv('MAX_DRAWDOWN_PCT', '8.0'));
 const ACCOUNT_BALANCE = parseFloat(requireEnv('ACCOUNT_BALANCE', '10000'));
 const REQUIRE_KZ      = requireEnv('REQUIRE_KILLZONE', 'false') === 'true';
 const SIGNAL_SOFT_GATES = requireEnv('SIGNAL_SOFT_GATES', 'true') !== 'false';
@@ -122,7 +122,20 @@ const { TimeCycleEngine }    = loadModule('./signal-pipeline/time-cycle-engine',
 const { StrategySelector }   = loadModule('./signal-pipeline/strategy-selector',    'StrategySelector')  || {};
 const { CandleIntelligence } = loadModule('./signal-pipeline/candle-intelligence',  'CandleIntelligence') || {};
 const { AIAdvisor }          = loadModule('./signal-pipeline/ai-advisor',           'AIAdvisor')          || {};
-const { evaluateGoldDesk, annotateSignal, isGoldSymbol } = loadModule('./signal-pipeline/daily-gold-profile', 'DailyGoldProfile') || {};
+const dailyGoldProfile = loadModule('./signal-pipeline/daily-gold-profile', 'DailyGoldProfile') || {};
+const { evaluateGoldDesk, annotateSignal, isGoldSymbol } = dailyGoldProfile;
+const mirofishRehearsal = loadModule('./signal-pipeline/mirofish-rehearsal', 'MiroFishRehearsal') || {};
+const { FinceptOrderValidator } = loadModule('./risk-engine/fincept-order-validator', 'FinceptOrderValidator') || {};
+const apivaultCatalog = loadModule('./feeds/apivault-catalog', 'ApiVaultCatalog') || {};
+const finceptOrderValidator = FinceptOrderValidator
+  ? new FinceptOrderValidator({ minRR: 1.5, requireSL: true, requireTP: true })
+  : null;
+if (apivaultCatalog?.statusReport) {
+  try {
+    const av = apivaultCatalog.statusReport();
+    log.info(`ApiVault catalog: ${av.integrated}/${av.total} integrated; ${av.candidates?.length || 0} candidates`);
+  } catch (_) {}
+}
 
 const { MarketHoursGate, SymbolManager } = loadModule('./orchestrator/scheduling-gate', 'MarketHoursGate') || {};
 const { AuditTrail }          = loadModule('./orchestrator/audit-trail',             'AuditTrail')         || {};
@@ -821,6 +834,44 @@ async function runAnalysisCycle(symbol, timeframe) {
       : { action: 'ALLOW', penalty: 0, note: 'Adaptive learning disabled' };
 
 
+    // MiroFish-style swarm rehearsal (all symbols) before gold-desk / publish
+    try {
+      if (mirofishRehearsal?.rehearse && Array.isArray(signal.agents) && signal.agents.length) {
+        const rehearsal = mirofishRehearsal.rehearse(signal.agents, signal.action, {
+          minConsensus: isGoldSymbol?.(symbol) ? 0.6 : 0.5,
+          minAligned: isGoldSymbol?.(symbol) ? 4 : 3,
+          minAvgScore: 55,
+        });
+        if (mirofishRehearsal.attachRehearsal) {
+          signal = mirofishRehearsal.attachRehearsal(signal, rehearsal);
+        }
+        if (!rehearsal.passed && isGoldSymbol?.(symbol)) {
+          log.info(`[MIROFISH] gold rehearsal weak: ${rehearsal.reason}`);
+        }
+      }
+    } catch (e) {
+      log.warn(`MiroFish rehearsal error: ${e.message}`);
+    }
+
+    // Fincept-style order geometry validation (manual desk — does not send to broker)
+    try {
+      if (finceptOrderValidator && (signal.action === 'BUY' || signal.action === 'SELL')) {
+        const ddSt = drawdownGuard?.getStatus?.() || {};
+        const fov = finceptOrderValidator.validate(signal, {
+          balance: ACCOUNT_BALANCE,
+          consecLoss: ddSt.consecLoss ?? ddSt.consecutiveLosses ?? 0,
+          tradesToday: ddSt.daily?.trades ?? ddSt.tradesToday ?? 0,
+        });
+        signal.finceptValidation = fov;
+        if (!fov.ok) {
+          log.warn(`[FINCEPT] order invalid ${symbol}: ${fov.failures.join(' | ')}`);
+          signal.riskFlags = { ...(signal.riskFlags || {}), finceptBlock: true, finceptFailures: fov.failures };
+        }
+      }
+    } catch (e) {
+      log.warn(`Fincept validator error: ${e.message}`);
+    }
+
     // Daily gold desk profile (Exness XAU history) — annotate + soft/hard risk for scalpers
     let goldDeskEval = null;
     try {
@@ -828,8 +879,10 @@ async function runAnalysisCycle(symbol, timeframe) {
         goldDeskEval = dailyGoldProfile.evaluateGoldDesk({
           symbol,
           action: signal.action,
-          score: signal.score?.final,
+          score: signal.score?.final ?? signal.score,
           tradePlan,
+          signal,
+          agents: signal.agents,
           drawdownStatus: drawdownGuard?.getStatus?.() || {},
           recentOutcomes: [],
           timestamp: Date.now(),
