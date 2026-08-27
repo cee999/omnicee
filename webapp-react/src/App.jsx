@@ -2423,51 +2423,8 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
       )}
       <DeskBriefPanel brief={deskBrief} mode={mode} />
       <WhatToExpect outlook={outlook} calendar={calendar} now={now || Date.now()} mode={mode} />
-      {/* FIX: TradingViewChart only ever existed full-page inside ChartsTab
-          — DASH had no chart at all, just quote cards that navigate away
-          to it. That's the "doesn't fit into the system when not
-          expanded" gap: there was no not-expanded state to speak of.
-          Compact embedded version here, bound to the same top-level
-          chartSymbol state ChartsTab already uses, with an explicit
-          expand action into the real full-page view — not a second,
-          divergent chart implementation. */}
-      <div className="omni-panel p-2 sm:p-3">
-        <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
-          <div className="flex gap-1 flex-wrap">
-            {SYMBOLS.map(sym => (
-              <button
-                key={sym}
-                type="button"
-                onClick={() => onSymbolChange?.(sym)}
-                className="omni-chip font-mono text-[10px] px-2 py-1 rounded-full"
-                aria-pressed={chartSymbol === sym}
-                style={{
-                  color: chartSymbol === sym ? 'var(--inkOnAccent)' : 'var(--textDim)',
-                  background: chartSymbol === sym ? 'var(--emerald)' : 'var(--panel2)',
-                  border: '1px solid var(--glassBorder)',
-                  fontWeight: chartSymbol === sym ? 700 : 500,
-                }}
-              >
-                {symLabel(sym)}
-              </button>
-            ))}
-          </div>
-          <button
-            type="button"
-            onClick={() => onOpenChart?.(chartSymbol)}
-            className="font-mono text-[10px] px-2 py-1 rounded flex items-center gap-1 flex-shrink-0"
-            style={{ color: 'var(--textDim)', border: '1px solid var(--glassBorder)', background: 'var(--panel2)' }}
-            aria-label="Expand chart to full screen"
-          >
-            <Maximize2 size={11} /> Expand
-          </button>
-        </div>
-        <div className="h-[240px] sm:h-[320px]">
-          <ErrorBoundary key={'dash-tv-' + chartSymbol} label="TradingView">
-            <TradingViewChart symbol={chartSymbol} theme={theme} />
-          </ErrorBoundary>
-        </div>
-      </div>
+      {/* TradingView lives only on Charts tab — Home is quotes + desk only.
+          Quote cards open Charts via onOpenChart(sym). */}
       <div className="omni-home-grid">
             {SYMBOLS.map(sym => {
               const qq = quotes?.[sym];
