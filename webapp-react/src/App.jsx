@@ -6,7 +6,7 @@ import {
   Circle, Zap, Database,
   Terminal, Newspaper,
   Layers, Target,
-  Volume2, VolumeX, Sun, Moon, Maximize2, Download,
+  Volume2, VolumeX, Sun, Moon, Maximize2, Minimize2, Download,
 } from 'lucide-react';
 
 const SYMBOLS = ['XAUUSD', 'BTCUSDT', 'ETHUSDT', 'EURUSD', 'GBPUSD', 'USDJPY', 'USOIL', 'UUP'];
@@ -637,6 +637,76 @@ function ThemeStyle() {
           grid-template-rows: auto minmax(240px, 1fr) minmax(140px, 32vh);
         }
         .omni-tv-host { min-height: 220px; }
+      }
+      /* Full / expanded chart — works on laptop + mobile (CSS overlay; not browser Fullscreen API) */
+      .omni-charts-grid.is-chart-expanded {
+        position: fixed;
+        inset: 0;
+        z-index: 80;
+        width: 100vw;
+        max-width: 100vw;
+        height: 100dvh;
+        min-height: 100dvh;
+        margin: 0;
+        padding: 0;
+        gap: 0;
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr;
+        background: var(--void, #05080f);
+      }
+      .omni-charts-grid.is-chart-expanded .omni-charts-quote-strip,
+      .omni-charts-grid.is-chart-expanded .omni-charts-rail {
+        display: none !important;
+      }
+      .omni-charts-grid.is-chart-expanded .omni-charts-toolbar {
+        grid-column: 1;
+        grid-row: 1;
+        border-radius: 0;
+        border-left: none;
+        border-right: none;
+        border-top: none;
+      }
+      .omni-charts-grid.is-chart-expanded .omni-charts-stage {
+        grid-column: 1;
+        grid-row: 2;
+        border-radius: 0;
+        border: none;
+        min-height: 0;
+        height: 100%;
+      }
+      .omni-charts-grid.is-chart-expanded .omni-tv-host {
+        min-height: 0;
+        height: 100%;
+        border-radius: 0;
+      }
+      .omni-chart-expand-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-family: inherit;
+        font-size: 11px;
+        font-weight: 600;
+        padding: 8px 12px;
+        min-height: 40px;
+        border-radius: 999px;
+        border: 1px solid var(--glassBorder);
+        background: var(--panel2);
+        color: var(--text);
+        cursor: pointer;
+        flex-shrink: 0;
+      }
+      .omni-chart-expand-btn:hover {
+        border-color: var(--emerald);
+        color: var(--emerald);
+      }
+      .omni-chart-expand-btn.is-exit {
+        background: rgba(34, 197, 94, 0.15);
+        border-color: var(--emerald);
+        color: var(--emerald);
+      }
+      body.omni-chart-expanded-lock {
+        overflow: hidden;
+        touch-action: none;
       }
     `}</style>
   );
@@ -2242,9 +2312,25 @@ function TradingViewChart({ symbol, className = '', theme = 'dark' }) {
 /** Full-screen TradingView desk + live signal rail (only chart in the app) */
 function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }) {
   const [localSymbol, setLocalSymbol] = useState(chartSymbol || 'XAUUSD');
+  const [chartExpanded, setChartExpanded] = useState(false);
   useEffect(() => {
     if (chartSymbol) setLocalSymbol(chartSymbol);
   }, [chartSymbol]);
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape' && chartExpanded) setChartExpanded(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [chartExpanded]);
+  useEffect(() => {
+    document.body.classList.toggle('omni-chart-expanded-lock', chartExpanded);
+    document.body.classList.toggle('omni-chart-expanded', chartExpanded);
+    return () => {
+      document.body.classList.remove('omni-chart-expanded-lock');
+      document.body.classList.remove('omni-chart-expanded');
+    };
+  }, [chartExpanded]);
   const active = chartSymbol || localSymbol;
   const setActive = (sym) => {
     setLocalSymbol(sym);
@@ -2260,7 +2346,7 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
   );
   const latest = liveSignals[0];
   return (
-    <div className="omni-charts-grid">
+    <div className={`omni-charts-grid${chartExpanded ? ' is-chart-expanded' : ''}`}>
       <div className="omni-panel omni-charts-toolbar px-3 py-2 flex flex-wrap gap-1.5 items-center">
         <span className="font-mono text-[10px] uppercase tracking-wider mr-1" style={{ color: 'var(--textFaint)' }}>Symbol</span>
         {SYMBOLS.map(sym => (
@@ -2280,7 +2366,7 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
             {symLabel(sym)}
           </button>
         ))}
-        <span className="ml-auto font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
+        <span className="ml-auto font-mono text-[11px] flex flex-wrap items-center gap-2" style={{ color: 'var(--textFaint)' }}>
           {sourceLabel(q?.source) || (mode === 'live' ? 'feed' : '—')}
           {q?.bid != null && q?.ask != null && (
             <> · <span style={{ color: 'var(--coral)' }}>{fmtPrice(active, q.bid)}</span>
@@ -2290,10 +2376,21 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
           {q?.bid == null && q?.price != null && (
             <> · <span style={{ color: 'var(--text)' }}>{fmtPrice(active, q.price)}</span></>
           )}
+          <button
+            type="button"
+            className={`omni-chart-expand-btn${chartExpanded ? ' is-exit' : ''}`}
+            onClick={() => setChartExpanded((v) => !v)}
+            aria-pressed={chartExpanded}
+            aria-label={chartExpanded ? 'Exit full chart' : 'Expand chart full screen'}
+            title={chartExpanded ? 'Exit (Esc)' : 'Full screen chart'}
+          >
+            {chartExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            <span>{chartExpanded ? 'Exit' : 'Expand'}</span>
+          </button>
         </span>
       </div>
       {/* Multi-symbol quote strip (parity with Home) — Charts tab is self-contained */}
-      <div className="omni-panel px-2 py-2 flex gap-2 overflow-x-auto omni-scroll">
+      <div className="omni-panel omni-charts-quote-strip px-2 py-2 flex gap-2 overflow-x-auto omni-scroll">
         {SYMBOLS.map((sym) => {
           const qq = quotes?.[sym];
           const bid = qq?.bid ?? qq?.price;
