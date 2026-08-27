@@ -103,6 +103,7 @@ const { ForexFactoryCalendar } = loadModule('./feeds/forex-factory-calendar',   
 const { BinancePublicFeed }   = loadModule('./feeds/binance-public-feed',       'BinancePublicFeed')   || {};
 const { TradingViewQuoteFeed } = loadModule('./feeds/tradingview-quote-feed',   'TradingViewQuoteFeed') || {};
 const { DerivFeed }            = loadModule('./feeds/deriv-feed',               'DerivFeed')            || {};
+const { StockDataFeed }        = loadModule('./feeds/stockdata-feed',           'StockDataFeed')        || {};
 const { CryptoVolatilityAlert } = loadModule('./feeds/crypto-volatility-alert', 'CryptoVolatilityAlert') || {};
 const { CFTCCotFeed }        = loadModule('./feeds/cftc-cot-feed',               'CFTCCotFeed')       || {};
 const { COTReportParser }    = loadModule('./feeds/cot-report-parser',           'COTReportParser')   || {};
@@ -1332,8 +1333,9 @@ const PRICE_SOURCE_RANK = {
   mt5_ea: 100,
   tradingview: 92,
   deriv: 70,
-  binance: 58,
   finnhub: 60,
+  binance: 58,
+  stockdata: 45, // US equity/ETF quotes + FX/crypto EOD fallback — never beats MT5/Deriv
   candle: 40,
   unknown: 0,
 };
@@ -1627,7 +1629,7 @@ let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, hurstAnalysis, insti
     monteCarlo, bayesianEng, statValidator, walkForward, ensembleEng,
     signalMonitor, institutionalRiskManager, myfxbookFeed, openInsiderFeed,
     finnhubFeed, cftcCotFeed, cotParser, executionEngine, opportunityRanker, relativeStrength,
-    dataIntegrityMonitor, intermarketAnalyzer, alphaVantageFeed, fmpFeed;
+    dataIntegrityMonitor, intermarketAnalyzer, alphaVantageFeed, fmpFeed, stockDataFeed;
 
 // FIX: several feeds (Bybit, TwelveData, Myfxbook) emit errors in two different shapes — a raw Error (has .message) from the underlying connection, and a { source, error } wrapper from their own...
 function feedErrorMessage(err) {
@@ -2247,7 +2249,30 @@ function buildFeeds() {
     log.info(`TradingViewQuoteFeed for: ${SYMBOLS.join(', ')}`);
   }
 
-  // Yahoo never overwrites a symbol that has a recent mt5_ea tick.
+  // Lower-ranked feeds never overwrite a recent mt5_ea or deriv tick (see PRICE_SOURCE_RANK).
+
+  if (StockDataFeed && process.env.STOCKDATA_API_TOKEN) {
+    const stockDataFeed = new StockDataFeed({
+      apiToken: process.env.STOCKDATA_API_TOKEN,
+      symbols: SYMBOLS,
+      pollMs: Number(process.env.STOCKDATA_POLL_MS || 3 * 60 * 1000),
+    });
+    stockDataFeed.on('price', ({ symbol, price, change, bid, ask }) => {
+      const last = lastPriceBySymbol[symbol];
+      // Do not fight broker or Deriv while they are fresh
+      if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < BROKER_PRICE_HOLD_MS) return;
+      if (last && last.source === 'deriv' && (Date.now() - last.ts) < 30000) return;
+      onLivePrice(symbol, price, { source: 'stockdata', change, bid, ask });
+    });
+    stockDataFeed.on('error', (err) => log.warn(`StockDataFeed: ${feedErrorMessage(err)}`));
+    stockDataFeed.on('warn', (msg) => log.warn(`StockDataFeed: ${msg}`));
+    stockDataFeed.start();
+    feeds.push({ name: 'StockDataFeed', instance: stockDataFeed, symbols: SYMBOLS });
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('StockData', stockDataFeed, SYMBOLS);
+    log.info('StockDataFeed enabled — US quotes + FX/crypto EOD fallback (rank below MT5/Deriv)');
+  } else {
+    log.info('StockDataFeed disabled — set STOCKDATA_API_TOKEN to enable');
+  }
 
   if (dataIntegrityMonitor && finnhubFeed?.enabled?.()) {
     dataIntegrityMonitor.registerFeed('Finnhub', finnhubFeed, fxSymbols.length ? fxSymbols : SYMBOLS);
