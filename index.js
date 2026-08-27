@@ -28,13 +28,13 @@ const CHAT_IDS        = (requireEnv('TELEGRAM_CHAT_IDS', '') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
 const SYMBOLS         = (requireEnv('SYMBOLS', 'XAUUSD,BTCUSDT,ETHUSDT,EURUSD,GBPUSD,USDJPY,USOIL,UUP') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
-const TIMEFRAMES_STR  = (requireEnv('TIMEFRAMES', 'H1,H4') || '')
+const TIMEFRAMES_STR  = (requireEnv('TIMEFRAMES', 'M15,H1,H4') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
 const MIN_SCORE       = parseFloat(requireEnv('MIN_SIGNAL_SCORE', '50'));
 // Gold (XAUUSD) can use a slightly lower floor — liquid, high-ATR commodity desks
 const GOLD_MIN_SCORE  = parseFloat(requireEnv('GOLD_MIN_SCORE', String(Math.max(45, MIN_SCORE - 5))));
 const RISK_PCT        = parseFloat(requireEnv('RISK_PCT_PER_TRADE', '1.0'));
-const MAX_DAILY_LOSS  = parseFloat(requireEnv('MAX_DAILY_LOSS_PCT', '3.0'));
+const MAX_DAILY_LOSS  = parseFloat(requireEnv('MAX_DAILY_LOSS_PCT', '2.0'));
 const MAX_DRAWDOWN    = parseFloat(requireEnv('MAX_DRAWDOWN_PCT', '10.0'));
 const ACCOUNT_BALANCE = parseFloat(requireEnv('ACCOUNT_BALANCE', '10000'));
 const REQUIRE_KZ      = requireEnv('REQUIRE_KILLZONE', 'false') === 'true';
@@ -122,6 +122,8 @@ const { TimeCycleEngine }    = loadModule('./signal-pipeline/time-cycle-engine',
 const { StrategySelector }   = loadModule('./signal-pipeline/strategy-selector',    'StrategySelector')  || {};
 const { CandleIntelligence } = loadModule('./signal-pipeline/candle-intelligence',  'CandleIntelligence') || {};
 const { AIAdvisor }          = loadModule('./signal-pipeline/ai-advisor',           'AIAdvisor')          || {};
+const { evaluateGoldDesk, annotateSignal, isGoldSymbol } = loadModule('./signal-pipeline/daily-gold-profile', 'DailyGoldProfile') || {};
+
 const { MarketHoursGate, SymbolManager } = loadModule('./orchestrator/scheduling-gate', 'MarketHoursGate') || {};
 const { AuditTrail }          = loadModule('./orchestrator/audit-trail',             'AuditTrail')         || {};
 
@@ -817,6 +819,45 @@ async function runAnalysisCycle(symbol, timeframe) {
           regime,
         }).catch(e => ({ action: 'ALLOW', penalty: 0, note: `Learning unavailable: ${e.message}` }))
       : { action: 'ALLOW', penalty: 0, note: 'Adaptive learning disabled' };
+
+
+    // Daily gold desk profile (Exness XAU history) — annotate + soft/hard risk for scalpers
+    let goldDeskEval = null;
+    try {
+      if (dailyGoldProfile?.evaluateGoldDesk && dailyGoldProfile?.isGoldSymbol?.(symbol)) {
+        goldDeskEval = dailyGoldProfile.evaluateGoldDesk({
+          symbol,
+          action: signal.action,
+          score: signal.score?.final,
+          tradePlan,
+          drawdownStatus: drawdownGuard?.getStatus?.() || {},
+          recentOutcomes: [],
+          timestamp: Date.now(),
+        });
+        if (goldDeskEval?.hardBlock) {
+          log.warn(`[GOLD DESK] hard block ${symbol} ${signal.action}: ${(goldDeskEval.warnings || []).join(' | ')}`);
+          if (auditTrail) {
+            auditTrail.record({
+              symbol, timeframe, signalFired: false,
+              blockedReason: 'gold_desk_hard_block',
+              score: signal.score?.final ?? 0,
+              reasons: goldDeskEval.warnings || [],
+              gatesFailed: ['gold_desk'],
+            });
+          }
+          return;
+        }
+        if (dailyGoldProfile.annotateSignal) {
+          signal = dailyGoldProfile.annotateSignal(signal, goldDeskEval);
+        }
+        if (goldDeskEval?.sizeMult != null && goldDeskEval.sizeMult < 1 && riskEvaluation?.positionSize > 0) {
+          riskEvaluation.positionSize *= goldDeskEval.sizeMult;
+          riskEvaluation.note = `${riskEvaluation.note || ''} | gold desk size ×${goldDeskEval.sizeMult}`;
+        }
+      }
+    } catch (e) {
+      log.warn(`Gold desk profile error: ${e.message}`);
+    }
 
     if (learning?.penalty && signal.score?.final != null) {
       signal.score = {
@@ -1671,7 +1712,9 @@ function buildSingletons() {
     drawdownGuard = new DrawdownGuard({
       maxDailyLossPct:  MAX_DAILY_LOSS,
       maxDrawdownPct:   MAX_DRAWDOWN,
-      accountBalance:ACCOUNT_BALANCE,
+      maxConsecutiveLoss: Number(process.env.MAX_CONSEC_LOSS || 3),
+      maxTradesPerDay: Number(process.env.MAX_TRADES_PER_DAY || 15),
+      accountBalance: ACCOUNT_BALANCE,
     });
     drawdownGuard.on('circuit_open', (data) => {
       log.warn(`CIRCUIT BREAKER OPEN: ${data.reason}`);
