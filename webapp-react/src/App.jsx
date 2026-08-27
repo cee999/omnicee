@@ -1216,7 +1216,7 @@ function useLiveFeed() {
   // Prefer broker (mt5_ea) ticks on the client so lower-rank sources cannot
   // paint over Exness prices while the EA is connected.
   const priceSourceRef = useRef({});
-  const SRC_RANK = { mt5_ea: 100, tradingview: 92, deriv: 70, finnhub: 60, binance: 58, candle: 40, unknown: 0 };
+  const SRC_RANK = { mt5_ea: 100, tradingview: 92, deriv: 70, finnhub: 60, binance: 58, exchangerate: 48, stockdata: 45, aletheia: 44, fred: 30, treasury: 20, candle: 40, unknown: 0 };
 
   /* Reachability probe against the unauthenticated /health route. Render's
      free tier can take 30-60s+ to wake a cold instance, so a single
@@ -1462,7 +1462,7 @@ function useLiveFeed() {
     };
 
     pullFast(); pullSlow();
-    const fastTimer = setInterval(pullFast, 5000);
+    const fastTimer = setInterval(pullFast, 2500);
     const slowTimer = setInterval(pullSlow, 20000);
     return () => { cancelled = true; clearInterval(fastTimer); clearInterval(slowTimer); };
   }, [mode]);

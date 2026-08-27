@@ -104,6 +104,10 @@ const { BinancePublicFeed }   = loadModule('./feeds/binance-public-feed',       
 const { TradingViewQuoteFeed } = loadModule('./feeds/tradingview-quote-feed',   'TradingViewQuoteFeed') || {};
 const { DerivFeed }            = loadModule('./feeds/deriv-feed',               'DerivFeed')            || {};
 const { StockDataFeed }        = loadModule('./feeds/stockdata-feed',           'StockDataFeed')        || {};
+const { ExchangeRateFeed }     = loadModule('./feeds/exchangerate-feed',        'ExchangeRateFeed')     || {};
+const { TreasuryFiscalFeed }   = loadModule('./feeds/treasury-fiscal-feed',     'TreasuryFiscalFeed')   || {};
+const { FredFeed }             = loadModule('./feeds/fred-feed',                'FredFeed')             || {};
+const { AletheiaFeed }         = loadModule('./feeds/aletheia-feed',            'AletheiaFeed')         || {};
 const { CryptoVolatilityAlert } = loadModule('./feeds/crypto-volatility-alert', 'CryptoVolatilityAlert') || {};
 const { CFTCCotFeed }        = loadModule('./feeds/cftc-cot-feed',               'CFTCCotFeed')       || {};
 const { COTReportParser }    = loadModule('./feeds/cot-report-parser',           'COTReportParser')   || {};
@@ -1335,7 +1339,11 @@ const PRICE_SOURCE_RANK = {
   deriv: 70,
   finnhub: 60,
   binance: 58,
-  stockdata: 45, // US equity/ETF quotes + FX/crypto EOD fallback — never beats MT5/Deriv
+  exchangerate: 48, // free continuous USD FX (open.er-api.com)
+  stockdata: 45,
+  aletheia: 44,
+  fred: 30,         // FRED daily series (needs FRED_API_KEY)
+  treasury: 20,     // US Treasury quarterly official rates — last-resort only
   candle: 40,
   unknown: 0,
 };
@@ -2274,6 +2282,79 @@ function buildFeeds() {
     log.info('StockDataFeed disabled — set STOCKDATA_API_TOKEN to enable');
   }
 
+  // Free continuous FX (no key) — keeps EUR/GBP/JPY moving when MT5/Deriv/TV quiet
+  if (ExchangeRateFeed && process.env.DISABLE_EXCHANGERATE !== '1') {
+    const erFeed = new ExchangeRateFeed({
+      symbols: SYMBOLS.filter((s) => ['EURUSD', 'GBPUSD', 'USDJPY'].includes(s)),
+      pollMs: Number(process.env.EXCHANGERATE_POLL_MS || 30000),
+    });
+    erFeed.on('price', ({ symbol, price, change, bid, ask }) => {
+      const last = lastPriceBySymbol[symbol];
+      if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < BROKER_PRICE_HOLD_MS) return;
+      if (last && (last.source === 'deriv' || last.source === 'tradingview') && (Date.now() - last.ts) < 20000) return;
+      onLivePrice(symbol, price, { source: 'exchangerate', change, bid, ask });
+    });
+    erFeed.on('error', (err) => log.warn(`ExchangeRateFeed: ${feedErrorMessage(err)}`));
+    erFeed.start();
+    feeds.push({ name: 'ExchangeRate', instance: erFeed, symbols: ['EURUSD', 'GBPUSD', 'USDJPY'] });
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('ExchangeRate', erFeed, ['EURUSD', 'GBPUSD', 'USDJPY']);
+    log.info('ExchangeRateFeed enabled — continuous free FX fallback');
+  }
+
+  if (TreasuryFiscalFeed && process.env.DISABLE_TREASURY !== '1') {
+    const tf = new TreasuryFiscalFeed({
+      symbols: SYMBOLS.filter((s) => ['EURUSD', 'GBPUSD', 'USDJPY'].includes(s)),
+    });
+    tf.on('price', ({ symbol, price }) => {
+      const last = lastPriceBySymbol[symbol];
+      if (last && (Date.now() - last.ts) < 5 * 60 * 1000) return; // never stomp fresh live
+      onLivePrice(symbol, price, { source: 'treasury' });
+    });
+    tf.on('error', (err) => log.warn(`TreasuryFiscalFeed: ${feedErrorMessage(err)}`));
+    tf.start();
+    feeds.push({ name: 'TreasuryFiscal', instance: tf, symbols: ['EURUSD', 'GBPUSD', 'USDJPY'] });
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('Treasury', tf, ['EURUSD', 'GBPUSD', 'USDJPY']);
+    log.info('TreasuryFiscalFeed enabled — official quarterly FX (last-resort)');
+  }
+
+  if (FredFeed && process.env.FRED_API_KEY) {
+    const fred = new FredFeed({
+      apiKey: process.env.FRED_API_KEY,
+      symbols: SYMBOLS.filter((s) => ['EURUSD', 'GBPUSD', 'USDJPY'].includes(s)),
+    });
+    fred.on('price', ({ symbol, price }) => {
+      const last = lastPriceBySymbol[symbol];
+      if (last && last.rank >= PRICE_SOURCE_RANK.fred && (Date.now() - last.ts) < 60000) return;
+      if (last && last.rank > PRICE_SOURCE_RANK.fred && (Date.now() - last.ts) < 5 * 60 * 1000) return;
+      onLivePrice(symbol, price, { source: 'fred' });
+    });
+    fred.on('error', (err) => log.warn(`FredFeed: ${feedErrorMessage(err)}`));
+    fred.start();
+    feeds.push({ name: 'FRED', instance: fred, symbols: ['EURUSD', 'GBPUSD', 'USDJPY'] });
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('FRED', fred, ['EURUSD', 'GBPUSD', 'USDJPY']);
+    log.info('FredFeed enabled — daily FX series');
+  } else {
+    log.info('FredFeed disabled — set FRED_API_KEY to enable');
+  }
+
+  if (AletheiaFeed && (process.env.ALETHEIA_API_KEY || process.env.ALETHEIA_KEY)) {
+    const al = new AletheiaFeed({
+      symbols: SYMBOLS.filter((s) => ['UUP', 'USOIL'].includes(s)),
+    });
+    al.on('price', ({ symbol, price }) => {
+      const last = lastPriceBySymbol[symbol];
+      if (last && last.rank > PRICE_SOURCE_RANK.aletheia && (Date.now() - last.ts) < 30000) return;
+      onLivePrice(symbol, price, { source: 'aletheia' });
+    });
+    al.on('error', (err) => log.warn(`AletheiaFeed: ${feedErrorMessage(err)}`));
+    al.start();
+    feeds.push({ name: 'Aletheia', instance: al, symbols: ['UUP', 'USOIL'] });
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('Aletheia', al, ['UUP', 'USOIL']);
+    log.info('AletheiaFeed enabled — equity/ETF quotes');
+  } else {
+    log.info('AletheiaFeed disabled — set ALETHEIA_API_KEY to enable');
+  }
+
   if (dataIntegrityMonitor && finnhubFeed?.enabled?.()) {
     dataIntegrityMonitor.registerFeed('Finnhub', finnhubFeed, fxSymbols.length ? fxSymbols : SYMBOLS);
   }
@@ -2492,6 +2573,31 @@ async function main() {
   }
 
   const feeds = buildFeeds();
+
+  // Keep prices "alive" on the wire even when the last tick value is unchanged —
+  // dashboard/socket clients see continuous market traffic instead of a frozen tape.
+  setInterval(() => {
+    if (!wsBus) return;
+    const now = Date.now();
+    for (const [symbol, row] of Object.entries(lastPriceBySymbol)) {
+      if (!row || !Number.isFinite(row.price)) continue;
+      if (now - (row.ts || 0) > 15 * 60 * 1000) continue; // drop truly dead quotes
+      try {
+        wsBus.emit('market_update', {
+          symbol,
+          price: row.price,
+          bid: row.bid ?? null,
+          ask: row.ask ?? null,
+          change: null,
+          bias: null,
+          source: row.source || 'candle',
+          heartbeat: true,
+          timestamp: now,
+        });
+      } catch (_) {}
+    }
+  }, Number(process.env.PRICE_HEARTBEAT_MS || 2000));
+
   // Seed OHLC so charts + signal agents work with PC/MT5 off
   setImmediate(() => {
     const crypto = SYMBOLS.filter(s => s.endsWith('USDT'));
