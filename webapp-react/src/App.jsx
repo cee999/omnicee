@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback, Component } from 'react';
 import {
   LayoutDashboard, Radio, Globe2, Activity,
-  ScrollText, ChevronRight, ChevronDown,
+  ScrollText, ChevronRight, ChevronDown, ChevronLeft,
   TrendingUp, CheckCircle2, XCircle,
   Circle, Zap, Database,
   Terminal, Newspaper,
   Layers, Target,
   Volume2, VolumeX, Sun, Moon, Maximize2, Minimize2, Download,
 } from 'lucide-react';
+import { useIsMobile, useSwipe, cycleIndex } from './lib/mobile.js';
 
 const SYMBOLS = ['XAUUSD', 'BTCUSDT', 'ETHUSDT', 'EURUSD', 'GBPUSD', 'USDJPY', 'USOIL', 'UUP'];
 const SYMBOL_LABEL = { UUP: 'DXY', XAUUSD: 'GOLD', USOIL: 'OIL', BTCUSDT: 'BTC', ETHUSDT: 'ETH' };
@@ -726,28 +727,90 @@ function ThemeStyle() {
       .omni-sig-card {
         flex: 0 0 auto;
         scroll-snap-align: start;
-        min-width: 168px;
-        max-width: 220px;
-        padding: 10px 12px;
-        border-radius: 12px;
+        min-width: min(78vw, 260px);
+        max-width: 280px;
+        min-height: 88px;
+        padding: 12px 14px;
+        border-radius: 14px;
         background: var(--panel2);
         border: 1px solid var(--glassBorder);
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
       }
       .omni-sig-card-top {
         display: flex;
         align-items: center;
         gap: 8px;
         font-family: ui-monospace, monospace;
+        font-size: 13px;
+      }
+      .omni-sig-pill {
+        display: inline-flex;
+        align-items: center;
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-weight: 800;
         font-size: 12px;
       }
-      .omni-sig-card-levels,
+      .omni-sig-score {
+        margin-left: auto;
+        color: var(--gold);
+        font-weight: 800;
+        font-size: 13px;
+      }
+      .omni-sig-card-levels {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 10px;
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+        color: var(--textDim);
+        margin-top: 8px;
+      }
       .omni-sig-card-meta {
         font-family: ui-monospace, monospace;
         font-size: 10px;
-        color: var(--textDim);
-        margin-top: 4px;
+        color: var(--textFaint);
+        margin-top: 6px;
       }
-      .omni-sig-card-meta { color: var(--textFaint); font-size: 9px; }
+      .omni-signal-strip {
+        touch-action: pan-x;
+        overscroll-behavior-x: contain;
+        padding-bottom: 12px !important;
+      }
+      .omni-charts-rail-hint {
+        font-size: 9px;
+        color: var(--textFaint);
+        text-transform: none;
+        letter-spacing: 0;
+        font-weight: 500;
+      }
+      .omni-sym-nav {
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 44px;
+        height: 44px;
+        border-radius: 12px;
+        border: 1px solid var(--glassBorder);
+        background: var(--panel2);
+        color: var(--text);
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+        cursor: pointer;
+      }
+      .omni-sym-nav:active { background: rgba(34, 197, 94, 0.15); color: var(--emerald); }
+      .omni-gesture-edge {
+        position: absolute;
+        top: 0;
+        bottom: 56px;
+        width: 28px;
+        z-index: 8;
+        touch-action: none;
+      }
+      .omni-gesture-edge--left { left: 0; }
+      .omni-gesture-edge--right { right: 0; }
       /* Desktop enhancements */
       @media (min-width: 900px) {
         .omni-charts-grid {
@@ -778,7 +841,9 @@ function ThemeStyle() {
           min-width: 0;
           max-width: none;
           width: 100%;
+          min-height: 0;
         }
+        .omni-gesture-edge { display: none; }
         .omni-tv-host { min-height: 420px; }
         .omni-chart-hud { bottom: 12px; max-width: min(340px, calc(100% - 24px)); }
       }
@@ -2582,16 +2647,31 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
   const [localSymbol, setLocalSymbol] = useState(chartSymbol || 'XAUUSD');
   const [chartExpanded, setChartExpanded] = useState(false);
   const [railOpen, setRailOpen] = useState(true);
+  const isMobile = useIsMobile();
+  const stripRef = useRef(null);
+  const signalStripRef = useRef(null);
+
+  const active = chartSymbol || localSymbol;
+  const setActive = useCallback((sym) => {
+    setLocalSymbol(sym);
+    onSymbolChange?.(sym);
+  }, [onSymbolChange]);
+
+  const goPrev = useCallback(() => setActive(cycleIndex(SYMBOLS, active, -1)), [active, setActive]);
+  const goNext = useCallback(() => setActive(cycleIndex(SYMBOLS, active, 1)), [active, setActive]);
+
   useEffect(() => {
     if (chartSymbol) setLocalSymbol(chartSymbol);
   }, [chartSymbol]);
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === 'Escape' && chartExpanded) setChartExpanded(false);
+      if (e.key === 'ArrowLeft') goPrev();
+      if (e.key === 'ArrowRight') goNext();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [chartExpanded]);
+  }, [chartExpanded, goPrev, goNext]);
   useEffect(() => {
     document.body.classList.toggle('omni-chart-expanded-lock', chartExpanded);
     document.body.classList.toggle('omni-chart-expanded', chartExpanded);
@@ -2600,11 +2680,15 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
       document.body.classList.remove('omni-chart-expanded');
     };
   }, [chartExpanded]);
-  const active = chartSymbol || localSymbol;
-  const setActive = (sym) => {
-    setLocalSymbol(sym);
-    onSymbolChange?.(sym);
-  };
+
+  // Swipe on toolbar / edge pads: left = next symbol, right = prev
+  const symbolSwipe = useSwipe({
+    onLeft: goNext,
+    onRight: goPrev,
+    threshold: 40,
+    enabled: true,
+  });
+
   const q = quotes?.[active];
   const liveSignals = useMemo(
     () => (signals || [])
@@ -2616,10 +2700,27 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
   const latest = liveSignals[0];
   const toggleExpand = () => setChartExpanded((v) => !v);
 
+  // Keep active symbol card in view on the horizontal strip
+  useEffect(() => {
+    const root = stripRef.current;
+    if (!root) return;
+    const el = root.querySelector('.omni-sym-card.is-on');
+    if (el?.scrollIntoView) {
+      el.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+    }
+  }, [active]);
+
   return (
-    <div className={`omni-charts-grid${chartExpanded ? ' is-chart-expanded' : ''}${railOpen ? '' : ' is-rail-collapsed'}`}>
-      {/* Row 1: active quote + Full — sticky, thumb-friendly */}
-      <div className="omni-panel omni-charts-toolbar">
+    <div className={`omni-charts-grid${chartExpanded ? ' is-chart-expanded' : ''}${railOpen ? '' : ' is-rail-collapsed'}${isMobile ? ' is-mobile' : ''}`}>
+      {/* Row 1: prev / active quote / next / Full — swipeable */}
+      <div
+        className="omni-panel omni-charts-toolbar"
+        {...symbolSwipe}
+        style={{ touchAction: 'pan-y' }}
+      >
+        <button type="button" className="omni-sym-nav" onClick={goPrev} aria-label="Previous symbol">
+          <ChevronLeft size={20} />
+        </button>
         <div className="omni-charts-active">
           <div className="omni-charts-active-sym">{symLabel(active)}</div>
           <div className="omni-charts-active-px">
@@ -2637,8 +2738,12 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
           </div>
           <div className="omni-charts-active-src">
             {sourceLabel(q?.source) || (mode === 'live' ? 'feed' : '—')}
+            {isMobile ? ' · swipe' : ''}
           </div>
         </div>
+        <button type="button" className="omni-sym-nav" onClick={goNext} aria-label="Next symbol">
+          <ChevronRight size={20} />
+        </button>
         <button
           type="button"
           className={`omni-chart-expand-btn${chartExpanded ? ' is-exit' : ''}`}
@@ -2651,12 +2756,16 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
         </button>
       </div>
 
-      {/* Row 2: horizontal symbols with live prices (one strip — no duplicate toolbar chips) */}
-      <div className="omni-charts-quote-strip" role="tablist" aria-label="Symbols">
+      {/* Row 2: symbol cards */}
+      <div
+        ref={stripRef}
+        className="omni-charts-quote-strip"
+        role="tablist"
+        aria-label="Symbols"
+      >
         {SYMBOLS.map((sym) => {
           const qq = quotes?.[sym];
           const bid = qq?.bid ?? qq?.price;
-          const ask = qq?.ask ?? qq?.price;
           const on = active === sym;
           return (
             <button
@@ -2673,9 +2782,9 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
                 <span className="omni-sym-card-px tabular-nums">
                   {qq?.bid != null && qq?.ask != null ? (
                     <>
-                      <span className="omni-px-bid">{fmtPrice(sym, bid)}</span>
+                      <span className="omni-px-bid">{fmtPrice(sym, qq.bid)}</span>
                       <span className="omni-px-sep">/</span>
-                      <span className="omni-px-ask">{fmtPrice(sym, ask)}</span>
+                      <span className="omni-px-ask">{fmtPrice(sym, qq.ask)}</span>
                     </>
                   ) : (
                     <span className="omni-px-mid">{fmtPrice(sym, bid)}</span>
@@ -2689,11 +2798,21 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
         })}
       </div>
 
-      {/* Row 3: chart stage — majority of phone height */}
+      {/* Row 3: chart + edge gesture pads (do not block TV center) */}
       <div className="omni-panel omni-charts-stage">
         <ErrorBoundary key={`tv-${active}-${theme || 'dark'}${chartExpanded ? '-full' : ''}`} label="TradingView">
           <TradingViewChart symbol={active} theme={theme} />
         </ErrorBoundary>
+        <div
+          className="omni-gesture-edge omni-gesture-edge--left"
+          {...symbolSwipe}
+          aria-hidden
+        />
+        <div
+          className="omni-gesture-edge omni-gesture-edge--right"
+          {...symbolSwipe}
+          aria-hidden
+        />
         <button
           type="button"
           className={`omni-chart-fab${chartExpanded ? ' is-exit' : ''}`}
@@ -2727,7 +2846,7 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
         )}
       </div>
 
-      {/* Row 4: signals — horizontal cards on phone, side rail on desktop */}
+      {/* Row 4: touch-friendly signal strip */}
       <div className="omni-panel omni-charts-rail">
         <button
           type="button"
@@ -2737,36 +2856,49 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
         >
           <span>Signals · {symLabel(active)}</span>
           <span className="omni-charts-rail-count">{liveSignals.length}</span>
+          <span className="omni-charts-rail-hint">{isMobile ? 'swipe cards' : 'rail'}</span>
           <ChevronDown size={14} style={{ transform: railOpen ? 'rotate(180deg)' : 'none', marginLeft: 'auto' }} aria-hidden />
         </button>
         {railOpen && (
-          <div className="omni-charts-rail-body omni-scroll">
+          <div
+            ref={signalStripRef}
+            className="omni-charts-rail-body omni-scroll omni-signal-strip"
+            aria-label="Signal strip"
+          >
             {liveSignals.length === 0 ? (
               <div className="omni-charts-rail-empty">
-                No FIRE yet for this symbol. When agents agree, levels show here.
+                No FIRE yet. Swipe symbols above — signals appear here when agents agree.
               </div>
             ) : (
-              liveSignals.map((s) => (
-                <div key={s.id} className="omni-sig-card">
+              liveSignals.map((s, idx) => (
+                <article
+                  key={s.id || `${s.symbol}-${s.timestamp}-${idx}`}
+                  className="omni-sig-card"
+                >
                   <div className="omni-sig-card-top">
                     <span
+                      className="omni-sig-pill"
                       style={{
                         color: s.action === 'BUY' || s.action === 'LONG' ? 'var(--emerald)' : 'var(--coral)',
-                        fontWeight: 700,
+                        background: s.action === 'BUY' || s.action === 'LONG'
+                          ? 'rgba(34,197,94,0.14)'
+                          : 'rgba(248,113,113,0.14)',
                       }}
                     >
                       {s.action}
                     </span>
                     <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
-                    <span style={{ color: 'var(--gold)', marginLeft: 'auto' }}>{signalScore(s)}</span>
+                    <span className="omni-sig-score">{signalScore(s)}</span>
                   </div>
                   <div className="omni-sig-card-levels">
-                    {fmtPrice(s.symbol, s.entry)} · SL {fmtPrice(s.symbol, s.stopLoss)} · TP {fmtPrice(s.symbol, s.targets?.[0])}
+                    <span>E {fmtPrice(s.symbol, s.entry)}</span>
+                    <span>SL {fmtPrice(s.symbol, s.stopLoss)}</span>
+                    <span>TP {fmtPrice(s.symbol, s.targets?.[0])}</span>
                   </div>
                   <div className="omni-sig-card-meta">
                     {timeAgo(s.timestamp)} · {s.gate?.status || 'pending'}
                   </div>
-                </div>
+                </article>
               ))
             )}
           </div>
