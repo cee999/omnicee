@@ -498,48 +498,132 @@ function ThemeStyle() {
           grid-template-columns: repeat(4, minmax(0, 1fr));
         }
       }
+      /* —— Charts: mobile-first —— */
       .omni-charts-grid {
-        display: grid;
-        grid-template-columns: 1fr;
-        grid-template-rows: auto 1fr auto;
-        gap: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
         height: 100%;
-        min-height: calc(100dvh - 148px);
-        padding: 8px;
+        min-height: calc(100dvh - 120px);
+        padding: 6px;
         box-sizing: border-box;
         width: 100%;
         max-width: 100vw;
+        overflow: hidden;
       }
-      @media (min-width: 900px) {
-        .omni-charts-grid {
-          grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
-          grid-template-rows: auto 1fr;
-        }
-        .omni-charts-toolbar { grid-column: 1 / -1; }
-        .omni-charts-stage { grid-column: 1; grid-row: 2; }
-        .omni-charts-rail { grid-column: 2; grid-row: 2; }
+      .omni-root.is-charts .omni-main {
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
       }
-      @media (max-width: 899px) {
-        .omni-charts-rail { max-height: 38vh; }
+      .omni-charts-toolbar {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+        min-height: 52px;
       }
-      .omni-charts-toolbar { flex: 0 0 auto; }
+      .omni-charts-active {
+        flex: 1 1 auto;
+        min-width: 0;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 6px 10px;
+      }
+      .omni-charts-active-sym {
+        font-family: ui-monospace, monospace;
+        font-size: 15px;
+        font-weight: 800;
+        letter-spacing: 0.02em;
+        color: var(--text);
+      }
+      .omni-charts-active-px {
+        font-family: ui-monospace, monospace;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .omni-charts-active-src {
+        font-family: ui-monospace, monospace;
+        font-size: 10px;
+        text-transform: uppercase;
+        color: var(--textFaint);
+      }
+      .omni-px-bid { color: var(--coral); }
+      .omni-px-ask { color: var(--emerald); }
+      .omni-px-mid { color: var(--textDim); }
+      .omni-px-sep { color: var(--textFaint); margin: 0 2px; }
+      .omni-px-wait { color: var(--textFaint); font-weight: 500; }
+      .omni-charts-quote-strip {
+        flex: 0 0 auto;
+        display: flex;
+        gap: 8px;
+        overflow-x: auto;
+        overflow-y: hidden;
+        -webkit-overflow-scrolling: touch;
+        scroll-snap-type: x mandatory;
+        padding: 2px 2px 6px;
+        scrollbar-width: none;
+      }
+      .omni-charts-quote-strip::-webkit-scrollbar { display: none; }
+      .omni-sym-card {
+        flex: 0 0 auto;
+        scroll-snap-align: start;
+        min-width: 112px;
+        min-height: 56px;
+        padding: 8px 12px;
+        border-radius: 12px;
+        border: 1px solid var(--glassBorder);
+        background: var(--panel2);
+        color: var(--text);
+        text-align: left;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+        cursor: pointer;
+      }
+      .omni-sym-card.is-on {
+        border-color: var(--emerald);
+        background: rgba(34, 197, 94, 0.12);
+        box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.25);
+      }
+      .omni-sym-card-name {
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .omni-sym-card.is-on .omni-sym-card-name { color: var(--emerald); }
+      .omni-sym-card-src {
+        font-family: ui-monospace, monospace;
+        font-size: 9px;
+        text-transform: uppercase;
+        color: var(--textFaint);
+      }
+      .omni-sym-card-px {
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+        margin-top: 2px;
+      }
       .omni-charts-stage {
-        min-height: 0;
+        flex: 1 1 auto;
+        min-height: 42vh;
+        position: relative;
         overflow: hidden;
         display: flex;
         flex-direction: column;
         padding: 0 !important;
-      }
-      .omni-charts-rail {
-        min-height: 0;
-        overflow: auto;
-        -webkit-overflow-scrolling: touch;
+        background: var(--glass);
+        border: 1px solid var(--glassBorder);
+        border-radius: 14px;
       }
       .omni-tv-host {
         flex: 1 1 auto;
         width: 100%;
         height: 100%;
-        min-height: 240px;
+        min-height: 220px;
         position: relative;
         border-radius: 14px;
         overflow: hidden;
@@ -549,30 +633,161 @@ function ThemeStyle() {
         width: 100% !important;
         height: 100% !important;
       }
-      .omni-root.is-charts .omni-main {
-        overflow: hidden;
-        display: flex;
-        flex-direction: column;
-      }
-      .omni-charts-stage {
-        position: relative;
-        background: var(--glass);
-        border: 1px solid var(--glassBorder);
-      }
       .omni-chart-hud {
         position: absolute;
-        left: 10px;
-        bottom: 10px;
+        left: 8px;
+        bottom: 64px;
         z-index: 6;
-        max-width: min(340px, calc(100% - 20px));
-        pointer-events: auto;
-        background: var(--glass);
+        max-width: min(280px, calc(100% - 16px));
+        pointer-events: none;
+        background: rgba(15, 23, 42, 0.88);
         border: 1px solid var(--glassBorder);
-        backdrop-filter: blur(14px) saturate(1.2);
-        -webkit-backdrop-filter: blur(14px) saturate(1.2);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
         border-radius: 12px;
+        padding: 8px 10px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+      }
+      .omni-chart-hud-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+      }
+      .omni-chart-hud-act { font-weight: 800; }
+      .omni-chart-hud-score { margin-left: auto; color: var(--gold); font-weight: 700; }
+      .omni-chart-hud-levels,
+      .omni-chart-hud-meta {
+        font-family: ui-monospace, monospace;
+        font-size: 10px;
+        color: var(--textDim);
+        margin-top: 4px;
+      }
+      .omni-chart-hud-meta { color: var(--textFaint); font-size: 9px; }
+      .omni-charts-rail {
+        flex: 0 0 auto;
+        max-height: 28vh;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        padding: 0 !important;
+        overflow: hidden;
+      }
+      .omni-charts-grid.is-rail-collapsed .omni-charts-rail {
+        max-height: none;
+      }
+      .omni-charts-grid.is-rail-collapsed .omni-charts-rail-body {
+        display: none;
+      }
+      .omni-charts-rail-head {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        min-height: 44px;
         padding: 10px 12px;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+        border: none;
+        background: transparent;
+        color: var(--textFaint);
+        font-family: ui-monospace, monospace;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+        cursor: pointer;
+      }
+      .omni-charts-rail-count {
+        font-weight: 700;
+        color: var(--gold);
+        background: rgba(251, 191, 36, 0.12);
+        padding: 2px 8px;
+        border-radius: 999px;
+      }
+      .omni-charts-rail-body {
+        display: flex;
+        flex-direction: row;
+        gap: 8px;
+        overflow-x: auto;
+        overflow-y: hidden;
+        -webkit-overflow-scrolling: touch;
+        padding: 0 10px 10px;
+        scroll-snap-type: x mandatory;
+      }
+      .omni-charts-rail-empty {
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+        color: var(--textFaint);
+        padding: 4px 2px 8px;
+        min-width: 200px;
+      }
+      .omni-sig-card {
+        flex: 0 0 auto;
+        scroll-snap-align: start;
+        min-width: 168px;
+        max-width: 220px;
+        padding: 10px 12px;
+        border-radius: 12px;
+        background: var(--panel2);
+        border: 1px solid var(--glassBorder);
+      }
+      .omni-sig-card-top {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+      }
+      .omni-sig-card-levels,
+      .omni-sig-card-meta {
+        font-family: ui-monospace, monospace;
+        font-size: 10px;
+        color: var(--textDim);
+        margin-top: 4px;
+      }
+      .omni-sig-card-meta { color: var(--textFaint); font-size: 9px; }
+      /* Desktop enhancements */
+      @media (min-width: 900px) {
+        .omni-charts-grid {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(260px, 300px);
+          grid-template-rows: auto auto 1fr;
+          gap: 8px;
+          min-height: calc(100dvh - 140px);
+          padding: 8px;
+        }
+        .omni-charts-toolbar { grid-column: 1 / -1; grid-row: 1; }
+        .omni-charts-quote-strip { grid-column: 1 / -1; grid-row: 2; }
+        .omni-charts-stage { grid-column: 1; grid-row: 3; min-height: 420px; }
+        .omni-charts-rail {
+          grid-column: 2;
+          grid-row: 3;
+          max-height: none;
+          height: 100%;
+        }
+        .omni-charts-rail-body {
+          flex-direction: column;
+          overflow-x: hidden;
+          overflow-y: auto;
+          scroll-snap-type: none;
+          flex: 1 1 auto;
+        }
+        .omni-sig-card {
+          min-width: 0;
+          max-width: none;
+          width: 100%;
+        }
+        .omni-tv-host { min-height: 420px; }
+        .omni-chart-hud { bottom: 12px; max-width: min(340px, calc(100% - 24px)); }
+      }
+      @media (max-width: 899px) {
+        .omni-charts-grid {
+          min-height: calc(100dvh - 112px);
+        }
+        .omni-charts-stage { min-height: 46vh; }
+        .omni-tv-host { min-height: 240px; }
       }
       .omni-signals-list {
         display: grid;
@@ -721,14 +936,16 @@ function ThemeStyle() {
         right: max(10px, env(safe-area-inset-right, 0px));
       }
       .omni-chart-expand-btn {
-        display: none;
+        display: inline-flex;
         align-items: center;
+        justify-content: center;
         gap: 6px;
         font-family: inherit;
-        font-size: 11px;
-        font-weight: 600;
-        padding: 8px 12px;
-        min-height: 40px;
+        font-size: 12px;
+        font-weight: 700;
+        padding: 10px 14px;
+        min-height: 44px;
+        min-width: 44px;
         border-radius: 999px;
         border: 1px solid var(--glassBorder);
         background: var(--panel2);
@@ -738,17 +955,14 @@ function ThemeStyle() {
         -webkit-tap-highlight-color: transparent;
         touch-action: manipulation;
       }
-      @media (min-width: 900px) {
-        .omni-chart-expand-btn { display: inline-flex; }
-        .omni-chart-expand-btn:hover {
-          border-color: var(--emerald);
-          color: var(--emerald);
-        }
-        .omni-chart-expand-btn.is-exit {
-          background: rgba(34, 197, 94, 0.15);
-          border-color: var(--emerald);
-          color: var(--emerald);
-        }
+      .omni-chart-expand-btn:hover {
+        border-color: var(--emerald);
+        color: var(--emerald);
+      }
+      .omni-chart-expand-btn.is-exit {
+        background: rgba(34, 197, 94, 0.18);
+        border-color: var(--emerald);
+        color: var(--emerald);
       }
       body.omni-chart-expanded,
       body.omni-chart-expanded-lock {
@@ -2363,10 +2577,11 @@ function TradingViewChart({ symbol, className = '', theme = 'dark' }) {
   return <div ref={hostRef} className={`omni-tv-host ${className}`.trim()} />;
 }
 
-/** Full-screen TradingView desk + live signal rail (only chart in the app) */
+/** Charts tab — mobile-first TradingView desk (phone layout is the source of truth) */
 function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }) {
   const [localSymbol, setLocalSymbol] = useState(chartSymbol || 'XAUUSD');
   const [chartExpanded, setChartExpanded] = useState(false);
+  const [railOpen, setRailOpen] = useState(true);
   useEffect(() => {
     if (chartSymbol) setLocalSymbol(chartSymbol);
   }, [chartSymbol]);
@@ -2393,110 +2608,96 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
   const q = quotes?.[active];
   const liveSignals = useMemo(
     () => (signals || [])
-      .filter(s => s.symbol === active && isFireAction(s.action))
+      .filter((s) => s.symbol === active && isFireAction(s.action))
       .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
       .slice(0, 12),
     [signals, active],
   );
   const latest = liveSignals[0];
+  const toggleExpand = () => setChartExpanded((v) => !v);
+
   return (
-    <div className={`omni-charts-grid${chartExpanded ? ' is-chart-expanded' : ''}`}>
-      <div className="omni-panel omni-charts-toolbar px-3 py-2 flex flex-wrap gap-1.5 items-center">
-        <span className="font-mono text-[10px] uppercase tracking-wider mr-1" style={{ color: 'var(--textFaint)' }}>Symbol</span>
-        {SYMBOLS.map(sym => (
-          <button
-            key={sym}
-            type="button"
-            onClick={() => setActive(sym)}
-            className="omni-chip font-mono text-[11px] px-2.5 py-1.5 rounded-full min-h-[40px]"
-            aria-pressed={active === sym}
-            style={{
-              color: active === sym ? 'var(--inkOnAccent)' : 'var(--textDim)',
-              background: active === sym ? 'var(--emerald)' : 'var(--panel2)',
-              border: '1px solid var(--glassBorder)',
-              fontWeight: active === sym ? 700 : 500,
-            }}
-          >
-            {symLabel(sym)}
-          </button>
-        ))}
-        <span className="ml-auto font-mono text-[11px] flex flex-wrap items-center gap-2" style={{ color: 'var(--textFaint)' }}>
-          {sourceLabel(q?.source) || (mode === 'live' ? 'feed' : '—')}
-          {q?.bid != null && q?.ask != null && (
-            <> · <span style={{ color: 'var(--coral)' }}>{fmtPrice(active, q.bid)}</span>
-            {' / '}
-            <span style={{ color: 'var(--emerald)' }}>{fmtPrice(active, q.ask)}</span></>
-          )}
-          {q?.bid == null && q?.price != null && (
-            <> · <span style={{ color: 'var(--text)' }}>{fmtPrice(active, q.price)}</span></>
-          )}
-          <button
-            type="button"
-            className={`omni-chart-expand-btn${chartExpanded ? ' is-exit' : ''}`}
-            onClick={() => setChartExpanded((v) => !v)}
-            aria-pressed={chartExpanded}
-            aria-label={chartExpanded ? 'Exit full chart' : 'Expand chart full screen'}
-            title={chartExpanded ? 'Exit (Esc)' : 'Full screen chart'}
-          >
-            {chartExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-            <span>{chartExpanded ? 'Exit' : 'Expand'}</span>
-          </button>
-        </span>
+    <div className={`omni-charts-grid${chartExpanded ? ' is-chart-expanded' : ''}${railOpen ? '' : ' is-rail-collapsed'}`}>
+      {/* Row 1: active quote + Full — sticky, thumb-friendly */}
+      <div className="omni-panel omni-charts-toolbar">
+        <div className="omni-charts-active">
+          <div className="omni-charts-active-sym">{symLabel(active)}</div>
+          <div className="omni-charts-active-px">
+            {q?.bid != null && q?.ask != null ? (
+              <>
+                <span className="omni-px-bid">{fmtPrice(active, q.bid)}</span>
+                <span className="omni-px-sep">/</span>
+                <span className="omni-px-ask">{fmtPrice(active, q.ask)}</span>
+              </>
+            ) : q?.price != null ? (
+              <span className="omni-px-mid">{fmtPrice(active, q.price)}</span>
+            ) : (
+              <span className="omni-px-wait">waiting…</span>
+            )}
+          </div>
+          <div className="omni-charts-active-src">
+            {sourceLabel(q?.source) || (mode === 'live' ? 'feed' : '—')}
+          </div>
+        </div>
+        <button
+          type="button"
+          className={`omni-chart-expand-btn${chartExpanded ? ' is-exit' : ''}`}
+          onClick={toggleExpand}
+          aria-pressed={chartExpanded}
+          aria-label={chartExpanded ? 'Exit full chart' : 'Expand chart full screen'}
+        >
+          {chartExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+          <span>{chartExpanded ? 'Exit' : 'Full'}</span>
+        </button>
       </div>
-      {/* Multi-symbol quote strip (parity with Home) — Charts tab is self-contained */}
-      <div className="omni-panel omni-charts-quote-strip px-2 py-2 flex gap-2 overflow-x-auto omni-scroll">
+
+      {/* Row 2: horizontal symbols with live prices (one strip — no duplicate toolbar chips) */}
+      <div className="omni-charts-quote-strip" role="tablist" aria-label="Symbols">
         {SYMBOLS.map((sym) => {
           const qq = quotes?.[sym];
           const bid = qq?.bid ?? qq?.price;
           const ask = qq?.ask ?? qq?.price;
-          const src = qq?.source;
           const on = active === sym;
           return (
             <button
               key={`cq-${sym}`}
               type="button"
+              role="tab"
+              aria-selected={on}
               onClick={() => setActive(sym)}
-              className="omni-chip font-mono text-[10px] px-2.5 py-1.5 rounded min-h-[40px] flex-shrink-0 text-left"
-              aria-pressed={on}
-              style={{
-                border: on ? '1px solid var(--emerald)' : '1px solid var(--glassBorder)',
-                background: on ? 'rgba(34,197,94,0.12)' : 'var(--panel2)',
-                color: 'var(--text)',
-              }}
+              className={`omni-sym-card${on ? ' is-on' : ''}`}
             >
-              <div className="flex items-center gap-2">
-                <span style={{ fontWeight: on ? 700 : 500 }}>{symLabel(sym)}</span>
-                <span style={{ color: 'var(--textFaint)' }}>{sourceLabel(src) || '—'}</span>
-              </div>
+              <span className="omni-sym-card-name">{symLabel(sym)}</span>
+              <span className="omni-sym-card-src">{sourceLabel(qq?.source) || '—'}</span>
               {bid != null ? (
-                <div className="mt-0.5 tabular-nums">
+                <span className="omni-sym-card-px tabular-nums">
                   {qq?.bid != null && qq?.ask != null ? (
                     <>
-                      <span style={{ color: 'var(--coral)' }}>{fmtPrice(sym, bid)}</span>
-                      {' / '}
-                      <span style={{ color: 'var(--emerald)' }}>{fmtPrice(sym, ask)}</span>
+                      <span className="omni-px-bid">{fmtPrice(sym, bid)}</span>
+                      <span className="omni-px-sep">/</span>
+                      <span className="omni-px-ask">{fmtPrice(sym, ask)}</span>
                     </>
                   ) : (
-                    <span style={{ color: 'var(--textDim)' }}>{fmtPrice(sym, bid)}</span>
+                    <span className="omni-px-mid">{fmtPrice(sym, bid)}</span>
                   )}
-                </div>
+                </span>
               ) : (
-                <div className="mt-0.5" style={{ color: 'var(--textFaint)' }}>loading…</div>
+                <span className="omni-sym-card-px omni-px-wait">…</span>
               )}
             </button>
           );
         })}
       </div>
+
+      {/* Row 3: chart stage — majority of phone height */}
       <div className="omni-panel omni-charts-stage">
-        {/* Remount TV on expand so widget picks up full mobile height */}
-        <ErrorBoundary key={'tv-' + active + (theme || 'dark') + (chartExpanded ? '-full' : '')} label="TradingView">
+        <ErrorBoundary key={`tv-${active}-${theme || 'dark'}${chartExpanded ? '-full' : ''}`} label="TradingView">
           <TradingViewChart symbol={active} theme={theme} />
         </ErrorBoundary>
-        {/* Mobile-first: large FAB always on chart (phone primary control) */}
         <button
           type="button"
           className={`omni-chart-fab${chartExpanded ? ' is-exit' : ''}`}
-          onClick={() => setChartExpanded((v) => !v)}
+          onClick={toggleExpand}
           aria-pressed={chartExpanded}
           aria-label={chartExpanded ? 'Exit full chart' : 'Expand chart full screen'}
         >
@@ -2505,46 +2706,71 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
         </button>
         {latest && !chartExpanded && (
           <div className="omni-chart-hud" role="status" aria-live="polite">
-            <div className="flex items-center gap-2 font-mono text-[12px]">
-              <span style={{ color: latest.action === 'BUY' || latest.action === 'LONG' ? 'var(--emerald)' : 'var(--coral)', fontWeight: 700 }}>
+            <div className="omni-chart-hud-row">
+              <span
+                className="omni-chart-hud-act"
+                style={{ color: latest.action === 'BUY' || latest.action === 'LONG' ? 'var(--emerald)' : 'var(--coral)' }}
+              >
                 {latest.action}
               </span>
-              <span style={{ color: 'var(--text)' }}>{symLabel(latest.symbol)}</span>
+              <span>{symLabel(latest.symbol)}</span>
               <span style={{ color: 'var(--textDim)' }}>{latest.timeframe}</span>
-              <span className="ml-auto" style={{ color: 'var(--gold)' }}>{gradeFor(signalScore(latest))} {signalScore(latest)}</span>
+              <span className="omni-chart-hud-score">{gradeFor(signalScore(latest))} {signalScore(latest)}</span>
             </div>
-            <div className="font-mono text-[10px] mt-1" style={{ color: 'var(--textDim)' }}>
-              Entry {fmtPrice(latest.symbol, latest.entry)} · SL {fmtPrice(latest.symbol, latest.stopLoss)} · TP {fmtPrice(latest.symbol, latest.targets?.[0])}
+            <div className="omni-chart-hud-levels">
+              E {fmtPrice(latest.symbol, latest.entry)} · SL {fmtPrice(latest.symbol, latest.stopLoss)} · TP {fmtPrice(latest.symbol, latest.targets?.[0])}
             </div>
-            <div className="font-mono text-[9px] mt-0.5" style={{ color: 'var(--textFaint)' }}>
-              Live FIRE · {timeAgo(latest.timestamp)} · {latest.gate?.status || 'pending'}
+            <div className="omni-chart-hud-meta">
+              FIRE · {timeAgo(latest.timestamp)} · {latest.gate?.status || 'pending'}
             </div>
           </div>
         )}
       </div>
-      <div className="omni-panel omni-charts-rail p-3 flex flex-col min-h-0">
-        <div className="font-mono text-[10px] uppercase tracking-wider mb-2" style={{ color: 'var(--textFaint)' }}>
-          Signals on chart · {symLabel(active)}
-        </div>
-        <div className="flex-1 overflow-y-auto omni-scroll space-y-2 min-h-0">
-          {liveSignals.length === 0 ? (
-            <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
-              No FIRE yet for this symbol. When agents agree, BUY/SELL overlays the chart in real time.
-            </div>
-          ) : liveSignals.map(s => (
-            <div key={s.id} className="omni-panel2 p-2.5">
-              <div className="flex items-center gap-2 font-mono text-[12px]">
-                <span style={{ color: s.action === 'BUY' || s.action === 'LONG' ? 'var(--emerald)' : 'var(--coral)', fontWeight: 700 }}>{s.action}</span>
-                <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
-                <span className="ml-auto" style={{ color: 'var(--gold)' }}>{signalScore(s)}</span>
+
+      {/* Row 4: signals — horizontal cards on phone, side rail on desktop */}
+      <div className="omni-panel omni-charts-rail">
+        <button
+          type="button"
+          className="omni-charts-rail-head"
+          onClick={() => setRailOpen((v) => !v)}
+          aria-expanded={railOpen}
+        >
+          <span>Signals · {symLabel(active)}</span>
+          <span className="omni-charts-rail-count">{liveSignals.length}</span>
+          <ChevronDown size={14} style={{ transform: railOpen ? 'rotate(180deg)' : 'none', marginLeft: 'auto' }} aria-hidden />
+        </button>
+        {railOpen && (
+          <div className="omni-charts-rail-body omni-scroll">
+            {liveSignals.length === 0 ? (
+              <div className="omni-charts-rail-empty">
+                No FIRE yet for this symbol. When agents agree, levels show here.
               </div>
-              <div className="font-mono text-[10px] mt-1" style={{ color: 'var(--textDim)' }}>
-                {fmtPrice(s.symbol, s.entry)} · SL {fmtPrice(s.symbol, s.stopLoss)} · TP {fmtPrice(s.symbol, s.targets?.[0])}
-              </div>
-              <div className="font-mono text-[9px] mt-1" style={{ color: 'var(--textFaint)' }}>{timeAgo(s.timestamp)} · {s.gate?.status || 'pending'}</div>
-            </div>
-          ))}
-        </div>
+            ) : (
+              liveSignals.map((s) => (
+                <div key={s.id} className="omni-sig-card">
+                  <div className="omni-sig-card-top">
+                    <span
+                      style={{
+                        color: s.action === 'BUY' || s.action === 'LONG' ? 'var(--emerald)' : 'var(--coral)',
+                        fontWeight: 700,
+                      }}
+                    >
+                      {s.action}
+                    </span>
+                    <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
+                    <span style={{ color: 'var(--gold)', marginLeft: 'auto' }}>{signalScore(s)}</span>
+                  </div>
+                  <div className="omni-sig-card-levels">
+                    {fmtPrice(s.symbol, s.entry)} · SL {fmtPrice(s.symbol, s.stopLoss)} · TP {fmtPrice(s.symbol, s.targets?.[0])}
+                  </div>
+                  <div className="omni-sig-card-meta">
+                    {timeAgo(s.timestamp)} · {s.gate?.status || 'pending'}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
