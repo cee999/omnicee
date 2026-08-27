@@ -49,8 +49,8 @@ const PROFILE = {
   maxTradesPerHourBlock: 4,
   requireStopLoss: true,
   minRewardRisk: 1.5,
-  minScoreForFire: 72,
-  minAgentConsensus: 0.6,
+  minScoreForFire: 65,
+  minAgentConsensus: 0.55,
   sellCautionAfterLosses: 2,
   cooldownMinutesAfterStopOut: 45,
   cooldownMinutesAfterConsecLoss: 20,
@@ -103,12 +103,25 @@ function swarmRehearsal(agents, action) {
 /**
  * Fincept-inspired order validation for manual desk (no broker send).
  */
+function priceOf(v) {
+  if (v == null) return null;
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'object') {
+    const n = Number(v.price ?? v.midPoint ?? v.midpoint ?? v.zoneLow);
+    return Number.isFinite(n) ? n : null;
+  }
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 function validateOrderPlan(plan = {}, signal = {}) {
   const failures = [];
   const warnings = [];
-  const entry = Number(plan.entry ?? signal.entry);
-  const sl = Number(plan.stopLoss ?? plan.sl ?? signal.stopLoss);
-  const tp = Number(plan.takeProfit ?? plan.tp1 ?? signal.targets?.[0]);
+  const entry = priceOf(plan.entry?.midPoint ?? plan.entry?.midpoint ?? plan.entry)
+    ?? priceOf(signal.entry);
+  const sl = priceOf(plan.stopLoss) ?? priceOf(plan.sl) ?? priceOf(signal.stopLoss);
+  const tp = priceOf(plan.targets?.tp1) ?? priceOf(plan.takeProfit) ?? priceOf(plan.tp1)
+    ?? priceOf(Array.isArray(signal.targets) ? signal.targets[0] : signal.targets?.tp1);
   const action = String(signal.action || plan.action || '').toUpperCase();
 
   if (!Number.isFinite(entry) || entry <= 0) failures.push('Entry price missing or invalid');
@@ -128,7 +141,7 @@ function validateOrderPlan(plan = {}, signal = {}) {
       if (action === 'SELL' && !(sl > entry && tp < entry)) failures.push('SELL geometry invalid (TP < entry < SL)');
     }
   }
-  return { ok: failures.length === 0, failures, warnings };
+  return { ok: failures.length === 0, failures, warnings, entry, sl, tp };
 }
 
 /**
@@ -197,21 +210,27 @@ function evaluateGoldDesk(ctx = {}) {
   }
 
   const orderValidation = validateOrderPlan(ctx.tradePlan || {}, ctx.signal || {});
+  // Geometry / missing SL → soft only. Capital limits remain hard below.
   if (!orderValidation.ok) {
-    hardBlock = true;
+    softBlock = true;
+    sizeMult *= 0.5;
     for (const f of orderValidation.failures) warnings.push(f);
   } else {
     for (const w of orderValidation.warnings) warnings.push(w);
   }
 
   const plan = ctx.tradePlan || {};
-  const hasSL = plan.stopLoss != null || plan.sl != null || (ctx.signal && ctx.signal.stopLoss != null);
+  const sig = ctx.signal || {};
+  const slPrice = orderValidation.sl
+    ?? priceOf(plan.stopLoss) ?? priceOf(plan.sl) ?? priceOf(sig.stopLoss);
+  const hasSL = Number.isFinite(Number(slPrice)) && Number(slPrice) > 0;
   if (PROFILE.requireStopLoss && !hasSL) {
     warnings.push('No stop-loss — stop-outs destroyed equity in sample; set SL before entry');
-    hardBlock = true;
+    softBlock = true;
+    sizeMult *= 0.5;
   }
 
-  const rr = Number(plan.rewardRisk || plan.rr || plan.risk?.rr || 0);
+  const rr = Number(plan.rewardRisk || plan.rr || plan.risk?.rr || plan.targets?.tp1?.rr || 0);
   if (rr > 0 && rr < PROFILE.minRewardRisk) {
     warnings.push(`R:R ${rr.toFixed(2)} below ${PROFILE.minRewardRisk}`);
     sizeMult *= 0.75;

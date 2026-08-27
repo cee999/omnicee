@@ -2287,7 +2287,54 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
             {' / '}
             <span style={{ color: 'var(--emerald)' }}>{fmtPrice(active, q.ask)}</span></>
           )}
+          {q?.bid == null && q?.price != null && (
+            <> · <span style={{ color: 'var(--text)' }}>{fmtPrice(active, q.price)}</span></>
+          )}
         </span>
+      </div>
+      {/* Multi-symbol quote strip (parity with Home) — Charts tab is self-contained */}
+      <div className="omni-panel px-2 py-2 flex gap-2 overflow-x-auto omni-scroll">
+        {SYMBOLS.map((sym) => {
+          const qq = quotes?.[sym];
+          const bid = qq?.bid ?? qq?.price;
+          const ask = qq?.ask ?? qq?.price;
+          const src = qq?.source;
+          const on = active === sym;
+          return (
+            <button
+              key={`cq-${sym}`}
+              type="button"
+              onClick={() => setActive(sym)}
+              className="omni-chip font-mono text-[10px] px-2.5 py-1.5 rounded min-h-[40px] flex-shrink-0 text-left"
+              aria-pressed={on}
+              style={{
+                border: on ? '1px solid var(--emerald)' : '1px solid var(--glassBorder)',
+                background: on ? 'rgba(34,197,94,0.12)' : 'var(--panel2)',
+                color: 'var(--text)',
+              }}
+            >
+              <div className="flex items-center gap-2">
+                <span style={{ fontWeight: on ? 700 : 500 }}>{symLabel(sym)}</span>
+                <span style={{ color: 'var(--textFaint)' }}>{sourceLabel(src) || '—'}</span>
+              </div>
+              {bid != null ? (
+                <div className="mt-0.5 tabular-nums">
+                  {qq?.bid != null && qq?.ask != null ? (
+                    <>
+                      <span style={{ color: 'var(--coral)' }}>{fmtPrice(sym, bid)}</span>
+                      {' / '}
+                      <span style={{ color: 'var(--emerald)' }}>{fmtPrice(sym, ask)}</span>
+                    </>
+                  ) : (
+                    <span style={{ color: 'var(--textDim)' }}>{fmtPrice(sym, bid)}</span>
+                  )}
+                </div>
+              ) : (
+                <div className="mt-0.5" style={{ color: 'var(--textFaint)' }}>loading…</div>
+              )}
+            </button>
+          );
+        })}
       </div>
       <div className="omni-panel omni-charts-stage">
         <ErrorBoundary key={'tv-' + active + (theme || 'dark')} label="TradingView">

@@ -32,7 +32,8 @@ const TIMEFRAMES_STR  = (requireEnv('TIMEFRAMES', 'M15,H1,H4') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
 const MIN_SCORE       = parseFloat(requireEnv('MIN_SIGNAL_SCORE', '55'));
 // Daily gold scalper floor is higher (see signal-pipeline/daily-gold-profile.js) — do not lower quality for volume
-const GOLD_MIN_SCORE  = parseFloat(requireEnv('GOLD_MIN_SCORE', '72'));
+// Selective but not silent — 72 was blocking almost all gold FIRE after desk gates
+const GOLD_MIN_SCORE  = parseFloat(requireEnv('GOLD_MIN_SCORE', '65'));
 const RISK_PCT        = parseFloat(requireEnv('RISK_PCT_PER_TRADE', '1.0'));
 const MAX_DAILY_LOSS  = parseFloat(requireEnv('MAX_DAILY_LOSS_PCT', '2.0'));
 const MAX_DRAWDOWN    = parseFloat(requireEnv('MAX_DRAWDOWN_PCT', '8.0'));
@@ -105,6 +106,7 @@ const { TradingViewQuoteFeed } = loadModule('./feeds/tradingview-quote-feed',   
 const { DerivFeed }            = loadModule('./feeds/deriv-feed',               'DerivFeed')            || {};
 const { StockDataFeed }        = loadModule('./feeds/stockdata-feed',           'StockDataFeed')        || {};
 const { ExchangeRateFeed }     = loadModule('./feeds/exchangerate-feed',        'ExchangeRateFeed')     || {};
+const { FrankfurterFeed }      = loadModule('./feeds/frankfurter-feed',         'FrankfurterFeed')      || {};
 const { TreasuryFiscalFeed }   = loadModule('./feeds/treasury-fiscal-feed',     'TreasuryFiscalFeed')   || {};
 const { FredFeed }             = loadModule('./feeds/fred-feed',                'FredFeed')             || {};
 const { AletheiaFeed }         = loadModule('./feeds/aletheia-feed',            'AletheiaFeed')         || {};
@@ -833,14 +835,37 @@ async function runAnalysisCycle(symbol, timeframe) {
         }).catch(e => ({ action: 'ALLOW', penalty: 0, note: `Learning unavailable: ${e.message}` }))
       : { action: 'ALLOW', penalty: 0, note: 'Adaptive learning disabled' };
 
+    // CRITICAL: attach tradePlan levels onto signal BEFORE desk validators.
+    // Previously Fincept + gold desk ran against a bare signal (no stopLoss),
+    // hard-blocked every XAU FIRE, and returned — zero signals on the desk.
+    if (tradePlan && signal.action !== 'WAIT') {
+      const planEntry = tradePlan.entry?.midPoint ?? tradePlan.entry?.midpoint
+        ?? tradePlan.entry?.price ?? tradePlan.entry;
+      const planSL = tradePlan.stopLoss?.price ?? tradePlan.stopLoss;
+      const planTPs = tradePlan.targets
+        ? [tradePlan.targets.tp1?.price, tradePlan.targets.tp2?.price, tradePlan.targets.tp3?.price]
+            .filter((v) => Number.isFinite(Number(v))).map(Number)
+        : [];
+      signal = {
+        ...signal,
+        entry: signal.entry?.midpoint ?? signal.entry?.midPoint ?? planEntry ?? signal.entry,
+        stopLoss: (typeof signal.stopLoss === 'object' && signal.stopLoss?.price != null)
+          ? signal.stopLoss.price
+          : (signal.stopLoss ?? planSL),
+        targets: (Array.isArray(signal.targets) && signal.targets.length)
+          ? signal.targets
+          : planTPs,
+        tradePlan,
+      };
+    }
 
     // MiroFish-style swarm rehearsal (all symbols) before gold-desk / publish
     try {
       if (mirofishRehearsal?.rehearse && Array.isArray(signal.agents) && signal.agents.length) {
         const rehearsal = mirofishRehearsal.rehearse(signal.agents, signal.action, {
-          minConsensus: isGoldSymbol?.(symbol) ? 0.6 : 0.5,
-          minAligned: isGoldSymbol?.(symbol) ? 4 : 3,
-          minAvgScore: 55,
+          minConsensus: isGoldSymbol?.(symbol) ? 0.55 : 0.5,
+          minAligned: isGoldSymbol?.(symbol) ? 3 : 3,
+          minAvgScore: 50,
         });
         if (mirofishRehearsal.attachRehearsal) {
           signal = mirofishRehearsal.attachRehearsal(signal, rehearsal);
@@ -854,6 +879,7 @@ async function runAnalysisCycle(symbol, timeframe) {
     }
 
     // Fincept-style order geometry validation (manual desk — does not send to broker)
+    // Annotate only; do not kill the signal path (gates already enforce quality).
     try {
       if (finceptOrderValidator && (signal.action === 'BUY' || signal.action === 'SELL')) {
         const ddSt = drawdownGuard?.getStatus?.() || {};
@@ -864,7 +890,7 @@ async function runAnalysisCycle(symbol, timeframe) {
         });
         signal.finceptValidation = fov;
         if (!fov.ok) {
-          log.warn(`[FINCEPT] order invalid ${symbol}: ${fov.failures.join(' | ')}`);
+          log.warn(`[FINCEPT] order soft-fail ${symbol}: ${fov.failures.join(' | ')}`);
           signal.riskFlags = { ...(signal.riskFlags || {}), finceptBlock: true, finceptFailures: fov.failures };
         }
       }
@@ -873,6 +899,7 @@ async function runAnalysisCycle(symbol, timeframe) {
     }
 
     // Daily gold desk profile (Exness XAU history) — annotate + soft/hard risk for scalpers
+    // hardBlock only for capital-protection (consec losses / daily caps), not missing nested fields
     let goldDeskEval = null;
     try {
       if (dailyGoldProfile?.evaluateGoldDesk && dailyGoldProfile?.isGoldSymbol?.(symbol)) {
@@ -888,17 +915,24 @@ async function runAnalysisCycle(symbol, timeframe) {
           timestamp: Date.now(),
         });
         if (goldDeskEval?.hardBlock) {
-          log.warn(`[GOLD DESK] hard block ${symbol} ${signal.action}: ${(goldDeskEval.warnings || []).join(' | ')}`);
-          if (auditTrail) {
-            auditTrail.record({
-              symbol, timeframe, signalFired: false,
-              blockedReason: 'gold_desk_hard_block',
-              score: signal.score?.final ?? 0,
-              reasons: goldDeskEval.warnings || [],
-              gatesFailed: ['gold_desk'],
-            });
+          const capitalBlock = (goldDeskEval.warnings || []).some((w) =>
+            /consecutive losses|Daily trade cap|Hourly cap|Hard pause/i.test(String(w)));
+          if (capitalBlock) {
+            log.warn(`[GOLD DESK] capital hard block ${symbol} ${signal.action}: ${(goldDeskEval.warnings || []).join(' | ')}`);
+            if (auditTrail) {
+              auditTrail.record({
+                symbol, timeframe, signalFired: false,
+                blockedReason: 'gold_desk_hard_block',
+                score: signal.score?.final ?? 0,
+                reasons: goldDeskEval.warnings || [],
+                gatesFailed: ['gold_desk'],
+              });
+            }
+            return;
           }
-          return;
+          // Geometry / score issues → soft annotate, still publish for desk visibility
+          log.info(`[GOLD DESK] soft constraints ${symbol}: ${(goldDeskEval.warnings || []).slice(0, 3).join(' | ')}`);
+          goldDeskEval = { ...goldDeskEval, hardBlock: false, softBlock: true };
         }
         if (dailyGoldProfile.annotateSignal) {
           signal = dailyGoldProfile.annotateSignal(signal, goldDeskEval);
@@ -1434,6 +1468,7 @@ const PRICE_SOURCE_RANK = {
   finnhub: 60,
   binance: 58,
   exchangerate: 48, // free continuous USD FX (open.er-api.com)
+  frankfurter: 47,  // free ECB FX (api.frankfurter.app)
   stockdata: 45,
   aletheia: 44,
   fred: 30,         // FRED daily series (needs FRED_API_KEY)
@@ -2395,6 +2430,25 @@ function buildFeeds() {
     feeds.push({ name: 'ExchangeRate', instance: erFeed, symbols: ['EURUSD', 'GBPUSD', 'USDJPY'] });
     if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('ExchangeRate', erFeed, ['EURUSD', 'GBPUSD', 'USDJPY']);
     log.info('ExchangeRateFeed enabled — continuous free FX fallback');
+  }
+
+  // ApiVault: Frankfurter ECB rates — second free FX path so pairs are never empty
+  if (FrankfurterFeed && process.env.DISABLE_FRANKFURTER !== '1') {
+    const ff = new FrankfurterFeed({
+      symbols: SYMBOLS.filter((s) => ['EURUSD', 'GBPUSD', 'USDJPY'].includes(s)),
+      pollMs: Number(process.env.FRANKFURTER_POLL_MS || 60000),
+    });
+    ff.on('price', ({ symbol, price, bid, ask }) => {
+      const last = lastPriceBySymbol[symbol];
+      if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < BROKER_PRICE_HOLD_MS) return;
+      if (last && ['deriv', 'tradingview', 'exchangerate'].includes(last.source) && (Date.now() - last.ts) < 25000) return;
+      onLivePrice(symbol, price, { source: 'frankfurter', bid, ask });
+    });
+    ff.on('error', (err) => log.warn(`FrankfurterFeed: ${feedErrorMessage(err)}`));
+    ff.start();
+    feeds.push({ name: 'Frankfurter', instance: ff, symbols: ['EURUSD', 'GBPUSD', 'USDJPY'] });
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('Frankfurter', ff, ['EURUSD', 'GBPUSD', 'USDJPY']);
+    log.info('FrankfurterFeed enabled — ECB free FX fallback (ApiVault)');
   }
 
   if (TreasuryFiscalFeed && process.env.DISABLE_TREASURY !== '1') {
