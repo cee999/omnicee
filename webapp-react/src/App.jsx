@@ -6,7 +6,7 @@ import {
   Circle, Zap, Database,
   Terminal, Newspaper,
   Layers, Target,
-  Volume2, VolumeX, Sun, Moon, Maximize2,
+  Volume2, VolumeX, Sun, Moon, Maximize2, Download,
 } from 'lucide-react';
 
 const SYMBOLS = ['XAUUSD', 'BTCUSDT', 'ETHUSDT', 'EURUSD', 'GBPUSD', 'USDJPY', 'USOIL', 'UUP'];
