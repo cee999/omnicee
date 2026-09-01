@@ -3470,86 +3470,42 @@ function NewsTab({ news, mode }) {
 }
 
 /* ── MONITOR ────────────────────────────────────────────────────────── */
-function MonitorTab({ auditLog, feedHealth, uptimeSec, mode, fetchErrors, analysisLive, socketLive }) {
-  const liveByName = new Map();
-  for (const f of (feedHealth || [])) {
-    liveByName.set(f.name, f);
-    const short = String(f.name || '').replace(/Feed$/i, '');
-    if (short && short !== f.name) liveByName.set(short, f);
-  }
-  const feeds = FEEDS.map(f => {
-    if (f.status === 'inert') return f;
-    const live = liveByName.get(f.name);
-    if (mode !== 'live') return f;
-    // No health payload yet (login/cold start) → keep waiting
-    if (!feedHealth || !feedHealth.length) return { ...f, status: 'unknown' };
-    if (!live) {
-      // Listed in UI but not registered on server this boot (no key / skipped)
-      return { ...f, status: 'down', note: f.note || 'not started this boot' };
-    }
-    // Backend: connected | disconnected | unknown (unknown = REST feed with no isConnected)
-    // Treat "unknown" as live when the feed is registered — it is running.
-    const status = live.status === 'connected' || live.connected === true ? 'live'
-      : live.status === 'disconnected' || live.connected === false ? 'down'
-      : live.status === 'unknown' ? 'live'
-      : 'live';
-    return { ...f, status };
-  });
+function MonitorTab({ auditLog, uptimeSec, mode, fetchErrors, analysisLive, socketLive }) {
   const uptimeLabel = mode === 'live' && uptimeSec != null
     ? `${Math.floor(uptimeSec / 3600)}h ${Math.floor((uptimeSec % 3600) / 60)}m`
     : null;
   const activeErrors = Object.entries(fetchErrors || {}).filter(([, v]) => v);
-  const liveCount = feeds.filter(f => f.status === 'live').length;
 
   return (
     <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
       <div className="omni-panel p-4">
-        <SectionHeader
-          icon={Database}
-          title="Live feeds"
-          sub={`${liveCount}/${feeds.length} live${uptimeLabel ? ` · up ${uptimeLabel}` : ''}`}
-        />
-        {(!feedHealth || !feedHealth.length) && mode === 'live' ? (
-          <div className="font-mono text-[11px] mb-3" style={{ color: 'var(--gold)' }}>
-            Feed status not loaded yet. Log in, wait a few seconds, or open System again after the server finishes booting.
-          </div>
-        ) : null}
-        <div className="font-mono text-[11px] mb-3 flex flex-wrap gap-3" style={{ color: 'var(--textDim)' }}>
-          <span style={{ color: socketLive ? 'var(--emerald)' : 'var(--textFaint)' }}>{socketLive ? '● socket + heartbeat' : '○ socket reconnecting'}</span>
-          {analysisLive ? <span style={{ color: 'var(--gold)' }}>scan {analysisLive.symbol} {analysisLive.timeframe}</span> : null}
+        <SectionHeader icon={Activity} title="System" sub={uptimeLabel ? `up ${uptimeLabel}` : 'status'} />
+        <div className="font-mono text-[12px] flex flex-wrap gap-4" style={{ color: 'var(--textDim)' }}>
+          <span style={{ color: socketLive ? 'var(--emerald)' : 'var(--coral)' }}>
+            {socketLive ? '● Live socket' : '○ Socket reconnecting'}
+          </span>
+          {analysisLive ? (
+            <span style={{ color: 'var(--gold)' }}>Scan {analysisLive.symbol} {analysisLive.timeframe}</span>
+          ) : (
+            <span style={{ color: 'var(--textFaint)' }}>Waiting for scan</span>
+          )}
+          <span style={{ color: mode === 'live' ? 'var(--emerald)' : 'var(--textFaint)' }}>{mode === 'live' ? 'Backend live' : 'Offline'}</span>
         </div>
         {activeErrors.length > 0 && (
-          <div className="font-mono text-[10px] mb-3" style={{ color: 'var(--coral)' }}>
-            {activeErrors.slice(0, 4).map(([k, v]) => <div key={k}>{k}: {String(v).slice(0, 80)}</div>)}
+          <div className="font-mono text-[10px] mt-3" style={{ color: 'var(--coral)' }}>
+            {activeErrors.slice(0, 4).map(([k, v]) => <div key={k}>{k}: {String(v).slice(0, 100)}</div>)}
           </div>
         )}
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5">
-          {feeds.map(f => (
-            <div key={f.name} className="omni-panel2 p-3">
-              <div className="flex items-center justify-between mb-1">
-                <span className="font-mono text-[11px]" style={{ color: 'var(--text)' }}>{f.name}</span>
-                <Circle size={8} fill="currentColor" style={{
-                  color: f.status === 'live' ? 'var(--emerald)' : f.status === 'degraded' ? 'var(--gold)' : f.status === 'down' ? 'var(--coral)' : 'var(--textFaint)',
-                }} className={f.status === 'live' ? 'omni-pulse' : ''} />
-              </div>
-              <div className="font-mono text-[9px] uppercase" style={{ color: 'var(--textFaint)' }}>{f.kind}</div>
-              {f.note && <div className="font-mono text-[9px] mt-1" style={{ color: 'var(--gold)' }}>{f.note}</div>}
-              <div className="font-mono text-[9px] mt-1 uppercase" style={{ color: 'var(--textDim)' }}>
-                {f.status === 'live' ? 'connected' : f.status === 'down' ? 'down' : f.status === 'inert' ? 'off' : 'waiting'}
-              </div>
-            </div>
-          ))}
-        </div>
       </div>
       {Array.isArray(auditLog) && auditLog.length > 0 && (
         <div className="omni-panel p-4">
-          <SectionHeader icon={ScrollText} title="Recent events" sub={`${auditLog.length} · near-miss + trail`} />
-          <div className="max-h-56 overflow-y-auto omni-scroll space-y-1">
-            {auditLog.slice(0, 24).map((e, i) => (
+          <SectionHeader icon={ScrollText} title="Recent events" sub={`${auditLog.length}`} />
+          <div className="max-h-64 overflow-y-auto omni-scroll space-y-1">
+            {auditLog.slice(0, 30).map((e, i) => (
               <div key={e.id || i} className="font-mono text-[10px] flex flex-wrap gap-2 py-1 border-b" style={{ borderColor: 'var(--border)', color: 'var(--textDim)' }}>
                 <span style={{ color: 'var(--textFaint)' }}>{e.timestamp ? timeAgo(e.timestamp) : ''}</span>
                 <span style={{ color: 'var(--text)' }}>{e.symbol || e.type || 'event'}</span>
-                <span className="truncate">{e.reason || e.message || e.status || e.action || JSON.stringify(e).slice(0, 80)}</span>
+                <span className="truncate">{e.reason || e.message || e.status || e.action || ''}</span>
               </div>
             ))}
           </div>
@@ -3558,278 +3514,114 @@ function MonitorTab({ auditLog, feedHealth, uptimeSec, mode, fetchErrors, analys
     </div>
   );
 }
-function StructureCard({ label, accent, value, valueColor, sub, pill, pillTone, note }) {
-  return (
-    <div className="rounded-lg border p-2.5 space-y-1.5" style={{ borderColor: 'var(--border)', background: 'var(--panel)' }}>
-      <div className="flex items-center gap-1.5">
-        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: accent }} />
-        <span className="font-mono text-[9px] uppercase tracking-wider" style={{ color: 'var(--textFaint)' }}>{label}</span>
-      </div>
-      <div className="text-[15px] font-semibold font-mono" style={{ color: valueColor || 'var(--text)' }}>{value}</div>
-      {sub && <div className="font-mono text-[9px]" style={{ color: 'var(--textFaint)' }}>{sub}</div>}
-      {pill && <Pill tone={pillTone}>{pill}</Pill>}
-      {note && (
-        <div className="font-mono text-[9px] pt-1.5 mt-1 border-t leading-relaxed" style={{ color: 'var(--textFaint)', borderColor: 'var(--border)' }}>
-          {note}
-        </div>
-      )}
-    </div>
-  );
-}
 
-function AnalysisTab({ mode, heatmapTiles, relativeStrength, hurstBoard }) {
+function AnalysisTab({ mode, signals, prices, quotes, analysisLive }) {
   const live = mode === 'live';
-  const [board, setBoard] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState(null);
-  const [ts, setTs] = useState(null);
-  const [selected, setSelected] = useState(null);
+  const list = Array.isArray(signals) ? signals : [];
 
-  const load = useCallback(async () => {
-    if (!live) return;
-    setLoading(true);
-    setErr(null);
-    try {
-      const r = await omniFetch('/api/analysis?timeframes=H1,H4');
-      if (!r?.ok) throw new Error(r?.error || 'analysis failed');
-      setBoard(Array.isArray(r.board) ? r.board : []);
-      setTs(Date.now());
-    } catch (e) {
-      setErr(e.message || 'fetch error');
-    } finally {
-      setLoading(false);
+  const bySym = useMemo(() => {
+    const map = {};
+    for (const s of list) {
+      if (!s?.symbol) continue;
+      const prev = map[s.symbol];
+      if (!prev || (s.timestamp || 0) > (prev.timestamp || 0)) map[s.symbol] = s;
     }
-  }, [live]);
+    return map;
+  }, [list]);
 
-  useEffect(() => {
-    load();
-    if (!live) return undefined;
-    const id = setInterval(load, 45000);
-    return () => clearInterval(id);
-  }, [load, live]);
+  const fire = list.filter((s) => isFireAction(s.action)).slice(0, 12);
+  const waits = list.filter((s) => String(s.action).toUpperCase() === 'WAIT').slice(0, 8);
 
   if (!live) {
     return (
       <div className="p-2 sm:p-3 w-full max-w-[100vw]">
         <div className="omni-panel p-4">
-          <SectionHeader icon={Layers} title="Advanced Analysis" />
-          <WaitingForBackend height={240} label="Standalone analysis needs a live backend + candle history" />
+          <SectionHeader icon={Layers} title="Signal radar" />
+          <WaitingForBackend height={200} label="Connect to see live FIRE / WAIT status by symbol" />
         </div>
       </div>
     );
   }
 
-  const playTone = (pb) => {
-    if (pb === 'TREND_FOLLOW') return 'up';
-    if (pb === 'MEAN_REVERT') return 'warn';
-    return 'neutral';
-  };
-  const alphaTone = (a) => {
-    if (a == null) return 'neutral';
-    if (a >= 0.58) return 'up';
-    if (a <= 0.42) return 'warn';
-    return 'neutral';
-  };
-
-  const rows = board.length ? board : (Array.isArray(hurstBoard) ? hurstBoard : []);
-
   return (
     <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
       <div className="omni-panel p-4">
-        <SectionHeader icon={Activity} title="Market heat" sub="opportunity × relative strength" />
-        {!Array.isArray(heatmapTiles) || heatmapTiles.length === 0 ? (
-          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
-            Heatmap fills once the ranker has enough candles. Waiting on live data — not a dead panel.
-          </div>
-        ) : (
-          <div className="omni-heat-grid">
-            {heatmapTiles.slice(0, 8).map((t) => {
-              const score = Number(t.heatScore) || 0;
-              const tone = score >= 70 ? 'var(--emerald)' : score >= 45 ? 'var(--gold)' : 'var(--textDim)';
-              return (
-                <div key={t.symbol} className="omni-panel2 p-2.5">
-                  <div className="flex items-center justify-between font-mono text-[11px]">
-                    <span style={{ color: 'var(--text)' }}>{symLabel(t.symbol)}</span>
-                    <span style={{ color: tone }}>{score.toFixed(0)}</span>
-                  </div>
-                  <div className="font-mono text-[9px] mt-1 uppercase" style={{ color: 'var(--textFaint)' }}>
-                    {String(t.bucket || t.bias || '—').replace(/_/g, ' ')}
-                  </div>
-                  {t.relativeStrength?.changePct != null && (
-                    <div className="font-mono text-[10px] mt-1" style={{ color: t.relativeStrength.changePct >= 0 ? 'var(--emerald)' : 'var(--coral)' }}>
-                      {fmtPct(t.relativeStrength.changePct)}
-                    </div>
-                  )}
+        <SectionHeader
+          icon={Radio}
+          title="Signal radar"
+          sub={analysisLive ? `scanning ${analysisLive.symbol} ${analysisLive.timeframe}` : 'live engine'}
+        />
+        <div className="font-mono text-[11px] mb-3" style={{ color: 'var(--textDim)' }}>
+          Clear status only: <span style={{ color: 'var(--emerald)' }}>FIRE</span> = tradeable idea · <span style={{ color: 'var(--gold)' }}>WAIT</span> = watching · empty = no setup yet.
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {SYMBOLS.map((sym) => {
+            const s = bySym[sym];
+            const q = quotes?.[sym];
+            const px = q?.bid ?? q?.price ?? prices?.[sym];
+            const act = s ? String(s.action).toUpperCase() : '—';
+            const isFire = act === 'BUY' || act === 'SELL' || act === 'LONG' || act === 'SHORT';
+            const isWait = act === 'WAIT';
+            const color = isFire ? 'var(--emerald)' : isWait ? 'var(--gold)' : 'var(--textFaint)';
+            return (
+              <div key={sym} className="omni-panel2 p-3">
+                <div className="flex items-center justify-between font-mono text-[12px]">
+                  <span style={{ color: 'var(--text)' }}>{symLabel(sym)}</span>
+                  <span style={{ color, fontWeight: 700 }}>{isFire ? act : isWait ? 'WAIT' : '—'}</span>
                 </div>
-              );
-            })}
-          </div>
-        )}
+                <div className="font-mono text-[11px] mt-1 tabular-nums" style={{ color: 'var(--textDim)' }}>
+                  {px != null ? fmtPrice(sym, px) : 'no quote'}
+                </div>
+                {s && (
+                  <div className="font-mono text-[10px] mt-1" style={{ color: 'var(--textFaint)' }}>
+                    {s.timeframe || ''} · score {signalScore(s) || '—'} · {timeAgo(s.timestamp)}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
 
-      {relativeStrength && (relativeStrength.leaders || relativeStrength.laggards) ? (
-        <div className="omni-panel p-4">
-          <SectionHeader icon={TrendingUp} title="Relative strength" sub="leaders · laggards" />
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <div className="font-mono text-[9px] uppercase mb-1.5" style={{ color: 'var(--emerald)' }}>Leaders</div>
-              {(relativeStrength.leaders || []).slice(0, 6).map((r, i) => (
-                <div key={r.symbol || i} className="flex justify-between font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
-                  <span style={{ color: 'var(--text)' }}>{symLabel(r.symbol)}</span>
-                  <span style={{ color: 'var(--emerald)' }}>{r.changePct != null ? fmtPct(r.changePct) : (r.volAdjScore ?? '—')}</span>
-                </div>
-              ))}
-            </div>
-            <div>
-              <div className="font-mono text-[9px] uppercase mb-1.5" style={{ color: 'var(--coral)' }}>Laggards</div>
-              {(relativeStrength.laggards || []).slice(0, 6).map((r, i) => (
-                <div key={r.symbol || i} className="flex justify-between font-mono text-[11px] py-1 border-b" style={{ borderColor: 'var(--border)' }}>
-                  <span style={{ color: 'var(--text)' }}>{symLabel(r.symbol)}</span>
-                  <span style={{ color: 'var(--coral)' }}>{r.changePct != null ? fmtPct(r.changePct) : (r.volAdjScore ?? '—')}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : null}
-
       <div className="omni-panel p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-          <SectionHeader
-            icon={Layers}
-            title="Advanced Analysis"
-            sub="standalone · Hurst · DFA · FRAMA · Lyapunov — not wired to signals"
-          />
-          <button
-            type="button"
-            onClick={load}
-            disabled={loading}
-            className="omni-chip font-mono text-[11px] px-3 py-1.5 rounded"
-            style={{ background: 'var(--panel2)', color: loading ? 'var(--textFaint)' : 'var(--gold)', border: '1px solid var(--border)' }}
-          >
-            {loading ? 'Scanning…' : 'Refresh'}
-          </button>
-        </div>
-        <div className="font-mono text-[10px] mb-3" style={{ color: 'var(--textFaint)' }}>
-          Independent path-dependence engine. Does not score signals or size risk.
-          {ts ? ` · last update ${new Date(ts).toISOString().slice(11, 19)} UTC` : ''}
-        </div>
-        {err && (
-          <div className="font-mono text-[11px] mb-2" style={{ color: 'var(--coral)' }}>Error: {err}</div>
-        )}
-        {rows.length === 0 && !loading ? (
+        <SectionHeader icon={Zap} title="Active FIRE" sub={`${fire.length} on desk`} />
+        {fire.length === 0 ? (
           <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
-            No analysis yet — need enough H1/H4 candles per symbol.
+            No FIRE yet. Engine scans on live ticks — ideas appear here when score and gates clear.
           </div>
         ) : (
           <div className="space-y-2">
-            {rows.map((row) => {
-              const H = row.hurst?.H;
-              const dfa = row.dfa;
-              const frama = row.frama;
-              const lyap = row.lyapunov;
-              const open = selected === row.symbol;
-              return (
-                <div
-                  key={row.symbol}
-                  className="omni-row rounded-lg border"
-                  style={{ borderColor: 'var(--border)', background: 'var(--panel2)' }}
-                >
-                  <button
-                    type="button"
-                    className="w-full text-left p-3 flex flex-wrap items-center gap-2"
-                    onClick={() => setSelected(open ? null : row.symbol)}
-                  >
-                    <span className="font-display text-sm font-semibold tracking-wide" style={{ color: 'var(--text)' }}>
-                      {symLabel(row.symbol)}
-                    </span>
-                    <span className="font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>
-                      {row.timeframe} · {row.bars ?? '—'} bars
-                    </span>
-                    <Pill tone={playTone(row.playbook)}>{(row.playbook || 'STAND_ASIDE').replace(/_/g, ' ')}</Pill>
-                    {row.bias && row.bias !== 'NONE' && (
-                      <Pill tone={row.bias === 'DIRECTIONAL' ? 'up' : 'warn'}>{row.bias}</Pill>
-                    )}
-                    <span className="ml-auto font-mono text-[10px]" style={{ color: 'var(--textFaint)' }}>
-                      {open ? '▲' : '▼'}
-                    </span>
-                  </button>
-                  <div className="px-3 pb-3 grid grid-cols-2 lg:grid-cols-4 gap-2">
-                    <StructureCard
-                      label="Hurst R/S"
-                      accent="var(--gold)"
-                      value={H != null ? Number(H).toFixed(3) : '—'}
-                      valueColor="var(--gold)"
-                      sub={`conf ${row.hurst?.confidence != null ? `${Number(row.hurst.confidence).toFixed(0)}%` : '—'}`}
-                      pill={row.hurst?.regime || 'R/S —'}
-                      pillTone="neutral"
-                      note={open ? row.hurst?.note : null}
-                    />
-                    <StructureCard
-                      label="DFA"
-                      accent="var(--emerald)"
-                      value={dfa?.alpha != null ? Number(dfa.alpha).toFixed(3) : '—'}
-                      valueColor={dfa ? 'var(--emerald)' : 'var(--textFaint)'}
-                      sub={dfa ? `R² ${Number(dfa.rSquared ?? 0).toFixed(2)} · conf ${Number(dfa.confidence).toFixed(0)}%` : '—'}
-                      pill={dfa?.regime ? String(dfa.regime).replace(/_/g, ' ') : 'DFA —'}
-                      pillTone={alphaTone(dfa?.alpha)}
-                      note={open ? dfa?.note : null}
-                    />
-                    <StructureCard
-                      label="FRAMA"
-                      accent="#22d3ee"
-                      value={frama?.fractalDimension != null ? Number(frama.fractalDimension).toFixed(3) : '—'}
-                      sub={frama?.speed || '—'}
-                      note={open ? frama?.note : null}
-                    />
-                    <StructureCard
-                      label="Lyapunov"
-                      accent={lyap?.chaotic ? 'var(--coral)' : 'var(--text)'}
-                      value={lyap?.exponent != null ? Number(lyap.exponent).toFixed(4) : '—'}
-                      valueColor={lyap?.chaotic ? 'var(--coral)' : 'var(--text)'}
-                      pill={lyap?.chaotic ? 'CHAOTIC' : 'stable'}
-                      pillTone={lyap?.chaotic ? 'warn' : 'neutral'}
-                      note={open ? lyap?.note : null}
-                    />
-                  </div>
-                  {open && (
-                    <div className="px-3 pb-3 space-y-2 border-t" style={{ borderColor: 'var(--border)' }}>
-                      <div className="font-mono text-[10px] pt-2" style={{ color: 'var(--textFaint)' }}>
-                        {row.detail || row.label}
-                      </div>
-                      {row.multi && Object.keys(row.multi).length > 1 && (
-                        <div className="flex flex-wrap gap-2 pt-1">
-                          {Object.entries(row.multi).map(([tf, m]) => (
-                            <span
-                              key={tf}
-                              className="font-mono text-[10px] px-2 py-1 rounded"
-                              style={{ background: 'var(--panel)', color: 'var(--textFaint)', border: '1px solid var(--border)' }}
-                            >
-                              {tf}: H={m.hurst?.H != null ? Number(m.hurst.H).toFixed(2) : '—'}
-                              {m.dfa?.alpha != null ? ` · α=${Number(m.dfa.alpha).toFixed(2)}` : ''}
-                              {' · '}{(m.playbook || '').replace(/_/g, ' ')}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
+            {fire.map((s) => (
+              <div key={s.id || `${s.symbol}-${s.timestamp}`} className="omni-panel2 p-3 flex flex-wrap gap-2 items-center font-mono text-[12px]">
+                <span style={{ color: s.action === 'BUY' || s.action === 'LONG' ? 'var(--emerald)' : 'var(--coral)', fontWeight: 700 }}>{s.action}</span>
+                <span style={{ color: 'var(--text)' }}>{symLabel(s.symbol)}</span>
+                <span style={{ color: 'var(--textDim)' }}>{s.timeframe}</span>
+                <span style={{ color: 'var(--gold)' }}>{signalScore(s)}</span>
+                <span style={{ color: 'var(--textFaint)', marginLeft: 'auto' }}>{timeAgo(s.timestamp)}</span>
+                <div className="w-full font-mono text-[10px]" style={{ color: 'var(--textDim)' }}>
+                  E {fmtPrice(s.symbol, s.entry)} · SL {fmtPrice(s.symbol, s.stopLoss)} · TP {fmtPrice(s.symbol, s.targets?.[0])}
                 </div>
-              );
-            })}
+              </div>
+            ))}
           </div>
         )}
       </div>
 
-      <div className="omni-panel p-4">
-        <SectionHeader icon={Layers} title="About this layer" sub="fully decoupled from signal pipeline" />
-        <ul className="font-mono text-[10px] space-y-1" style={{ color: 'var(--textFaint)' }}>
-          <li>• Own endpoint <span style={{ color: 'var(--gold)' }}>/api/analysis</span> + module <span style={{ color: 'var(--gold)' }}>advanced-analysis.js</span></li>
-          <li>• R/S Hurst, hardened DFA (α + R²), FRAMA dimension/speed, Lyapunov λ</li>
-          <li>• Does not write to journals, risk engine, or signal scorer</li>
-          <li>• Refresh pulls a fresh board from candle stores only</li>
-        </ul>
-      </div>
+      {waits.length > 0 && (
+        <div className="omni-panel p-4">
+          <SectionHeader icon={Activity} title="Near / WAIT" sub="building setups" />
+          <div className="space-y-1">
+            {waits.map((s) => (
+              <div key={s.id || `${s.symbol}-w-${s.timestamp}`} className="font-mono text-[11px] flex flex-wrap gap-2 py-1 border-b" style={{ borderColor: 'var(--border)', color: 'var(--textDim)' }}>
+                <span style={{ color: 'var(--text)' }}>{symLabel(s.symbol)}</span>
+                <span>{s.timeframe}</span>
+                <span style={{ color: 'var(--gold)' }}>{signalScore(s)}</span>
+                <span className="truncate" style={{ color: 'var(--textFaint)' }}>{s.waitReason || s.gate?.reason || 'watching'}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -4302,11 +4094,11 @@ export default function OmniceeDashboard() {
             )}
             {activeTab === 'NEWS' && <NewsTab news={feed.news} mode={feed.mode} />}
             {activeTab === 'ANALYSIS' && (
-              <AnalysisTab mode={feed.mode} heatmapTiles={feed.heatmapTiles} relativeStrength={feed.relativeStrength} hurstBoard={feed.hurstBoard} />
+              <AnalysisTab mode={feed.mode} signals={feed.signals} prices={feed.prices} quotes={feed.quotes} analysisLive={feed.analysisLive} />
             )}
             {activeTab === 'MONITOR' && (
               <div className="space-y-2">
-                <MonitorTab auditLog={feed.auditLog} feedHealth={feed.feedHealth} uptimeSec={feed.uptimeSec} mode={feed.mode} fetchErrors={feed.fetchErrors} analysisLive={feed.analysisLive} socketLive={feed.socketLive} />
+                <MonitorTab auditLog={feed.auditLog} uptimeSec={feed.uptimeSec} mode={feed.mode} fetchErrors={feed.fetchErrors} analysisLive={feed.analysisLive} socketLive={feed.socketLive} />
                 <DeskTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} stats={feed.stats} accountBalance={feed.accountBalance} relativeStrength={feed.relativeStrength} mode={feed.mode} />
               </div>
             )}

@@ -30,10 +30,10 @@ const SYMBOLS         = (requireEnv('SYMBOLS', 'XAUUSD,BTCUSDT,ETHUSDT,EURUSD,GB
   .split(',').map(s => s.trim()).filter(Boolean);
 const TIMEFRAMES_STR  = (requireEnv('TIMEFRAMES', 'M15,H1,H4') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
-const MIN_SCORE       = parseFloat(requireEnv('MIN_SIGNAL_SCORE', '55'));
+const MIN_SCORE       = parseFloat(requireEnv('MIN_SIGNAL_SCORE', '48'));
 // Daily gold scalper floor is higher (see signal-pipeline/daily-gold-profile.js) — do not lower quality for volume
 // Selective but not silent — 72 was blocking almost all gold FIRE after desk gates
-const GOLD_MIN_SCORE  = parseFloat(requireEnv('GOLD_MIN_SCORE', '65'));
+const GOLD_MIN_SCORE  = parseFloat(requireEnv('GOLD_MIN_SCORE', '52'));
 const RISK_PCT        = parseFloat(requireEnv('RISK_PCT_PER_TRADE', '1.0'));
 const MAX_DAILY_LOSS  = parseFloat(requireEnv('MAX_DAILY_LOSS_PCT', '2.0'));
 const MAX_DRAWDOWN    = parseFloat(requireEnv('MAX_DRAWDOWN_PCT', '8.0'));
@@ -108,6 +108,7 @@ const { StockDataFeed }        = loadModule('./feeds/stockdata-feed',           
 const { ExchangeRateFeed }     = loadModule('./feeds/exchangerate-feed',        'ExchangeRateFeed')     || {};
 const { FrankfurterFeed }      = loadModule('./feeds/frankfurter-feed',         'FrankfurterFeed')      || {};
 const { BiQuoteFeed }          = loadModule('./feeds/biquote-feed',             'BiQuoteFeed')          || {};
+const { YahooQuoteFeed }       = loadModule('./feeds/yahoo-quote-feed',         'YahooQuoteFeed')       || {};
 const { TreasuryFiscalFeed }   = loadModule('./feeds/treasury-fiscal-feed',     'TreasuryFiscalFeed')   || {};
 const { FredFeed }             = loadModule('./feeds/fred-feed',                'FredFeed')             || {};
 const { AletheiaFeed }         = loadModule('./feeds/aletheia-feed',            'AletheiaFeed')         || {};
@@ -216,14 +217,14 @@ const ADAPTIVE_THROTTLE = process.env.ADAPTIVE_THROTTLE !== 'false'; // default 
 function getAdaptiveAnalysisIntervalMs(symbol, timeframe) {
   const key = `${symbol}:${timeframe}`;
   // Floor / ceiling (env overrides)
-  const floorMs = Number(process.env.LIVE_ANALYSIS_MIN_MS || 8000);   // never faster than 8s
-  const ceilMs  = Number(process.env.LIVE_ANALYSIS_MAX_MS || 120000); // never slower than 2m
+  const floorMs = Number(process.env.LIVE_ANALYSIS_MIN_MS || 5000);   // never faster than 5s
+  const ceilMs  = Number(process.env.LIVE_ANALYSIS_MAX_MS || 90000);  // never slower than 90s
 
   if (!ADAPTIVE_THROTTLE) {
-    return Number(process.env.LIVE_ANALYSIS_MIN_MS || 20000);
+    return Number(process.env.LIVE_ANALYSIS_MIN_MS || 12000);
   }
 
-  let ms = 30000; // baseline 30s
+  let ms = 18000; // baseline ~18s — more cycles per day for opportunities
 
   // 1) Session quality (UTC)
   const utcHour = new Date().getUTCHours();
@@ -287,13 +288,14 @@ function getAdaptiveAnalysisIntervalMs(symbol, timeframe) {
  */
 function scheduleLiveAnalysis(symbol, reason = 'tick') {
   if (!SYMBOLS.includes(symbol)) return;
-  if (reason === 'tick' || reason === 'mt5_ea' || reason === 'deriv' || reason === 'finnhub' || reason === 'binance' || reason === 'seed') {
+  if (reason === 'tick' || reason === 'mt5_ea' || reason === 'deriv' || reason === 'finnhub' || reason === 'binance' || reason === 'seed' || reason === 'biquote' || reason === 'yahoo' || reason === 'tradingview') {
     lastTickAt.set(symbol, Date.now());
   }
   for (const tf of TIMEFRAMES_STR) {
     const key = `${symbol}:${tf}`;
     const n = candleStores[symbol]?.[tf]?.length || 0;
-    let minBars = SIGNAL_SOFT_GATES ? 30 : 50;
+    // Soft gates: fewer bars so daily opportunities can fire after seed
+    let minBars = SIGNAL_SOFT_GATES ? 18 : 40;
     // During initial boot grace period, allow fewer bars so signals can seed faster
     if (reason === 'boot' && (Date.now() - bootStartAt) < BOOT_GRACE_MS) {
       minBars = Math.min(8, minBars);
@@ -364,7 +366,7 @@ async function runAnalysisCycle(symbol, timeframe) {
 
   try {
     const candles = candleStores[symbol]?.[timeframe];
-    const minBars = SIGNAL_SOFT_GATES ? 40 : 50;
+    const minBars = SIGNAL_SOFT_GATES ? 22 : 40;
     if (!candles || candles.length < minBars) {
       log.debug(`${key}: not enough candles (${candles?.length || 0}/${minBars}) — waiting`);
       try {
@@ -1469,6 +1471,7 @@ const PRICE_SOURCE_RANK = {
   finnhub: 60,
   binance: 58,
   biquote: 110,     // PRIMARY live tape — supersedes MT5/Deriv/TV (user preference)
+  yahoo: 50,        // free Yahoo chart quotes — UUP/oil/gaps
   exchangerate: 48, // free continuous USD FX (open.er-api.com)
   frankfurter: 47,  // free ECB FX (api.frankfurter.app)
   stockdata: 45,
@@ -2452,6 +2455,24 @@ function buildFeeds() {
     feeds.push({ name: 'BiQuote', instance: bq, symbols: ['XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'BTCUSDT', 'ETHUSDT', 'USOIL'] });
     if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('BiQuote', bq, ['XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'BTCUSDT', 'ETHUSDT']);
     log.info('BiQuoteFeed PRIMARY — live tape + signal driver (biquote.io)');
+  }
+
+  // Yahoo free quotes — fills UUP / oil (and gaps) when other feeds empty
+  if (YahooQuoteFeed && process.env.DISABLE_YAHOO_QUOTES !== '1') {
+    const yq = new YahooQuoteFeed({
+      symbols: SYMBOLS.filter((s) => ['UUP', 'USOIL', 'XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'BTCUSDT', 'ETHUSDT'].includes(s)),
+      pollMs: Number(process.env.YAHOO_QUOTE_POLL_MS || 20000),
+    });
+    yq.on('price', ({ symbol, price, change, bid, ask }) => {
+      const last = lastPriceBySymbol[symbol];
+      if (last && last.rank >= 55 && (Date.now() - last.ts) < 12000) return;
+      onLivePrice(symbol, price, { source: 'yahoo', change, bid, ask });
+    });
+    yq.on('error', (err) => log.warn(`YahooQuoteFeed: ${feedErrorMessage(err)}`));
+    yq.start();
+    feeds.push({ name: 'YahooQuotes', instance: yq, symbols: ['UUP', 'USOIL'] });
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('YahooQuotes', yq, ['UUP', 'USOIL']);
+    log.info('YahooQuoteFeed enabled — free UUP/oil (+ gap fill)');
   }
 
   // ApiVault: Frankfurter ECB rates — second free FX path so pairs are never empty
