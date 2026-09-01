@@ -1616,10 +1616,14 @@ function useLiveFeed() {
   const [hurstBoard, setHurstBoard] = useState(null); // separate Hurst analysis layer
   const priceRef = useRef(prices);
   priceRef.current = prices;
-  // Prefer broker (mt5_ea) ticks on the client so lower-rank sources cannot
-  // paint over Exness prices while the EA is connected.
-  const priceSourceRef = useRef({});
-  const SRC_RANK = { mt5_ea: 100, tradingview: 92, deriv: 70, finnhub: 60, binance: 58, exchangerate: 48, stockdata: 45, aletheia: 44, fred: 30, treasury: 20, candle: 40, unknown: 0 };
+  // FIX: source-priority resolution (mt5_ea > tradingview > deriv > ...)
+  // used to be duplicated here (priceSourceRef/SRC_RANK, removed) — moved
+  // to api/server.js's market_update handler instead, which has better
+  // information to make this call (visibility into every source's actual
+  // write, not just whatever happened to reach one client) and resolves
+  // it once for every consumer rather than each client recomputing it.
+  // /api/market and the socket 'market' push are both already the
+  // winning value by the time they get here.
 
   /* Reachability probe against the unauthenticated /health route. Render's
      free tier can take 30-60s+ to wake a cold instance, so a single
@@ -1739,12 +1743,6 @@ function useLiveFeed() {
             const next = { ...prev };
             r.market.forEach(m => {
               if (!m.symbol || m.price == null || !(m.symbol in next)) return;
-              const src = m.source || 'unknown';
-              const rank = SRC_RANK[src] ?? 0;
-              const prevSrc = priceSourceRef.current[m.symbol];
-              // Prefer broker MT5; shorter hold so Deriv can fill when EA offline
-              if (prevSrc && prevSrc.rank > rank && (Date.now() - prevSrc.ts) < 8000) return;
-              priceSourceRef.current[m.symbol] = { source: src, rank, ts: Date.now() };
               const bid = m.bid != null ? Number(m.bid) : null;
               const ask = m.ask != null ? Number(m.ask) : null;
               const mid = (Number.isFinite(bid) && Number.isFinite(ask)) ? (bid + ask) / 2 : Number(m.price);
@@ -1757,9 +1755,6 @@ function useLiveFeed() {
             r.market.forEach(m => {
               if (!m.symbol || m.price == null) return;
               const src = m.source || 'unknown';
-              const rank = SRC_RANK[src] ?? 0;
-              const prevSrc = priceSourceRef.current[m.symbol];
-              if (prevSrc && prevSrc.rank > rank && (Date.now() - prevSrc.ts) < 15000) return;
               {
                 const bid = m.bid != null ? Number(m.bid) : prev[m.symbol]?.bid ?? null;
                 const ask = m.ask != null ? Number(m.ask) : prev[m.symbol]?.ask ?? null;
@@ -1988,12 +1983,6 @@ function useLiveFeed() {
         if (cancelled || !payload?.symbol || payload.price == null || !(payload.symbol in BASE_PRICE)) return;
         const sym = payload.symbol;
         const src = payload.source || 'unknown';
-        const rank = SRC_RANK[src] ?? 0;
-        const prevSrc = priceSourceRef.current[sym];
-        if (prevSrc && prevSrc.rank > rank && (Date.now() - prevSrc.ts) < 12000) {
-          return; // MT5 only blocks ~12s after last broker tick
-        }
-        priceSourceRef.current[sym] = { source: src, rank, ts: Date.now() };
         const prevPrice = priceRef.current[sym];
         setFlash(f => ({ ...f, [sym]: payload.price >= prevPrice ? 'up' : 'down' }));
         setPrices(prev => ({ ...prev, [sym]: Number(payload.price) }));
