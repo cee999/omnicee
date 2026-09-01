@@ -108,6 +108,9 @@ const { StockDataFeed }        = loadModule('./feeds/stockdata-feed',           
 const { ExchangeRateFeed }     = loadModule('./feeds/exchangerate-feed',        'ExchangeRateFeed')     || {};
 const { FrankfurterFeed }      = loadModule('./feeds/frankfurter-feed',         'FrankfurterFeed')      || {};
 const { BiQuoteFeed }          = loadModule('./feeds/biquote-feed',             'BiQuoteFeed')          || {};
+const { SmartMoneyIntel }      = loadModule('./signal-pipeline/smart-money-intel', 'SmartMoneyIntel') || {};
+const { YahooNewsFeed }       = loadModule('./feeds/yahoo-news-feed',         'YahooNewsFeed')       || {};
+const { FearGreedFeed }       = loadModule('./feeds/fear-greed-feed',         'FearGreedFeed')       || {};
 const { YahooQuoteFeed }       = loadModule('./feeds/yahoo-quote-feed',         'YahooQuoteFeed')       || {};
 const { TreasuryFiscalFeed }   = loadModule('./feeds/treasury-fiscal-feed',     'TreasuryFiscalFeed')   || {};
 const { FredFeed }             = loadModule('./feeds/fred-feed',                'FredFeed')             || {};
@@ -432,7 +435,7 @@ async function runAnalysisCycle(symbol, timeframe) {
     ]);
 
     // FIX: this comment already documented the intent to run BOTH sentiment and pattern on a reduced cadence, but the code only ever called agents.sentiment — agents.pattern.analyze() was never called...
-    const runReducedCadenceAgents = Math.random() > 0.66;
+    const runReducedCadenceAgents = Math.random() > 0.35; // news/sentiment more often for smart-money desk
 
     const sentResult = agents.sentiment && runReducedCadenceAgents
       ? await buildSentimentExternalData(symbol)
@@ -569,6 +572,26 @@ async function runAnalysisCycle(symbol, timeframe) {
     });
 
     const effectiveMinScore = /XAU|GOLD/i.test(symbol) ? GOLD_MIN_SCORE : MIN_SCORE;
+    // Session open boost — London/NY liquidity windows (from SmartMoneyIntel cache)
+    try {
+      const sm = smartMoneyIntel?.getLastBundle?.()?.smartMoney
+        || smartMoneyIntel?.getLastBundle?.()
+        || null;
+      const boost = Number(sm?.opportunityBoost) || 1;
+      if (signal && sm) {
+        signal.smartMoney = {
+          lean: sm.smartMoneyLean || sm.lean,
+          note: sm.smartMoneyNote || sm.note,
+          session: sm.session,
+          newsDirection: sm.newsDirection,
+        };
+      }
+      if (boost > 1 && signal?.score?.final != null && signal.action && String(signal.action).toUpperCase() !== 'WAIT') {
+        signal.score.final = parseFloat(Math.min(99, signal.score.final * boost).toFixed(2));
+        signal.sessionOpportunity = sm?.session?.label || 'open_window';
+      }
+    } catch (_) {}
+
     // Align scorer gate with gold floor for this cycle
     if (scorer && effectiveMinScore !== scorer.minScore) {
       try { scorer.minScore = effectiveMinScore; } catch (_) {}
@@ -1332,6 +1355,10 @@ function updateInsiderIntelFromFeed(feed) {
 }
 
 const _newsCache = {};
+let smartMoneyIntel = null;
+let yahooNewsFeed = null;
+let fearGreedFeed = null;
+
 
 async function buildSentimentExternalData(symbol) {
   const data = {};
@@ -1398,6 +1425,31 @@ async function buildSentimentExternalData(symbol) {
       executiveBias: insiderIntel.executiveBias,
       recentClusters: insiderIntel.recentClusters,
     };
+  }
+
+  // Free news + smart-money session context (works without Finnhub key)
+  if (smartMoneyIntel) {
+    try {
+      const sm = await smartMoneyIntel.buildForSymbol(symbol, { cot: data.cot, insider: data.insider });
+      if (sm.articles?.length && !data.articles?.length) {
+        data.articles = sm.articles;
+      } else if (sm.articles?.length && data.articles?.length) {
+        data.articles = [...sm.articles.slice(0, 10), ...data.articles].slice(0, 24);
+      }
+      if (sm.fearGreed) data.fearGreed = sm.fearGreed;
+      data.smartMoney = {
+        lean: sm.smartMoneyLean,
+        note: sm.smartMoneyNote,
+        session: sm.session,
+        newsDirection: sm.newsDirection,
+        newsScore: sm.newsScore,
+        opportunityBoost: sm.opportunityBoost,
+        fgNote: sm.fgNote,
+      };
+      data.session = sm.session;
+    } catch (e) {
+      log.debug(`SmartMoneyIntel ${symbol}: ${e.message}`);
+    }
   }
 
   return data;
@@ -2227,6 +2279,18 @@ function buildSingletons() {
     cftcCotFeed = new CFTCCotFeed();
     cotParser = new COTReportParser();
     log.info(`CFTCCotFeed created — supports: ${cftcCotFeed.supportedSymbols().join(', ')}`);
+  }
+
+  // Smart-money layer: free news + fear/greed + session open windows
+  try {
+    yahooNewsFeed = YahooNewsFeed ? new YahooNewsFeed({}) : null;
+    fearGreedFeed = FearGreedFeed ? new FearGreedFeed({}) : null;
+    if (SmartMoneyIntel) {
+      smartMoneyIntel = new SmartMoneyIntel({ yahooNews: yahooNewsFeed, fearGreed: fearGreedFeed });
+      log.info('SmartMoneyIntel online — news + F&G + session opportunity windows');
+    }
+  } catch (e) {
+    log.warn(`SmartMoneyIntel init: ${e.message}`);
   }
 
   // FIX: publish the live singleton instances so api/server.js's /api/outcomes handler can record real trade outcomes into the SAME objects this pipeline actually consults during scoring — see...
