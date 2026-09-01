@@ -107,6 +107,7 @@ const { DerivFeed }            = loadModule('./feeds/deriv-feed',               
 const { StockDataFeed }        = loadModule('./feeds/stockdata-feed',           'StockDataFeed')        || {};
 const { ExchangeRateFeed }     = loadModule('./feeds/exchangerate-feed',        'ExchangeRateFeed')     || {};
 const { FrankfurterFeed }      = loadModule('./feeds/frankfurter-feed',         'FrankfurterFeed')      || {};
+const { BiQuoteFeed }          = loadModule('./feeds/biquote-feed',             'BiQuoteFeed')          || {};
 const { TreasuryFiscalFeed }   = loadModule('./feeds/treasury-fiscal-feed',     'TreasuryFiscalFeed')   || {};
 const { FredFeed }             = loadModule('./feeds/fred-feed',                'FredFeed')             || {};
 const { AletheiaFeed }         = loadModule('./feeds/aletheia-feed',            'AletheiaFeed')         || {};
@@ -1469,6 +1470,7 @@ const PRICE_SOURCE_RANK = {
   binance: 58,
   exchangerate: 48, // free continuous USD FX (open.er-api.com)
   frankfurter: 47,  // free ECB FX (api.frankfurter.app)
+  biquote: 55,      // free MT5-sourced ticks (biquote.io) — below deriv, above pure FX APIs
   stockdata: 45,
   aletheia: 44,
   fred: 30,         // FRED daily series (needs FRED_API_KEY)
@@ -2430,6 +2432,26 @@ function buildFeeds() {
     feeds.push({ name: 'ExchangeRate', instance: erFeed, symbols: ['EURUSD', 'GBPUSD', 'USDJPY'] });
     if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('ExchangeRate', erFeed, ['EURUSD', 'GBPUSD', 'USDJPY']);
     log.info('ExchangeRateFeed enabled — continuous free FX fallback');
+  }
+
+  // BiQuote — free MT5-sourced bid/ask (no key). Fills desk when local EA is offline.
+  // Does NOT replace Exness prices; rank below mt5_ea / tradingview / deriv.
+  if (BiQuoteFeed && process.env.DISABLE_BIQUOTE !== '1') {
+    const bq = new BiQuoteFeed({
+      symbols: SYMBOLS.filter((s) => ['XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'BTCUSDT', 'ETHUSDT', 'USOIL'].includes(s)),
+      pollMs: Number(process.env.BIQUOTE_POLL_MS || 8000),
+    });
+    bq.on('price', ({ symbol, price, change, bid, ask }) => {
+      const last = lastPriceBySymbol[symbol];
+      if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < BROKER_PRICE_HOLD_MS) return;
+      if (last && ['deriv', 'tradingview'].includes(last.source) && (Date.now() - last.ts) < 15000) return;
+      onLivePrice(symbol, price, { source: 'biquote', change, bid, ask });
+    });
+    bq.on('error', (err) => log.warn(`BiQuoteFeed: ${feedErrorMessage(err)}`));
+    bq.start();
+    feeds.push({ name: 'BiQuote', instance: bq, symbols: ['XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'BTCUSDT', 'ETHUSDT', 'USOIL'] });
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('BiQuote', bq, ['XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'BTCUSDT', 'ETHUSDT']);
+    log.info('BiQuoteFeed enabled — free MT5-sourced fallback (biquote.io)');
   }
 
   // ApiVault: Frankfurter ECB rates — second free FX path so pairs are never empty
