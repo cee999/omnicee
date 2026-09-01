@@ -1143,11 +1143,18 @@ async function runAnalysisCycle(symbol, timeframe) {
       }
     }
 
-    if (memory?.saveSignal) {
-      memory.saveSignal(fullSignal).catch(e => log.warn(`Memory save error: ${e.message}`));
+    // Persist ONLY executable FIRE (BUY/SELL) for adaptive learning — never WAIT noise
+    const fireAction = String(fullSignal.action || '').toUpperCase();
+    const isExecutableFire = fireAction === 'BUY' || fireAction === 'SELL'
+      || fireAction === 'LONG' || fireAction === 'SHORT';
+    if (isExecutableFire) {
+      if (memory?.saveSignal) {
+        memory.saveSignal(fullSignal).catch(e => log.warn(`Memory save error: ${e.message}`));
+      }
+      if (mongoStore?.saveSignal) {
+        mongoStore.saveSignal(fullSignal).catch(e => log.warn(`Mongo signal save error: ${e.message}`));
+      }
     }
-    // MongoDB signal persistence disabled (user): do not store FIRE history in Mongo
-    // if (mongoStore.saveSignal) { ... }
 
     if (aiAdvisorVerdict?.recommendation === 'SKIP') {
       log.info(`${key}: AI Advisor recommends SKIP — ${aiAdvisorVerdict.reasoning}`);

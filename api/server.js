@@ -1499,9 +1499,12 @@ function startServer(config = {}) {
     } else if (RECENT_SIGNALS_CACHE.length > RECENT_SIGNALS_CACHE_LIMIT) {
       RECENT_SIGNALS_CACHE.length = RECENT_SIGNALS_CACHE_LIMIT;
     }
-    // Only persist real FIRE signals to Mongo (WAIT is desk telemetry only)
-    if (String(compact.action).toUpperCase() !== 'WAIT') {
-      db.saveSignal(payload).catch(err => console.warn('[API] persist signal:', err.message));
+    // Persist ONLY BUY/SELL for adaptive learning — never WAIT or other noise
+    {
+      const a = String(compact.action || '').toUpperCase();
+      if (a === 'BUY' || a === 'SELL' || a === 'LONG' || a === 'SHORT') {
+        db.saveSignal(payload).catch(err => console.warn('[API] persist signal:', err.message));
+      }
     }
   });
   // FIX: this blindly overwrote MARKET_SNAPSHOT_CACHE with whatever

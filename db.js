@@ -168,8 +168,13 @@ async function ensureIndexes(db) {
 }
 
 async function saveSignal(signal) {
-  // Hard-disabled: do not persist signals to MongoDB (re-enable with ENABLE_MONGO_SIGNALS=1)
-  if (process.env.ENABLE_MONGO_SIGNALS !== '1') {
+  // Only BUY/SELL (LONG/SHORT) — adaptive learning must not train on WAIT noise
+  const action = String(signal?.action || '').toUpperCase();
+  const isFire = action === 'BUY' || action === 'SELL' || action === 'LONG' || action === 'SHORT';
+  if (!isFire) {
+    return { skipped: true, reason: 'non_fire_action' };
+  }
+  if (process.env.DISABLE_MONGO_SIGNALS === '1') {
     return { skipped: true, reason: 'mongo signal save disabled' };
   }
   try {
@@ -177,6 +182,7 @@ async function saveSignal(signal) {
     if (!db) return { skipped: true, reason: 'MONGODB_URI not configured' };
     await indexPromise;
     const doc = compactSignal(signal);
+    doc.learningEligible = true;
     await db.collection('signals').updateOne(
       { id: doc.id || `${doc.symbol}:${doc.timeframe}:${doc.timestamp}` },
       { $set: doc, $setOnInsert: { firstSeenAt: new Date() } },
