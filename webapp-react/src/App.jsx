@@ -2517,7 +2517,7 @@ function DeskBriefPanel({ brief, mode }) {
   if (!live) {
     return (
       <div className="omni-panel p-3">
-        <SectionHeader icon={Layers} title="Desk Brief" sub="multi-agent research layer" />
+        <SectionHeader icon={Layers} title="Desk Brief" sub="session notes" />
         <WaitingForBackend height={88} label="Building session · regime · signal · macro brief…" />
       </div>
     );

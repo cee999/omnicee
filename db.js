@@ -168,6 +168,10 @@ async function ensureIndexes(db) {
 }
 
 async function saveSignal(signal) {
+  // Hard-disabled: do not persist signals to MongoDB (re-enable with ENABLE_MONGO_SIGNALS=1)
+  if (process.env.ENABLE_MONGO_SIGNALS !== '1') {
+    return { skipped: true, reason: 'mongo signal save disabled' };
+  }
   try {
     const db = await getDB();
     if (!db) return { skipped: true, reason: 'MONGODB_URI not configured' };

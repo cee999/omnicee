@@ -1146,9 +1146,8 @@ async function runAnalysisCycle(symbol, timeframe) {
     if (memory?.saveSignal) {
       memory.saveSignal(fullSignal).catch(e => log.warn(`Memory save error: ${e.message}`));
     }
-    if (mongoStore.saveSignal) {
-      mongoStore.saveSignal(fullSignal).catch(e => log.warn(`Mongo signal save error: ${e.message}`));
-    }
+    // MongoDB signal persistence disabled (user): do not store FIRE history in Mongo
+    // if (mongoStore.saveSignal) { ... }
 
     if (aiAdvisorVerdict?.recommendation === 'SKIP') {
       log.info(`${key}: AI Advisor recommends SKIP — ${aiAdvisorVerdict.reasoning}`);
@@ -1471,7 +1470,7 @@ const PRICE_SOURCE_RANK = {
   finnhub: 60,
   binance: 58,
   biquote: 110,     // PRIMARY live tape — supersedes MT5/Deriv/TV (user preference)
-  yahoo: 50,        // free Yahoo chart quotes — UUP/oil/gaps
+  yahoo: 95,        // free Yahoo — primary for UUP/USOIL gaps
   exchangerate: 48, // free continuous USD FX (open.er-api.com)
   frankfurter: 47,  // free ECB FX (api.frankfurter.app)
   stockdata: 45,
@@ -2457,22 +2456,28 @@ function buildFeeds() {
     log.info('BiQuoteFeed PRIMARY — live tape + signal driver (biquote.io)');
   }
 
-  // Yahoo free quotes — fills UUP / oil (and gaps) when other feeds empty
+  // Yahoo — HARD primary for silent symbols (UUP / USOIL). Replaces dead Aletheia path.
   if (YahooQuoteFeed && process.env.DISABLE_YAHOO_QUOTES !== '1') {
     const yq = new YahooQuoteFeed({
-      symbols: SYMBOLS.filter((s) => ['UUP', 'USOIL', 'XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'BTCUSDT', 'ETHUSDT'].includes(s)),
-      pollMs: Number(process.env.YAHOO_QUOTE_POLL_MS || 20000),
+      symbols: SYMBOLS.filter((s) => ['UUP', 'USOIL', 'XAUUSD', 'BTCUSDT', 'ETHUSDT'].includes(s)),
+      pollMs: Number(process.env.YAHOO_QUOTE_POLL_MS || 8000),
     });
     yq.on('price', ({ symbol, price, change, bid, ask }) => {
+      const gap = symbol === 'UUP' || symbol === 'USOIL';
+      if (gap) {
+        // Always accept — these were dead under key-gated feeds
+        onLivePrice(symbol, price, { source: 'yahoo', change, bid, ask });
+        return;
+      }
       const last = lastPriceBySymbol[symbol];
-      if (last && last.rank >= 55 && (Date.now() - last.ts) < 12000) return;
+      if (last && last.rank > PRICE_SOURCE_RANK.yahoo && (Date.now() - last.ts) < 15000) return;
       onLivePrice(symbol, price, { source: 'yahoo', change, bid, ask });
     });
     yq.on('error', (err) => log.warn(`YahooQuoteFeed: ${feedErrorMessage(err)}`));
     yq.start();
     feeds.push({ name: 'YahooQuotes', instance: yq, symbols: ['UUP', 'USOIL'] });
     if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('YahooQuotes', yq, ['UUP', 'USOIL']);
-    log.info('YahooQuoteFeed enabled — free UUP/oil (+ gap fill)');
+    log.info('YahooQuoteFeed PRIMARY for UUP/USOIL — free chart quotes');
   }
 
   // ApiVault: Frankfurter ECB rates — second free FX path so pairs are never empty
@@ -2530,22 +2535,10 @@ function buildFeeds() {
     log.info('FredFeed disabled — set FRED_API_KEY to enable');
   }
 
-  if (AletheiaFeed && (process.env.ALETHEIA_API_KEY || process.env.ALETHEIA_KEY)) {
-    const al = new AletheiaFeed({
-      symbols: SYMBOLS.filter((s) => ['UUP', 'USOIL'].includes(s)),
-    });
-    al.on('price', ({ symbol, price }) => {
-      const last = lastPriceBySymbol[symbol];
-      if (last && last.rank > PRICE_SOURCE_RANK.aletheia && (Date.now() - last.ts) < 30000) return;
-      onLivePrice(symbol, price, { source: 'aletheia' });
-    });
-    al.on('error', (err) => log.warn(`AletheiaFeed: ${feedErrorMessage(err)}`));
-    al.start();
-    feeds.push({ name: 'Aletheia', instance: al, symbols: ['UUP', 'USOIL'] });
-    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('Aletheia', al, ['UUP', 'USOIL']);
-    log.info('AletheiaFeed enabled — equity/ETF quotes');
-  } else {
-    log.info('AletheiaFeed disabled — set ALETHEIA_API_KEY to enable');
+  // Aletheia removed as UUP/USOIL source — was silent without key / unreliable.
+  // YahooQuoteFeed is the hard replacement (free, no key).
+  if (false && AletheiaFeed && (process.env.ALETHEIA_API_KEY || process.env.ALETHEIA_KEY)) {
+    log.info('AletheiaFeed skipped — disabled in favor of Yahoo for UUP/USOIL');
   }
 
   if (dataIntegrityMonitor && finnhubFeed?.enabled?.()) {

@@ -52,7 +52,7 @@ class YahooQuoteFeed extends EventEmitter {
     super();
     const wanted = Array.isArray(config.symbols) ? config.symbols : Object.keys(YAHOO_MAP);
     this.symbols = wanted.filter((s) => YAHOO_MAP[s]);
-    this.pollMs = Math.max(10000, Number(config.pollMs || process.env.YAHOO_QUOTE_POLL_MS || 20000));
+    this.pollMs = Math.max(5000, Number(config.pollMs || process.env.YAHOO_QUOTE_POLL_MS || 8000));
     this._timer = null;
     this._running = false;
     this._lastOk = 0;
