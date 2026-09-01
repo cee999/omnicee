@@ -2271,7 +2271,7 @@ function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand,
             </span>
             <span className="font-mono text-[9px] px-1.5 py-0.5 rounded uppercase tracking-wider hidden xs:inline"
               style={{ color: analysisLive ? 'var(--gold)' : 'var(--textFaint)', border: `1px solid ${analysisLive ? 'var(--gold)' : 'var(--border)'}` }}
-              title={analysisLive ? `Last scan ${analysisLive.symbol || ''} ${analysisLive.timeframe || ''}` : 'Waiting for live analysis'}>
+              title={analysisLive ? `${analysisLive.symbol || ''} ${analysisLive.timeframe || ''}` : '—'}>
               {analysisLive ? `scan ${analysisLive.symbol || ''}`.trim() : 'scan —'}
             </span>
           </>
@@ -2395,7 +2395,7 @@ function MarketVoice({ now, signals, quotes, outlook, mode }) {
   const lines = [];
   lines.push(`${sess.name} session (UTC ${String(hour).padStart(2, '0')}:00). ${sess.note}`);
   if (liveCount > 0) lines.push(`Broker feed live on ${liveCount}/${SYMBOLS.length} symbols — prices are Exness/MT5 based.`);
-  else lines.push('Waiting for MT5 EA ticks — attach OmniceeEA for broker-accurate prices.');
+  else lines.push('Waiting for prices…');
   if (recent.length === 0) lines.push('No signals fired yet this window. System is scanning; it only speaks when confluence clears the gate.');
   else lines.push(`Recent book: ${bull} bullish / ${bear} bearish of last ${recent.length} signals.`);
   if (outlook?.narrative) lines.push(String(outlook.narrative).slice(0, 220));
@@ -2517,8 +2517,8 @@ function DeskBriefPanel({ brief, mode }) {
   if (!live) {
     return (
       <div className="omni-panel p-3">
-        <SectionHeader icon={Layers} title="Desk Brief" sub="session notes" />
-        <WaitingForBackend height={88} label="Building session · regime · signal · macro brief…" />
+        <SectionHeader icon={Layers} title="Desk Brief" sub="" />
+        <WaitingForBackend height={88} label="Loading…" />
       </div>
     );
   }
@@ -2722,12 +2722,12 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
             ) : q?.price != null ? (
               <span className="omni-px-mid">{fmtPrice(active, q.price)}</span>
             ) : (
-              <span className="omni-px-wait">waiting…</span>
+              <span className="omni-px-wait">—</span>
             )}
           </div>
           <div className="omni-charts-active-src">
-            {sourceLabel(q?.source) || (mode === 'live' ? 'feed' : '—')}
-            {isMobile ? ' · swipe' : ''}
+            {sourceLabel(q?.source) || ('—')}
+            {isMobile ? '' : ''}
           </div>
         </div>
         <button type="button" className="omni-sym-nav" onClick={goNext} aria-label="Next symbol">
@@ -2845,7 +2845,7 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
         >
           <span>Signals · {symLabel(active)}</span>
           <span className="omni-charts-rail-count">{liveSignals.length}</span>
-          <span className="omni-charts-rail-hint">{isMobile ? 'swipe cards' : 'rail'}</span>
+          <span className="omni-charts-rail-hint">{''}</span>
           <ChevronDown size={14} style={{ transform: railOpen ? 'rotate(180deg)' : 'none', marginLeft: 'auto' }} aria-hidden />
         </button>
         {railOpen && (
@@ -2856,7 +2856,7 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
           >
             {liveSignals.length === 0 ? (
               <div className="omni-charts-rail-empty">
-                No FIRE yet. Swipe symbols above — signals appear here when agents agree.
+                No active signals
               </div>
             ) : (
               liveSignals.map((s, idx) => (
@@ -3130,7 +3130,7 @@ function SignalsTab({ signals, prices, quotes, analysisLive, socketLive, onOpenC
       {filtered.length === 0 ? (
         <div className="omni-panel p-6 font-mono text-[12px] text-center" style={{ color: 'var(--textFaint)' }}>
           {socketLive
-            ? 'Live feed is connected. No FIRE on this desk yet — the engine only speaks when score, agents, and gates clear.'
+            ? 'No active signals yet'
             : 'Reconnecting to live feed… last-known signals will appear here.'}
         </div>
       ) : (
@@ -3487,7 +3487,7 @@ function MonitorTab({ auditLog, uptimeSec, mode, fetchErrors, analysisLive, sock
           {analysisLive ? (
             <span style={{ color: 'var(--gold)' }}>Scan {analysisLive.symbol} {analysisLive.timeframe}</span>
           ) : (
-            <span style={{ color: 'var(--textFaint)' }}>Waiting for scan</span>
+            <span style={{ color: 'var(--textFaint)' }}>—</span>
           )}
           <span style={{ color: mode === 'live' ? 'var(--emerald)' : 'var(--textFaint)' }}>{mode === 'live' ? 'Backend live' : 'Offline'}</span>
         </div>
@@ -3537,7 +3537,7 @@ function AnalysisTab({ mode, signals, prices, quotes, analysisLive }) {
       <div className="p-2 sm:p-3 w-full max-w-[100vw]">
         <div className="omni-panel p-4">
           <SectionHeader icon={Layers} title="Signal radar" />
-          <WaitingForBackend height={200} label="Connect to see live FIRE / WAIT status by symbol" />
+          <WaitingForBackend height={200} label="Connecting…" />
         </div>
       </div>
     );
@@ -3552,7 +3552,7 @@ function AnalysisTab({ mode, signals, prices, quotes, analysisLive }) {
           sub={analysisLive ? `scanning ${analysisLive.symbol} ${analysisLive.timeframe}` : 'live engine'}
         />
         <div className="font-mono text-[11px] mb-3" style={{ color: 'var(--textDim)' }}>
-          Clear status only: <span style={{ color: 'var(--emerald)' }}>FIRE</span> = tradeable idea · <span style={{ color: 'var(--gold)' }}>WAIT</span> = watching · empty = no setup yet.
+          FIRE = trade · WAIT = watching
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           {SYMBOLS.map((sym) => {
@@ -3587,7 +3587,7 @@ function AnalysisTab({ mode, signals, prices, quotes, analysisLive }) {
         <SectionHeader icon={Zap} title="Active FIRE" sub={`${fire.length} on desk`} />
         {fire.length === 0 ? (
           <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
-            No FIRE yet. Engine scans on live ticks — ideas appear here when score and gates clear.
+            No active signals
           </div>
         ) : (
           <div className="space-y-2">
@@ -3616,7 +3616,7 @@ function AnalysisTab({ mode, signals, prices, quotes, analysisLive }) {
                 <span style={{ color: 'var(--text)' }}>{symLabel(s.symbol)}</span>
                 <span>{s.timeframe}</span>
                 <span style={{ color: 'var(--gold)' }}>{signalScore(s)}</span>
-                <span className="truncate" style={{ color: 'var(--textFaint)' }}>{s.waitReason || s.gate?.reason || 'watching'}</span>
+                <span className="truncate" style={{ color: 'var(--textFaint)' }}>{s.waitReason || s.gate?.reason || ''}</span>
               </div>
             ))}
           </div>
@@ -3650,7 +3650,7 @@ function DeskTab({ signals, prices, quotes, changes, accountBalance, relativeStr
             <div className="p-4 font-mono text-[11px] space-y-2" style={{ color: 'var(--textFaint)' }}>
               <div><b style={{ color: 'var(--text)' }}>Queue ≠ Recent.</b> Home “Recent signals” = all fired setups. This queue = only approved ones.</div>
               <div>All signals (approved or blocked) are saved to MongoDB so adaptive learning can avoid repeat bad setups.</div>
-              <div>Empty queue means nothing cleared the gate yet — not a dead system.</div>
+              <div></div>
             </div>
           ) : (
             <div className="omni-table-scroll">

@@ -2513,7 +2513,7 @@ function buildFeeds() {
   // BiQuote — PRIMARY live tape (rank 110). Drives desk quotes + live signal analysis.
   if (BiQuoteFeed && process.env.DISABLE_BIQUOTE !== '1') {
     const bq = new BiQuoteFeed({
-      symbols: SYMBOLS.filter((s) => ['XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'BTCUSDT', 'ETHUSDT', 'USOIL'].includes(s)),
+      symbols: SYMBOLS.filter((s) => ['XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'BTCUSDT', 'ETHUSDT', 'USOIL'].includes(s)), // UUP via Yahoo
       pollMs: Number(process.env.BIQUOTE_POLL_MS || 2500),
     });
     bq.on('price', ({ symbol, price, change, bid, ask }) => {
@@ -2527,28 +2527,24 @@ function buildFeeds() {
     log.info('BiQuoteFeed PRIMARY — live tape + signal driver (biquote.io)');
   }
 
-  // Yahoo — HARD primary for silent symbols (UUP / USOIL). Replaces dead Aletheia path.
+  // Yahoo — fills EVERY symbol that is empty or stale (hard fix for silent desk)
   if (YahooQuoteFeed && process.env.DISABLE_YAHOO_QUOTES !== '1') {
     const yq = new YahooQuoteFeed({
-      symbols: SYMBOLS.filter((s) => ['UUP', 'USOIL', 'XAUUSD', 'BTCUSDT', 'ETHUSDT'].includes(s)),
+      symbols: SYMBOLS.slice(),
       pollMs: Number(process.env.YAHOO_QUOTE_POLL_MS || 8000),
     });
     yq.on('price', ({ symbol, price, change, bid, ask }) => {
-      const gap = symbol === 'UUP' || symbol === 'USOIL';
-      if (gap) {
-        // Always accept — these were dead under key-gated feeds
-        onLivePrice(symbol, price, { source: 'yahoo', change, bid, ask });
-        return;
-      }
       const last = lastPriceBySymbol[symbol];
-      if (last && last.rank > PRICE_SOURCE_RANK.yahoo && (Date.now() - last.ts) < 15000) return;
+      const age = last ? Date.now() - last.ts : 1e12;
+      // Accept if empty, stale (>12s), or lower/equal rank than yahoo
+      if (last && last.rank > PRICE_SOURCE_RANK.yahoo && age < 12000) return;
       onLivePrice(symbol, price, { source: 'yahoo', change, bid, ask });
     });
     yq.on('error', (err) => log.warn(`YahooQuoteFeed: ${feedErrorMessage(err)}`));
     yq.start();
-    feeds.push({ name: 'YahooQuotes', instance: yq, symbols: ['UUP', 'USOIL'] });
-    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('YahooQuotes', yq, ['UUP', 'USOIL']);
-    log.info('YahooQuoteFeed PRIMARY for UUP/USOIL — free chart quotes');
+    feeds.push({ name: 'YahooQuotes', instance: yq, symbols: SYMBOLS.slice() });
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('YahooQuotes', yq, SYMBOLS.slice());
+    log.info('YahooQuoteFeed — full symbol coverage (gap + stale fill)');
   }
 
   // ApiVault: Frankfurter ECB rates — second free FX path so pairs are never empty
