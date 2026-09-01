@@ -2725,10 +2725,7 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
               <span className="omni-px-wait">—</span>
             )}
           </div>
-          <div className="omni-charts-active-src">
-            {sourceLabel(q?.source) || ('—')}
-            {isMobile ? '' : ''}
-          </div>
+          <div className="omni-charts-active-src" />
         </div>
         <button type="button" className="omni-sym-nav" onClick={goNext} aria-label="Next symbol">
           <ChevronRight size={20} />
@@ -2741,7 +2738,7 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
           aria-label={chartExpanded ? 'Exit full chart' : 'Expand chart full screen'}
         >
           {chartExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-          <span>{chartExpanded ? 'Exit' : 'Full'}</span>
+          <span className="omni-hide-xs">{chartExpanded ? 'Exit' : 'Full'}</span>
         </button>
       </div>
 
@@ -2766,7 +2763,7 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
               className={`omni-sym-card${on ? ' is-on' : ''}`}
             >
               <span className="omni-sym-card-name">{symLabel(sym)}</span>
-              <span className="omni-sym-card-src">{sourceLabel(qq?.source) || '—'}</span>
+              
               {bid != null ? (
                 <span className="omni-sym-card-px tabular-nums">
                   {qq?.bid != null && qq?.ask != null ? (
@@ -2810,7 +2807,7 @@ function ChartsTab({ quotes, mode, signals, theme, chartSymbol, onSymbolChange }
           aria-label={chartExpanded ? 'Exit full chart' : 'Expand chart full screen'}
         >
           {chartExpanded ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
-          <span>{chartExpanded ? 'Exit' : 'Full'}</span>
+          <span className="omni-hide-xs">{chartExpanded ? 'Exit' : 'Full'}</span>
         </button>
         {latest && !chartExpanded && (
           <div className="omni-chart-hud" role="status" aria-live="polite">
@@ -2931,7 +2928,7 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
           ))}
         </div>
       )}
-      <DeskBriefPanel brief={deskBrief} mode={mode} />
+      
       <WhatToExpect outlook={outlook} calendar={calendar} now={now || Date.now()} mode={mode} />
       {/* TradingView lives only on Charts tab — Home is quotes + desk only.
           Quote cards open Charts via onOpenChart(sym). */}
@@ -3032,9 +3029,7 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         <StatCard label="Signals" value={list.length} icon={Zap} accent="var(--violet)" />
         <StatCard label="Approved" value={approved.length} icon={CheckCircle2} />
-        <StatCard label="Balance" value={accountBalance != null ? `$${Number(accountBalance).toLocaleString()}` : '—'} icon={Target} accent="var(--gold)" />
-        <StatCard label="Win rate" value={journalStats?.winRate != null ? `${journalStats.winRate}%` : '—'} icon={Activity} accent="var(--blue)" />
-      </div>
+        </div>
     </div>
   );
 }
@@ -3637,21 +3632,15 @@ function DeskTab({ signals, prices, quotes, changes, accountBalance, relativeStr
   return (
     <div className="p-2 sm:p-3 space-y-3 w-full max-w-[100vw]">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard label="Approved Queue" value={approved.length} icon={Activity} />
-        <StatCard label="All Signals" value={signals.length} icon={Radio} />
-        <StatCard label="Account" value={accountBalance != null ? `$${Number(accountBalance).toLocaleString()}` : '—'} icon={Target} accent="var(--gold)" />
-        <StatCard label="Broker Quotes" value={Object.values(quotes || {}).filter(q => q?.source === 'mt5_ea').length + '/' + SYMBOLS.length} icon={Zap} accent="var(--emerald)" />
+        <StatCard label="FIRE" value={approved.length} icon={Activity} />
+        <StatCard label="Signals" value={signals.length} icon={Radio} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="omni-panel overflow-hidden">
-          <SectionHeader icon={ScrollText} title="Approved queue" sub="only gate-approved · subset of Recent signals on Home · stored in MongoDB for learning" />
+          <SectionHeader icon={ScrollText} title="Approved queue" sub="FIRE only" />
           {approved.length === 0 ? (
-            <div className="p-4 font-mono text-[11px] space-y-2" style={{ color: 'var(--textFaint)' }}>
-              <div><b style={{ color: 'var(--text)' }}>Queue ≠ Recent.</b> Home “Recent signals” = all fired setups. This queue = only approved ones.</div>
-              <div>All signals (approved or blocked) are saved to MongoDB so adaptive learning can avoid repeat bad setups.</div>
-              <div></div>
-            </div>
+            <div className="p-4 font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>No FIRE in queue</div>
           ) : (
             <div className="omni-table-scroll">
               <div className="omni-table-grid" style={{ minWidth: 340 }}>
@@ -3672,7 +3661,7 @@ function DeskTab({ signals, prices, quotes, changes, accountBalance, relativeStr
         </div>
 
         <div className="omni-panel p-4">
-          <SectionHeader icon={Layers} title="By Symbol" sub="signal count per desk" />
+          <SectionHeader icon={Layers} title="By Symbol" sub="" />
           <div className="space-y-2">
             {SYMBOLS.map(sym => {
               const q = quotes?.[sym];
@@ -3688,7 +3677,6 @@ function DeskTab({ signals, prices, quotes, changes, accountBalance, relativeStr
                     <span className="flex-1" style={{ color: 'var(--textDim)' }}>{fmtPrice(sym, prices?.[sym])}</span>
                   )}
                   <span style={{ color: 'var(--textFaint)' }}>{list.length} sig</span>
-                  <span style={{ color: q?.source === 'mt5_ea' ? 'var(--gold)' : 'var(--textFaint)', fontSize: 9 }}>{q?.source === 'mt5_ea' ? 'MT5' : (q?.source || '—')}</span>
                 </div>
               );
             })}
@@ -3697,7 +3685,7 @@ function DeskTab({ signals, prices, quotes, changes, accountBalance, relativeStr
       </div>
 
       <div className="omni-panel p-3 font-mono text-[11px]" style={{ color: 'var(--textDim)' }}>
-        Manual trading mode: size and exposure live in your broker. This queue is gate-approved FIRE only.
+        Manual mode · FIRE only
       </div>
     </div>
   );

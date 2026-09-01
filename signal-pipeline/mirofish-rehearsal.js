@@ -94,8 +94,51 @@ function attachRehearsal(signal, result) {
   };
 }
 
+/**
+ * Thin bull/bear debate (TradingAgents-inspired, no LLM).
+ * Uses existing agent votes only — never invents narrative noise.
+ * Soft gate near FIRE: strong opposition → fail (caller may WAIT).
+ */
+function bullBearDebate(agents, action, opts = {}) {
+  const dir = normalizeDir(action);
+  const list = Array.isArray(agents) ? agents : [];
+  const opp = dir === 'BUY' ? 'SELL' : dir === 'SELL' ? 'BUY' : null;
+  if (!opp || !list.length) {
+    return { ok: true, lean: dir || 'NEUTRAL', bullScore: 0, bearScore: 0, reason: 'no_debate' };
+  }
+
+  let bull = 0;
+  let bear = 0;
+  let bullN = 0;
+  let bearN = 0;
+  for (const a of list) {
+    const d = normalizeDir(a.direction || a.action);
+    const sc = Number(a.score) || 0;
+    if (d === 'BUY' || d === 'LONG') { bull += sc; bullN += 1; }
+    if (d === 'SELL' || d === 'SHORT') { bear += sc; bearN += 1; }
+  }
+  const bullAvg = bullN ? bull / bullN : 0;
+  const bearAvg = bearN ? bear / bearN : 0;
+  const lean = bullAvg >= bearAvg ? 'BUY' : 'SELL';
+  const gap = Math.abs(bullAvg - bearAvg);
+  const minGap = opts.minGap ?? 8;
+  // Conflict: majority lean opposes proposed FIRE with meaningful gap
+  const conflicts = lean !== dir && gap >= minGap && (bullN + bearN) >= 3;
+  return {
+    ok: !conflicts,
+    lean,
+    bullScore: Math.round(bullAvg * 10) / 10,
+    bearScore: Math.round(bearAvg * 10) / 10,
+    gap: Math.round(gap * 10) / 10,
+    reason: conflicts
+      ? `debate conflict: agents lean ${lean} (bull ${bullAvg.toFixed(0)} vs bear ${bearAvg.toFixed(0)})`
+      : `debate aligned lean=${lean}`,
+  };
+}
+
 module.exports = {
   rehearse,
   attachRehearsal,
+  bullBearDebate,
   normalizeDir,
 };

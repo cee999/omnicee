@@ -900,6 +900,15 @@ async function runAnalysisCycle(symbol, timeframe) {
           log.info(`[MIROFISH] gold rehearsal weak: ${rehearsal.reason}`);
         }
       }
+      if (mirofishRehearsal?.bullBearDebate && Array.isArray(signal.agents) && signal.agents.length) {
+        const debate = mirofishRehearsal.bullBearDebate(signal.agents, signal.action, { minGap: 10 });
+        signal.debate = { lean: debate.lean, bull: debate.bullScore, bear: debate.bearScore, ok: debate.ok, reason: debate.reason };
+        if (!debate.ok && signal.score?.final != null) {
+          signal.score.final = parseFloat(Math.max(0, signal.score.final * 0.92).toFixed(2));
+          signal.riskFlags = { ...(signal.riskFlags || {}), debateConflict: true };
+          log.info(`[DEBATE] ${symbol}: ${debate.reason}`);
+        }
+      }
     } catch (e) {
       log.warn(`MiroFish rehearsal error: ${e.message}`);
     }
