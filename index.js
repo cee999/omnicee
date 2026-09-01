@@ -1468,9 +1468,9 @@ const PRICE_SOURCE_RANK = {
   deriv: 70,
   finnhub: 60,
   binance: 58,
+  biquote: 110,     // PRIMARY live tape — supersedes MT5/Deriv/TV (user preference)
   exchangerate: 48, // free continuous USD FX (open.er-api.com)
   frankfurter: 47,  // free ECB FX (api.frankfurter.app)
-  biquote: 55,      // free MT5-sourced ticks (biquote.io) — below deriv, above pure FX APIs
   stockdata: 45,
   aletheia: 44,
   fred: 30,         // FRED daily series (needs FRED_API_KEY)
@@ -1599,7 +1599,7 @@ function onLivePrice(symbol, price, { change = null, bias = null, source = 'cand
   } else if (prev && prev.rank > rank && (now - prev.ts) < holdMs) {
     return;
   }
-  const sameRankMin = source === 'mt5_ea' ? 50 : 400;
+  const sameRankMin = (source === 'mt5_ea' || source === 'biquote') ? 50 : 400;
   if (prev && prev.rank === rank && (now - prev.ts) < sameRankMin) {
     return;
   }
@@ -1607,6 +1607,9 @@ function onLivePrice(symbol, price, { change = null, bias = null, source = 'cand
   const b = Number.isFinite(bid) ? bid : (prev?.bid ?? null);
   const a = Number.isFinite(ask) ? ask : (prev?.ask ?? null);
   lastPriceBySymbol[symbol] = { price, bid: b, ask: a, source, rank, ts: now };
+
+  // Form live bars from primary tape so agents/signals see continuous OHLC
+  try { applyTickToCandles(symbol, price, source); } catch (_) {}
 
   // Always-on analysis: same spirit as live chart — rescore while ticks flow
   try { scheduleLiveAnalysis(symbol, source); } catch (_) {}
@@ -1670,7 +1673,7 @@ function onLivePrice(symbol, price, { change = null, bias = null, source = 'cand
   }
 
   if (wsBus) {
-    const emitMin = source === 'mt5_ea' ? 50 : 350;
+    const emitMin = (source === 'mt5_ea' || source === 'biquote') ? 50 : 350;
     if (!lastMarketEmit[symbol] || now - lastMarketEmit[symbol] >= emitMin) {
       lastMarketEmit[symbol] = now;
       wsBus.emit('market_update', {
@@ -2434,24 +2437,21 @@ function buildFeeds() {
     log.info('ExchangeRateFeed enabled — continuous free FX fallback');
   }
 
-  // BiQuote — free MT5-sourced bid/ask (no key). Fills desk when local EA is offline.
-  // Does NOT replace Exness prices; rank below mt5_ea / tradingview / deriv.
+  // BiQuote — PRIMARY live tape (rank 110). Drives desk quotes + live signal analysis.
   if (BiQuoteFeed && process.env.DISABLE_BIQUOTE !== '1') {
     const bq = new BiQuoteFeed({
       symbols: SYMBOLS.filter((s) => ['XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'BTCUSDT', 'ETHUSDT', 'USOIL'].includes(s)),
-      pollMs: Number(process.env.BIQUOTE_POLL_MS || 8000),
+      pollMs: Number(process.env.BIQUOTE_POLL_MS || 2500),
     });
     bq.on('price', ({ symbol, price, change, bid, ask }) => {
-      const last = lastPriceBySymbol[symbol];
-      if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < BROKER_PRICE_HOLD_MS) return;
-      if (last && ['deriv', 'tradingview'].includes(last.source) && (Date.now() - last.ts) < 15000) return;
+      // Rank 110: no hold-backs — overwrites MT5/Deriv/TV in onLivePrice()
       onLivePrice(symbol, price, { source: 'biquote', change, bid, ask });
     });
     bq.on('error', (err) => log.warn(`BiQuoteFeed: ${feedErrorMessage(err)}`));
     bq.start();
     feeds.push({ name: 'BiQuote', instance: bq, symbols: ['XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'BTCUSDT', 'ETHUSDT', 'USOIL'] });
     if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('BiQuote', bq, ['XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'BTCUSDT', 'ETHUSDT']);
-    log.info('BiQuoteFeed enabled — free MT5-sourced fallback (biquote.io)');
+    log.info('BiQuoteFeed PRIMARY — live tape + signal driver (biquote.io)');
   }
 
   // ApiVault: Frankfurter ECB rates — second free FX path so pairs are never empty

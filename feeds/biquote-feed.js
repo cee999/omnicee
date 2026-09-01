@@ -62,7 +62,7 @@ class BiQuoteFeed extends EventEmitter {
     super();
     const wanted = Array.isArray(config.symbols) ? config.symbols : Object.keys(TO_BIQUOTE);
     this.symbols = wanted.filter((s) => TO_BIQUOTE[s]);
-    this.pollMs = Math.max(5000, Number(config.pollMs || process.env.BIQUOTE_POLL_MS || 8000));
+    this.pollMs = Math.max(1500, Number(config.pollMs || process.env.BIQUOTE_POLL_MS || 2500));
     this._timer = null;
     this._running = false;
     this._lastOk = 0;
