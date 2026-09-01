@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback, Component } from 'react';
 import {
-  LayoutDashboard, Radio, Globe2, Activity,
+  LayoutDashboard, Radio, Globe2, Activity, Flame,
   ScrollText, ChevronRight, ChevronDown,
   TrendingUp, CheckCircle2, XCircle,
   Circle, Zap, Database,
@@ -1210,6 +1210,7 @@ function useLiveFeed() {
   const [journalStats, setJournalStats] = useState(null);
   const [learningProfiles, setLearningProfiles] = useState(null);
   const [relativeStrength, setRelativeStrength] = useState(null);
+  const [opportunities, setOpportunities] = useState([]);
   const [hurstBoard, setHurstBoard] = useState(null); // separate Hurst analysis layer
   const priceRef = useRef(prices);
   priceRef.current = prices;
@@ -1458,7 +1459,13 @@ function useLiveFeed() {
       try { const r = await recordFetch('journal', omniFetch('/api/journal')); if (!cancelled && r.ok) setJournalStats(r.stats); } catch (_) {}
       try { const r = await recordFetch('learning', omniFetch('/api/learning?limit=20')); if (!cancelled && r.ok) setLearningProfiles(r.profiles); } catch (_) {}
       try { const r = await recordFetch('hurst', omniFetch('/api/hurst')); if (!cancelled && r.ok) setHurstBoard(Array.isArray(r.board) ? r.board : []); } catch (_) {}
-      try { const r = await recordFetch('watchlist', omniFetch('/api/watchlist')); if (!cancelled && r.ok) setRelativeStrength(r.relativeStrength); } catch (_) {}
+      try {
+        const r = await recordFetch('watchlist', omniFetch('/api/watchlist'));
+        if (!cancelled && r.ok) {
+          setRelativeStrength(r.relativeStrength);
+          setOpportunities(Array.isArray(r.opportunities) ? r.opportunities : []);
+        }
+      } catch (_) {}
     };
 
     pullFast(); pullSlow();
@@ -1799,7 +1806,7 @@ function useLiveFeed() {
   return {
     now, prices, quotes, changes, flash, signals, calendar, levels, auditLog, equityCurve, equityCurveLive,
     stats, outlook, heatmapTiles, feedHealth, uptimeSec, accountBalance, socketLive, analysisLive, cryptoVolAlerts,
-    news, sentiment, journalStats, learningProfiles, relativeStrength, hurstBoard, deskBrief, fetchErrors,
+    news, sentiment, journalStats, learningProfiles, relativeStrength, opportunities, hurstBoard, deskBrief, fetchErrors,
     mode, connected: mode === 'live', wakingBackend, wakeAttempts, eaAuthIssue,
     signalToast, dismissSignalToast: () => setSignalToast(null),
   };
@@ -1809,10 +1816,11 @@ function useLiveFeed() {
 const TABS = [
   { key: 'DASH', label: 'Home', fkey: 'F1', icon: LayoutDashboard },
   { key: 'CHARTS', label: 'Charts', fkey: 'F2', icon: TrendingUp },
-  { key: 'SIGNALS', label: 'Signals', fkey: 'F3', icon: Radio },
-  { key: 'NEWS', label: 'News', fkey: 'F4', icon: Newspaper },
-  { key: 'ANALYSIS', label: 'Analysis', fkey: 'F5', icon: Layers },
-  { key: 'MONITOR', label: 'System', fkey: 'F6', icon: Activity },
+  { key: 'OPPS', label: 'Opportunities', fkey: 'F3', icon: Flame },
+  { key: 'SIGNALS', label: 'Signals', fkey: 'F4', icon: Radio },
+  { key: 'NEWS', label: 'News', fkey: 'F5', icon: Newspaper },
+  { key: 'ANALYSIS', label: 'Analysis', fkey: 'F6', icon: Layers },
+  { key: 'MONITOR', label: 'System', fkey: 'F7', icon: Activity },
 ];
 
 function TopBar({ now, mode, socketLive, analysisLive, wakingBackend, onCommand, soundOn, onToggleSound, userEmail, onLogout, theme, onToggleTheme }) {
@@ -2521,6 +2529,102 @@ function DashTab({ signals, accountBalance, journalStats, prices, quotes, change
         <StatCard label="Balance" value={accountBalance != null ? `$${Number(accountBalance).toLocaleString()}` : '—'} icon={Target} accent="var(--gold)" />
         <StatCard label="Win rate" value={journalStats?.winRate != null ? `${journalStats.winRate}%` : '—'} icon={Activity} accent="var(--blue)" />
       </div>
+    </div>
+  );
+}
+
+/* ── OPPORTUNITIES SCREENER ─────────────────────────────────────────
+   Backend already ranked these (signal-pipeline/opportunity-ranker.js,
+   broadcast + /api/watchlist) — this tab was the missing piece: the
+   frontend fetched /api/watchlist for relativeStrength only and threw
+   the ranked `opportunities` array away. This just displays it. */
+function OpportunitiesTab({ opportunities, mode, onOpenChart }) {
+  const live = mode === 'live';
+  const [actionableOnly, setActionableOnly] = useState(false);
+
+  const list = useMemo(() => {
+    const arr = Array.isArray(opportunities) ? opportunities.slice() : [];
+    const filtered = actionableOnly ? arr.filter(o => o.fired || isFireAction(o.action)) : arr;
+    // Backend already sorts by score desc, but re-sort defensively —
+    // this list may be a stale poll snapshot, not a fresh push.
+    return filtered.sort((a, b) => (b.score || 0) - (a.score || 0));
+  }, [opportunities, actionableOnly]);
+
+  if (!live) {
+    return (
+      <div className="p-2 sm:p-3 w-full max-w-[100vw]">
+        <div className="omni-panel p-4">
+          <SectionHeader icon={Flame} title="Opportunities" />
+          <WaitingForBackend height={240} label="Opportunity screener needs a live backend" />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-2 sm:p-3 space-y-2 sm:space-y-3 w-full max-w-[100vw]">
+      <div className="flex items-center gap-2 flex-wrap">
+        <SectionHeader
+          icon={Flame}
+          title="Top opportunities"
+          sub={`${list.length} ranked · every symbol · best score first`}
+        />
+        <div className="ml-auto">
+          <button type="button" onClick={() => setActionableOnly(v => !v)}
+            className="omni-chip font-mono text-[10px] px-2.5 py-1 rounded uppercase min-h-[40px]"
+            aria-pressed={actionableOnly}
+            style={{ background: actionableOnly ? 'var(--emerald)' : 'var(--panel2)', color: actionableOnly ? 'var(--inkOnAccent)' : 'var(--textDim)' }}>
+            {actionableOnly ? 'Actionable only' : 'Show all (incl. near-misses)'}
+          </button>
+        </div>
+      </div>
+
+      {list.length === 0 ? (
+        <div className="omni-panel p-4">
+          <div className="font-mono text-[11px]" style={{ color: 'var(--textFaint)' }}>
+            {actionableOnly
+              ? 'Nothing actionable right now — try "Show all" to see near-misses and why they\'re blocked.'
+              : 'Screener fills once the ranker has scored at least one symbol. Waiting on live data — not a dead panel.'}
+          </div>
+        </div>
+      ) : (
+        <div className="omni-panel overflow-hidden">
+          <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
+            {list.map((o) => {
+              const fire = o.fired || isFireAction(o.action);
+              const act = String(o.action || 'WAIT').toUpperCase();
+              const actColor = act === 'BUY' || act === 'LONG' ? 'var(--emerald)' : act === 'SELL' || act === 'SHORT' ? 'var(--coral)' : 'var(--textFaint)';
+              const score = Number(o.score) || 0;
+              const scoreColor = score >= 70 ? 'var(--emerald)' : score >= 45 ? 'var(--gold)' : 'var(--textDim)';
+              return (
+                <button
+                  key={o.symbol}
+                  type="button"
+                  onClick={() => onOpenChart?.(o.symbol)}
+                  className="omni-row w-full px-3 py-2.5 font-mono text-left flex flex-wrap items-center gap-x-3 gap-y-1"
+                  style={{ opacity: o.stale ? 0.55 : fire ? 1 : 0.85 }}
+                >
+                  <span className="text-[13px] font-semibold" style={{ color: 'var(--text)' }}>{symLabel(o.symbol)}</span>
+                  <span className="text-[12px] font-semibold" style={{ color: actColor }}>{act}</span>
+                  <span className="text-[12px] tabular-nums font-semibold" style={{ color: scoreColor }}>{score.toFixed(0)}</span>
+                  {o.grade && <Pill tone="neutral">{o.grade}</Pill>}
+                  {o.regime && <span className="text-[10px]" style={{ color: 'var(--textFaint)' }}>{String(o.regime).replace(/_/g, ' ')}</span>}
+                  {o.session && <span className="text-[10px]" style={{ color: 'var(--textFaint)' }}>{o.session}</span>}
+                  {o.price != null && <span className="text-[11px]" style={{ color: 'var(--textDim)' }}>@ {fmtPrice(o.symbol, o.price)}</span>}
+                  <span className="text-[10px] ml-auto" style={{ color: 'var(--textFaint)' }}>
+                    {o.stale ? 'stale · ' : ''}{timeAgo(o.timestamp)} ago
+                  </span>
+                  {!fire && o.blockedReason && (
+                    <span className="basis-full text-[10px]" style={{ color: 'var(--textFaint)' }}>
+                      not fired: {String(o.blockedReason).replace(/_/g, ' ')}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -3783,6 +3887,9 @@ export default function OmniceeDashboard() {
           <ErrorBoundary key={activeTab} label={activeTab}>
             {activeTab === 'DASH' && <DashTab signals={feed.signals} accountBalance={feed.accountBalance} journalStats={feed.journalStats} prices={feed.prices} quotes={feed.quotes} changes={feed.changes} mode={feed.mode} outlook={feed.outlook} now={feed.now} levels={feed.levels} analysisLive={feed.analysisLive} socketLive={feed.socketLive} cryptoVolAlerts={feed.cryptoVolAlerts} calendar={feed.calendar} deskBrief={feed.deskBrief} onOpenChart={openChart} chartSymbol={chartSymbol} onSymbolChange={setChartSymbol} theme={theme} />}
             {activeTab === 'CHARTS' && <ChartsTab quotes={feed.quotes} mode={feed.mode} signals={feed.signals} theme={theme} chartSymbol={chartSymbol} onSymbolChange={setChartSymbol} />}
+            {activeTab === 'OPPS' && (
+              <OpportunitiesTab opportunities={feed.opportunities} mode={feed.mode} onOpenChart={openChart} />
+            )}
             {activeTab === 'SIGNALS' && (
               <SignalsTab signals={feed.signals} prices={feed.prices} quotes={feed.quotes} analysisLive={feed.analysisLive} socketLive={feed.socketLive} onOpenChart={openChart} />
             )}

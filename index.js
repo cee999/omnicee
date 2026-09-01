@@ -564,6 +564,13 @@ async function runAnalysisCycle(symbol, timeframe) {
         tradeability: regime?.tradeability ?? null,
         session:      sessionQuality?.session || null,
         fired:        !!(signal && signal.action !== 'WAIT'),
+        // FIX: this was never set, so every non-fired entry showed a blank
+        // reason downstream (screener, heatmap) — same fallback chain used
+        // a few lines below for the WAIT log line, just computed here too
+        // since the ranker update happens before that block runs.
+        blockedReason: (!signal || signal.action === 'WAIT')
+          ? String(signal?.waitReason || signal?.reason || signal?.note || 'below_threshold')
+          : null,
         price:        currentPrice,
         timestamp:    Date.now(),
       });
