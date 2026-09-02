@@ -28,14 +28,15 @@ const CHAT_IDS        = (requireEnv('TELEGRAM_CHAT_IDS', '') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
 const SYMBOLS         = (requireEnv('SYMBOLS', 'XAUUSD,BTCUSDT,ETHUSDT,EURUSD,GBPUSD,USDJPY,USOIL,UUP') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
-const TIMEFRAMES_STR  = (requireEnv('TIMEFRAMES', 'H1,H4') || '')
+const TIMEFRAMES_STR  = (requireEnv('TIMEFRAMES', 'M15,H1,H4') || '')
   .split(',').map(s => s.trim()).filter(Boolean);
-const MIN_SCORE       = parseFloat(requireEnv('MIN_SIGNAL_SCORE', '50'));
-// Gold (XAUUSD) can use a slightly lower floor — liquid, high-ATR commodity desks
-const GOLD_MIN_SCORE  = parseFloat(requireEnv('GOLD_MIN_SCORE', String(Math.max(45, MIN_SCORE - 5))));
+const MIN_SCORE       = parseFloat(requireEnv('MIN_SIGNAL_SCORE', '48'));
+// Daily gold scalper floor is higher (see signal-pipeline/daily-gold-profile.js) — do not lower quality for volume
+// Selective but not silent — 72 was blocking almost all gold FIRE after desk gates
+const GOLD_MIN_SCORE  = parseFloat(requireEnv('GOLD_MIN_SCORE', '52'));
 const RISK_PCT        = parseFloat(requireEnv('RISK_PCT_PER_TRADE', '1.0'));
-const MAX_DAILY_LOSS  = parseFloat(requireEnv('MAX_DAILY_LOSS_PCT', '3.0'));
-const MAX_DRAWDOWN    = parseFloat(requireEnv('MAX_DRAWDOWN_PCT', '10.0'));
+const MAX_DAILY_LOSS  = parseFloat(requireEnv('MAX_DAILY_LOSS_PCT', '2.0'));
+const MAX_DRAWDOWN    = parseFloat(requireEnv('MAX_DRAWDOWN_PCT', '8.0'));
 const ACCOUNT_BALANCE = parseFloat(requireEnv('ACCOUNT_BALANCE', '10000'));
 const REQUIRE_KZ      = requireEnv('REQUIRE_KILLZONE', 'false') === 'true';
 const SIGNAL_SOFT_GATES = requireEnv('SIGNAL_SOFT_GATES', 'true') !== 'false';
@@ -103,6 +104,17 @@ const { ForexFactoryCalendar } = loadModule('./feeds/forex-factory-calendar',   
 const { BinancePublicFeed }   = loadModule('./feeds/binance-public-feed',       'BinancePublicFeed')   || {};
 const { TradingViewQuoteFeed } = loadModule('./feeds/tradingview-quote-feed',   'TradingViewQuoteFeed') || {};
 const { DerivFeed }            = loadModule('./feeds/deriv-feed',               'DerivFeed')            || {};
+const { StockDataFeed }        = loadModule('./feeds/stockdata-feed',           'StockDataFeed')        || {};
+const { ExchangeRateFeed }     = loadModule('./feeds/exchangerate-feed',        'ExchangeRateFeed')     || {};
+const { FrankfurterFeed }      = loadModule('./feeds/frankfurter-feed',         'FrankfurterFeed')      || {};
+const { BiQuoteFeed }          = loadModule('./feeds/biquote-feed',             'BiQuoteFeed')          || {};
+const { SmartMoneyIntel }      = loadModule('./signal-pipeline/smart-money-intel', 'SmartMoneyIntel') || {};
+const { YahooNewsFeed }       = loadModule('./feeds/yahoo-news-feed',         'YahooNewsFeed')       || {};
+const { FearGreedFeed }       = loadModule('./feeds/fear-greed-feed',         'FearGreedFeed')       || {};
+const { YahooQuoteFeed }       = loadModule('./feeds/yahoo-quote-feed',         'YahooQuoteFeed')       || {};
+const { TreasuryFiscalFeed }   = loadModule('./feeds/treasury-fiscal-feed',     'TreasuryFiscalFeed')   || {};
+const { FredFeed }             = loadModule('./feeds/fred-feed',                'FredFeed')             || {};
+const { AletheiaFeed }         = loadModule('./feeds/aletheia-feed',            'AletheiaFeed')         || {};
 const { CryptoVolatilityAlert } = loadModule('./feeds/crypto-volatility-alert', 'CryptoVolatilityAlert') || {};
 const { CFTCCotFeed }        = loadModule('./feeds/cftc-cot-feed',               'CFTCCotFeed')       || {};
 const { COTReportParser }    = loadModule('./feeds/cot-report-parser',           'COTReportParser')   || {};
@@ -117,6 +129,21 @@ const { TimeCycleEngine }    = loadModule('./signal-pipeline/time-cycle-engine',
 const { StrategySelector }   = loadModule('./signal-pipeline/strategy-selector',    'StrategySelector')  || {};
 const { CandleIntelligence } = loadModule('./signal-pipeline/candle-intelligence',  'CandleIntelligence') || {};
 const { AIAdvisor }          = loadModule('./signal-pipeline/ai-advisor',           'AIAdvisor')          || {};
+const dailyGoldProfile = loadModule('./signal-pipeline/daily-gold-profile', 'DailyGoldProfile') || {};
+const { evaluateGoldDesk, annotateSignal, isGoldSymbol } = dailyGoldProfile;
+const mirofishRehearsal = loadModule('./signal-pipeline/mirofish-rehearsal', 'MiroFishRehearsal') || {};
+const { FinceptOrderValidator } = loadModule('./risk-engine/fincept-order-validator', 'FinceptOrderValidator') || {};
+const apivaultCatalog = loadModule('./feeds/apivault-catalog', 'ApiVaultCatalog') || {};
+const finceptOrderValidator = FinceptOrderValidator
+  ? new FinceptOrderValidator({ minRR: 1.5, requireSL: true, requireTP: true })
+  : null;
+if (apivaultCatalog?.statusReport) {
+  try {
+    const av = apivaultCatalog.statusReport();
+    log.info(`ApiVault catalog: ${av.integrated}/${av.total} integrated; ${av.candidates?.length || 0} candidates`);
+  } catch (_) {}
+}
+
 const { MarketHoursGate, SymbolManager } = loadModule('./orchestrator/scheduling-gate', 'MarketHoursGate') || {};
 const { AuditTrail }          = loadModule('./orchestrator/audit-trail',             'AuditTrail')         || {};
 
@@ -193,14 +220,14 @@ const ADAPTIVE_THROTTLE = process.env.ADAPTIVE_THROTTLE !== 'false'; // default 
 function getAdaptiveAnalysisIntervalMs(symbol, timeframe) {
   const key = `${symbol}:${timeframe}`;
   // Floor / ceiling (env overrides)
-  const floorMs = Number(process.env.LIVE_ANALYSIS_MIN_MS || 8000);   // never faster than 8s
-  const ceilMs  = Number(process.env.LIVE_ANALYSIS_MAX_MS || 120000); // never slower than 2m
+  const floorMs = Number(process.env.LIVE_ANALYSIS_MIN_MS || 5000);   // never faster than 5s
+  const ceilMs  = Number(process.env.LIVE_ANALYSIS_MAX_MS || 90000);  // never slower than 90s
 
   if (!ADAPTIVE_THROTTLE) {
-    return Number(process.env.LIVE_ANALYSIS_MIN_MS || 20000);
+    return Number(process.env.LIVE_ANALYSIS_MIN_MS || 12000);
   }
 
-  let ms = 30000; // baseline 30s
+  let ms = 18000; // baseline ~18s — more cycles per day for opportunities
 
   // 1) Session quality (UTC)
   const utcHour = new Date().getUTCHours();
@@ -264,13 +291,14 @@ function getAdaptiveAnalysisIntervalMs(symbol, timeframe) {
  */
 function scheduleLiveAnalysis(symbol, reason = 'tick') {
   if (!SYMBOLS.includes(symbol)) return;
-  if (reason === 'tick' || reason === 'mt5_ea' || reason === 'deriv' || reason === 'finnhub' || reason === 'binance' || reason === 'seed') {
+  if (reason === 'tick' || reason === 'mt5_ea' || reason === 'deriv' || reason === 'finnhub' || reason === 'binance' || reason === 'seed' || reason === 'biquote' || reason === 'yahoo' || reason === 'tradingview') {
     lastTickAt.set(symbol, Date.now());
   }
   for (const tf of TIMEFRAMES_STR) {
     const key = `${symbol}:${tf}`;
     const n = candleStores[symbol]?.[tf]?.length || 0;
-    let minBars = SIGNAL_SOFT_GATES ? 30 : 50;
+    // Soft gates: fewer bars so daily opportunities can fire after seed
+    let minBars = SIGNAL_SOFT_GATES ? 18 : 40;
     // During initial boot grace period, allow fewer bars so signals can seed faster
     if (reason === 'boot' && (Date.now() - bootStartAt) < BOOT_GRACE_MS) {
       minBars = Math.min(8, minBars);
@@ -341,7 +369,7 @@ async function runAnalysisCycle(symbol, timeframe) {
 
   try {
     const candles = candleStores[symbol]?.[timeframe];
-    const minBars = SIGNAL_SOFT_GATES ? 40 : 50;
+    const minBars = SIGNAL_SOFT_GATES ? 22 : 40;
     if (!candles || candles.length < minBars) {
       log.debug(`${key}: not enough candles (${candles?.length || 0}/${minBars}) — waiting`);
       try {
@@ -407,7 +435,7 @@ async function runAnalysisCycle(symbol, timeframe) {
     ]);
 
     // FIX: this comment already documented the intent to run BOTH sentiment and pattern on a reduced cadence, but the code only ever called agents.sentiment — agents.pattern.analyze() was never called...
-    const runReducedCadenceAgents = Math.random() > 0.66;
+    const runReducedCadenceAgents = Math.random() > 0.35; // news/sentiment more often for smart-money desk
 
     const sentResult = agents.sentiment && runReducedCadenceAgents
       ? await buildSentimentExternalData(symbol)
@@ -544,6 +572,26 @@ async function runAnalysisCycle(symbol, timeframe) {
     });
 
     const effectiveMinScore = /XAU|GOLD/i.test(symbol) ? GOLD_MIN_SCORE : MIN_SCORE;
+    // Session open boost — London/NY liquidity windows (from SmartMoneyIntel cache)
+    try {
+      const sm = smartMoneyIntel?.getLastBundle?.()?.smartMoney
+        || smartMoneyIntel?.getLastBundle?.()
+        || null;
+      const boost = Number(sm?.opportunityBoost) || 1;
+      if (signal && sm) {
+        signal.smartMoney = {
+          lean: sm.smartMoneyLean || sm.lean,
+          note: sm.smartMoneyNote || sm.note,
+          session: sm.session,
+          newsDirection: sm.newsDirection,
+        };
+      }
+      if (boost > 1 && signal?.score?.final != null && signal.action && String(signal.action).toUpperCase() !== 'WAIT') {
+        signal.score.final = parseFloat(Math.min(99, signal.score.final * boost).toFixed(2));
+        signal.sessionOpportunity = sm?.session?.label || 'open_window';
+      }
+    } catch (_) {}
+
     // Align scorer gate with gold floor for this cycle
     if (scorer && effectiveMinScore !== scorer.minScore) {
       try { scorer.minScore = effectiveMinScore; } catch (_) {}
@@ -820,6 +868,126 @@ async function runAnalysisCycle(symbol, timeframe) {
         }).catch(e => ({ action: 'ALLOW', penalty: 0, note: `Learning unavailable: ${e.message}` }))
       : { action: 'ALLOW', penalty: 0, note: 'Adaptive learning disabled' };
 
+    // CRITICAL: attach tradePlan levels onto signal BEFORE desk validators.
+    // Previously Fincept + gold desk ran against a bare signal (no stopLoss),
+    // hard-blocked every XAU FIRE, and returned — zero signals on the desk.
+    if (tradePlan && signal.action !== 'WAIT') {
+      const planEntry = tradePlan.entry?.midPoint ?? tradePlan.entry?.midpoint
+        ?? tradePlan.entry?.price ?? tradePlan.entry;
+      const planSL = tradePlan.stopLoss?.price ?? tradePlan.stopLoss;
+      const planTPs = tradePlan.targets
+        ? [tradePlan.targets.tp1?.price, tradePlan.targets.tp2?.price, tradePlan.targets.tp3?.price]
+            .filter((v) => Number.isFinite(Number(v))).map(Number)
+        : [];
+      signal = {
+        ...signal,
+        entry: signal.entry?.midpoint ?? signal.entry?.midPoint ?? planEntry ?? signal.entry,
+        stopLoss: (typeof signal.stopLoss === 'object' && signal.stopLoss?.price != null)
+          ? signal.stopLoss.price
+          : (signal.stopLoss ?? planSL),
+        targets: (Array.isArray(signal.targets) && signal.targets.length)
+          ? signal.targets
+          : planTPs,
+        tradePlan,
+      };
+    }
+
+    // MiroFish-style swarm rehearsal (all symbols) before gold-desk / publish
+    try {
+      if (mirofishRehearsal?.rehearse && Array.isArray(signal.agents) && signal.agents.length) {
+        const rehearsal = mirofishRehearsal.rehearse(signal.agents, signal.action, {
+          minConsensus: isGoldSymbol?.(symbol) ? 0.55 : 0.5,
+          minAligned: isGoldSymbol?.(symbol) ? 3 : 3,
+          minAvgScore: 50,
+        });
+        if (mirofishRehearsal.attachRehearsal) {
+          signal = mirofishRehearsal.attachRehearsal(signal, rehearsal);
+        }
+        if (!rehearsal.passed && isGoldSymbol?.(symbol)) {
+          log.info(`[MIROFISH] gold rehearsal weak: ${rehearsal.reason}`);
+        }
+      }
+      if (mirofishRehearsal?.bullBearDebate && Array.isArray(signal.agents) && signal.agents.length) {
+        const debate = mirofishRehearsal.bullBearDebate(signal.agents, signal.action, { minGap: 10 });
+        signal.debate = { lean: debate.lean, bull: debate.bullScore, bear: debate.bearScore, ok: debate.ok, reason: debate.reason };
+        if (!debate.ok && signal.score?.final != null) {
+          signal.score.final = parseFloat(Math.max(0, signal.score.final * 0.92).toFixed(2));
+          signal.riskFlags = { ...(signal.riskFlags || {}), debateConflict: true };
+          log.info(`[DEBATE] ${symbol}: ${debate.reason}`);
+        }
+      }
+    } catch (e) {
+      log.warn(`MiroFish rehearsal error: ${e.message}`);
+    }
+
+    // Fincept-style order geometry validation (manual desk — does not send to broker)
+    // Annotate only; do not kill the signal path (gates already enforce quality).
+    try {
+      if (finceptOrderValidator && (signal.action === 'BUY' || signal.action === 'SELL')) {
+        const ddSt = drawdownGuard?.getStatus?.() || {};
+        const fov = finceptOrderValidator.validate(signal, {
+          balance: ACCOUNT_BALANCE,
+          consecLoss: ddSt.consecLoss ?? ddSt.consecutiveLosses ?? 0,
+          tradesToday: ddSt.daily?.trades ?? ddSt.tradesToday ?? 0,
+        });
+        signal.finceptValidation = fov;
+        if (!fov.ok) {
+          log.warn(`[FINCEPT] order soft-fail ${symbol}: ${fov.failures.join(' | ')}`);
+          signal.riskFlags = { ...(signal.riskFlags || {}), finceptBlock: true, finceptFailures: fov.failures };
+        }
+      }
+    } catch (e) {
+      log.warn(`Fincept validator error: ${e.message}`);
+    }
+
+    // Daily gold desk profile (Exness XAU history) — annotate + soft/hard risk for scalpers
+    // hardBlock only for capital-protection (consec losses / daily caps), not missing nested fields
+    let goldDeskEval = null;
+    try {
+      if (dailyGoldProfile?.evaluateGoldDesk && dailyGoldProfile?.isGoldSymbol?.(symbol)) {
+        goldDeskEval = dailyGoldProfile.evaluateGoldDesk({
+          symbol,
+          action: signal.action,
+          score: signal.score?.final ?? signal.score,
+          tradePlan,
+          signal,
+          agents: signal.agents,
+          drawdownStatus: drawdownGuard?.getStatus?.() || {},
+          recentOutcomes: [],
+          timestamp: Date.now(),
+        });
+        if (goldDeskEval?.hardBlock) {
+          const capitalBlock = (goldDeskEval.warnings || []).some((w) =>
+            /consecutive losses|Daily trade cap|Hourly cap|Hard pause/i.test(String(w)));
+          if (capitalBlock) {
+            log.warn(`[GOLD DESK] capital hard block ${symbol} ${signal.action}: ${(goldDeskEval.warnings || []).join(' | ')}`);
+            if (auditTrail) {
+              auditTrail.record({
+                symbol, timeframe, signalFired: false,
+                blockedReason: 'gold_desk_hard_block',
+                score: signal.score?.final ?? 0,
+                reasons: goldDeskEval.warnings || [],
+                gatesFailed: ['gold_desk'],
+              });
+            }
+            return;
+          }
+          // Geometry / score issues → soft annotate, still publish for desk visibility
+          log.info(`[GOLD DESK] soft constraints ${symbol}: ${(goldDeskEval.warnings || []).slice(0, 3).join(' | ')}`);
+          goldDeskEval = { ...goldDeskEval, hardBlock: false, softBlock: true };
+        }
+        if (dailyGoldProfile.annotateSignal) {
+          signal = dailyGoldProfile.annotateSignal(signal, goldDeskEval);
+        }
+        if (goldDeskEval?.sizeMult != null && goldDeskEval.sizeMult < 1 && riskEvaluation?.positionSize > 0) {
+          riskEvaluation.positionSize *= goldDeskEval.sizeMult;
+          riskEvaluation.note = `${riskEvaluation.note || ''} | gold desk size ×${goldDeskEval.sizeMult}`;
+        }
+      }
+    } catch (e) {
+      log.warn(`Gold desk profile error: ${e.message}`);
+    }
+
     if (learning?.penalty && signal.score?.final != null) {
       signal.score = {
         ...signal.score,
@@ -1014,11 +1182,17 @@ async function runAnalysisCycle(symbol, timeframe) {
       }
     }
 
-    if (memory?.saveSignal) {
-      memory.saveSignal(fullSignal).catch(e => log.warn(`Memory save error: ${e.message}`));
-    }
-    if (mongoStore.saveSignal) {
-      mongoStore.saveSignal(fullSignal).catch(e => log.warn(`Mongo signal save error: ${e.message}`));
+    // Persist ONLY executable FIRE (BUY/SELL) for adaptive learning — never WAIT noise
+    const fireAction = String(fullSignal.action || '').toUpperCase();
+    const isExecutableFire = fireAction === 'BUY' || fireAction === 'SELL'
+      || fireAction === 'LONG' || fireAction === 'SHORT';
+    if (isExecutableFire) {
+      if (memory?.saveSignal) {
+        memory.saveSignal(fullSignal).catch(e => log.warn(`Memory save error: ${e.message}`));
+      }
+      if (mongoStore?.saveSignal) {
+        mongoStore.saveSignal(fullSignal).catch(e => log.warn(`Mongo signal save error: ${e.message}`));
+      }
     }
 
     if (aiAdvisorVerdict?.recommendation === 'SKIP') {
@@ -1197,6 +1371,10 @@ function updateInsiderIntelFromFeed(feed) {
 }
 
 const _newsCache = {};
+let smartMoneyIntel = null;
+let yahooNewsFeed = null;
+let fearGreedFeed = null;
+
 
 async function buildSentimentExternalData(symbol) {
   const data = {};
@@ -1263,6 +1441,31 @@ async function buildSentimentExternalData(symbol) {
       executiveBias: insiderIntel.executiveBias,
       recentClusters: insiderIntel.recentClusters,
     };
+  }
+
+  // Free news + smart-money session context (works without Finnhub key)
+  if (smartMoneyIntel) {
+    try {
+      const sm = await smartMoneyIntel.buildForSymbol(symbol, { cot: data.cot, insider: data.insider });
+      if (sm.articles?.length && !data.articles?.length) {
+        data.articles = sm.articles;
+      } else if (sm.articles?.length && data.articles?.length) {
+        data.articles = [...sm.articles.slice(0, 10), ...data.articles].slice(0, 24);
+      }
+      if (sm.fearGreed) data.fearGreed = sm.fearGreed;
+      data.smartMoney = {
+        lean: sm.smartMoneyLean,
+        note: sm.smartMoneyNote,
+        session: sm.session,
+        newsDirection: sm.newsDirection,
+        newsScore: sm.newsScore,
+        opportunityBoost: sm.opportunityBoost,
+        fgNote: sm.fgNote,
+      };
+      data.session = sm.session;
+    } catch (e) {
+      log.debug(`SmartMoneyIntel ${symbol}: ${e.message}`);
+    }
   }
 
   return data;
@@ -1339,8 +1542,16 @@ const PRICE_SOURCE_RANK = {
   mt5_ea: 100,
   tradingview: 92,
   deriv: 70,
-  binance: 58,
   finnhub: 60,
+  binance: 58,
+  biquote: 110,     // PRIMARY live tape — supersedes MT5/Deriv/TV (user preference)
+  yahoo: 95,        // free Yahoo — primary for UUP/USOIL gaps
+  exchangerate: 48, // free continuous USD FX (open.er-api.com)
+  frankfurter: 47,  // free ECB FX (api.frankfurter.app)
+  stockdata: 45,
+  aletheia: 44,
+  fred: 30,         // FRED daily series (needs FRED_API_KEY)
+  treasury: 20,     // US Treasury quarterly official rates — last-resort only
   candle: 40,
   unknown: 0,
 };
@@ -1465,7 +1676,7 @@ function onLivePrice(symbol, price, { change = null, bias = null, source = 'cand
   } else if (prev && prev.rank > rank && (now - prev.ts) < holdMs) {
     return;
   }
-  const sameRankMin = source === 'mt5_ea' ? 50 : 400;
+  const sameRankMin = (source === 'mt5_ea' || source === 'biquote') ? 50 : 400;
   if (prev && prev.rank === rank && (now - prev.ts) < sameRankMin) {
     return;
   }
@@ -1473,6 +1684,9 @@ function onLivePrice(symbol, price, { change = null, bias = null, source = 'cand
   const b = Number.isFinite(bid) ? bid : (prev?.bid ?? null);
   const a = Number.isFinite(ask) ? ask : (prev?.ask ?? null);
   lastPriceBySymbol[symbol] = { price, bid: b, ask: a, source, rank, ts: now };
+
+  // Form live bars from primary tape so agents/signals see continuous OHLC
+  try { applyTickToCandles(symbol, price, source); } catch (_) {}
 
   // Always-on analysis: same spirit as live chart — rescore while ticks flow
   try { scheduleLiveAnalysis(symbol, source); } catch (_) {}
@@ -1536,7 +1750,7 @@ function onLivePrice(symbol, price, { change = null, bias = null, source = 'cand
   }
 
   if (wsBus) {
-    const emitMin = source === 'mt5_ea' ? 50 : 350;
+    const emitMin = (source === 'mt5_ea' || source === 'biquote') ? 50 : 350;
     if (!lastMarketEmit[symbol] || now - lastMarketEmit[symbol] >= emitMin) {
       lastMarketEmit[symbol] = now;
       wsBus.emit('market_update', {
@@ -1634,7 +1848,7 @@ let dispatcher, scorer, sltp, entryOptimizer, regimeEngine, hurstAnalysis, insti
     monteCarlo, bayesianEng, statValidator, walkForward, ensembleEng,
     signalMonitor, institutionalRiskManager, myfxbookFeed, openInsiderFeed,
     finnhubFeed, cftcCotFeed, cotParser, executionEngine, opportunityRanker, relativeStrength,
-    dataIntegrityMonitor, intermarketAnalyzer, alphaVantageFeed, fmpFeed;
+    dataIntegrityMonitor, intermarketAnalyzer, alphaVantageFeed, fmpFeed, stockDataFeed;
 
 // FIX: several feeds (Bybit, TwelveData, Myfxbook) emit errors in two different shapes — a raw Error (has .message) from the underlying connection, and a { source, error } wrapper from their own...
 function feedErrorMessage(err) {
@@ -1668,7 +1882,9 @@ function buildSingletons() {
     drawdownGuard = new DrawdownGuard({
       maxDailyLossPct:  MAX_DAILY_LOSS,
       maxDrawdownPct:   MAX_DRAWDOWN,
-      accountBalance:ACCOUNT_BALANCE,
+      maxConsecutiveLoss: Number(process.env.MAX_CONSEC_LOSS || 3),
+      maxTradesPerDay: Number(process.env.MAX_TRADES_PER_DAY || 15),
+      accountBalance: ACCOUNT_BALANCE,
     });
     drawdownGuard.on('circuit_open', (data) => {
       log.warn(`CIRCUIT BREAKER OPEN: ${data.reason}`);
@@ -2081,6 +2297,18 @@ function buildSingletons() {
     log.info(`CFTCCotFeed created — supports: ${cftcCotFeed.supportedSymbols().join(', ')}`);
   }
 
+  // Smart-money layer: free news + fear/greed + session open windows
+  try {
+    yahooNewsFeed = YahooNewsFeed ? new YahooNewsFeed({}) : null;
+    fearGreedFeed = FearGreedFeed ? new FearGreedFeed({}) : null;
+    if (SmartMoneyIntel) {
+      smartMoneyIntel = new SmartMoneyIntel({ yahooNews: yahooNewsFeed, fearGreed: fearGreedFeed });
+      log.info('SmartMoneyIntel online — news + F&G + session opportunity windows');
+    }
+  } catch (e) {
+    log.warn(`SmartMoneyIntel init: ${e.message}`);
+  }
+
   // FIX: publish the live singleton instances so api/server.js's /api/outcomes handler can record real trade outcomes into the SAME objects this pipeline actually consults during scoring — see...
   try {
     require('./api/realtime').setEngines({
@@ -2254,7 +2482,147 @@ function buildFeeds() {
     log.info(`TradingViewQuoteFeed for: ${SYMBOLS.join(', ')}`);
   }
 
-  // Yahoo never overwrites a symbol that has a recent mt5_ea tick.
+  // Lower-ranked feeds never overwrite a recent mt5_ea or deriv tick (see PRICE_SOURCE_RANK).
+
+  if (StockDataFeed && process.env.STOCKDATA_API_TOKEN) {
+    const stockDataFeed = new StockDataFeed({
+      apiToken: process.env.STOCKDATA_API_TOKEN,
+      symbols: SYMBOLS,
+      pollMs: Number(process.env.STOCKDATA_POLL_MS || 3 * 60 * 1000),
+    });
+    stockDataFeed.on('price', ({ symbol, price, change, bid, ask }) => {
+      const last = lastPriceBySymbol[symbol];
+      // Do not fight broker or Deriv while they are fresh
+      if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < BROKER_PRICE_HOLD_MS) return;
+      if (last && last.source === 'deriv' && (Date.now() - last.ts) < 30000) return;
+      onLivePrice(symbol, price, { source: 'stockdata', change, bid, ask });
+    });
+    stockDataFeed.on('error', (err) => log.warn(`StockDataFeed: ${feedErrorMessage(err)}`));
+    stockDataFeed.on('warn', (msg) => log.warn(`StockDataFeed: ${msg}`));
+    stockDataFeed.start();
+    feeds.push({ name: 'StockDataFeed', instance: stockDataFeed, symbols: SYMBOLS });
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('StockData', stockDataFeed, SYMBOLS);
+    log.info('StockDataFeed enabled — US quotes + FX/crypto EOD fallback (rank below MT5/Deriv)');
+  } else {
+    log.info('StockDataFeed disabled — set STOCKDATA_API_TOKEN to enable');
+  }
+
+  // Free continuous FX (no key) — keeps EUR/GBP/JPY moving when MT5/Deriv/TV quiet
+  if (ExchangeRateFeed && process.env.DISABLE_EXCHANGERATE !== '1') {
+    const erFeed = new ExchangeRateFeed({
+      symbols: SYMBOLS.filter((s) => ['EURUSD', 'GBPUSD', 'USDJPY'].includes(s)),
+      pollMs: Number(process.env.EXCHANGERATE_POLL_MS || 30000),
+    });
+    erFeed.on('price', ({ symbol, price, change, bid, ask }) => {
+      const last = lastPriceBySymbol[symbol];
+      if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < BROKER_PRICE_HOLD_MS) return;
+      if (last && (last.source === 'deriv' || last.source === 'tradingview') && (Date.now() - last.ts) < 20000) return;
+      onLivePrice(symbol, price, { source: 'exchangerate', change, bid, ask });
+    });
+    erFeed.on('error', (err) => log.warn(`ExchangeRateFeed: ${feedErrorMessage(err)}`));
+    erFeed.start();
+    feeds.push({ name: 'ExchangeRate', instance: erFeed, symbols: ['EURUSD', 'GBPUSD', 'USDJPY'] });
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('ExchangeRate', erFeed, ['EURUSD', 'GBPUSD', 'USDJPY']);
+    log.info('ExchangeRateFeed enabled — continuous free FX fallback');
+  }
+
+  // BiQuote — PRIMARY live tape (rank 110). Drives desk quotes + live signal analysis.
+  if (BiQuoteFeed && process.env.DISABLE_BIQUOTE !== '1') {
+    const bq = new BiQuoteFeed({
+      symbols: SYMBOLS.filter((s) => ['XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'BTCUSDT', 'ETHUSDT', 'USOIL'].includes(s)), // UUP via Yahoo
+      pollMs: Number(process.env.BIQUOTE_POLL_MS || 2500),
+    });
+    bq.on('price', ({ symbol, price, change, bid, ask }) => {
+      // Rank 110: no hold-backs — overwrites MT5/Deriv/TV in onLivePrice()
+      onLivePrice(symbol, price, { source: 'biquote', change, bid, ask });
+    });
+    bq.on('error', (err) => log.warn(`BiQuoteFeed: ${feedErrorMessage(err)}`));
+    bq.start();
+    feeds.push({ name: 'BiQuote', instance: bq, symbols: ['XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'BTCUSDT', 'ETHUSDT', 'USOIL'] });
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('BiQuote', bq, ['XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'BTCUSDT', 'ETHUSDT']);
+    log.info('BiQuoteFeed PRIMARY — live tape + signal driver (biquote.io)');
+  }
+
+  // Yahoo — fills EVERY symbol that is empty or stale (hard fix for silent desk)
+  if (YahooQuoteFeed && process.env.DISABLE_YAHOO_QUOTES !== '1') {
+    const yq = new YahooQuoteFeed({
+      symbols: SYMBOLS.slice(),
+      pollMs: Number(process.env.YAHOO_QUOTE_POLL_MS || 8000),
+    });
+    yq.on('price', ({ symbol, price, change, bid, ask }) => {
+      const last = lastPriceBySymbol[symbol];
+      const age = last ? Date.now() - last.ts : 1e12;
+      // Accept if empty, stale (>12s), or lower/equal rank than yahoo
+      if (last && last.rank > PRICE_SOURCE_RANK.yahoo && age < 12000) return;
+      onLivePrice(symbol, price, { source: 'yahoo', change, bid, ask });
+    });
+    yq.on('error', (err) => log.warn(`YahooQuoteFeed: ${feedErrorMessage(err)}`));
+    yq.start();
+    feeds.push({ name: 'YahooQuotes', instance: yq, symbols: SYMBOLS.slice() });
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('YahooQuotes', yq, SYMBOLS.slice());
+    log.info('YahooQuoteFeed — full symbol coverage (gap + stale fill)');
+  }
+
+  // ApiVault: Frankfurter ECB rates — second free FX path so pairs are never empty
+  if (FrankfurterFeed && process.env.DISABLE_FRANKFURTER !== '1') {
+    const ff = new FrankfurterFeed({
+      symbols: SYMBOLS.filter((s) => ['EURUSD', 'GBPUSD', 'USDJPY'].includes(s)),
+      pollMs: Number(process.env.FRANKFURTER_POLL_MS || 60000),
+    });
+    ff.on('price', ({ symbol, price, bid, ask }) => {
+      const last = lastPriceBySymbol[symbol];
+      if (last && last.source === 'mt5_ea' && (Date.now() - last.ts) < BROKER_PRICE_HOLD_MS) return;
+      if (last && ['deriv', 'tradingview', 'exchangerate'].includes(last.source) && (Date.now() - last.ts) < 25000) return;
+      onLivePrice(symbol, price, { source: 'frankfurter', bid, ask });
+    });
+    ff.on('error', (err) => log.warn(`FrankfurterFeed: ${feedErrorMessage(err)}`));
+    ff.start();
+    feeds.push({ name: 'Frankfurter', instance: ff, symbols: ['EURUSD', 'GBPUSD', 'USDJPY'] });
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('Frankfurter', ff, ['EURUSD', 'GBPUSD', 'USDJPY']);
+    log.info('FrankfurterFeed enabled — ECB free FX fallback (ApiVault)');
+  }
+
+  if (TreasuryFiscalFeed && process.env.DISABLE_TREASURY !== '1') {
+    const tf = new TreasuryFiscalFeed({
+      symbols: SYMBOLS.filter((s) => ['EURUSD', 'GBPUSD', 'USDJPY'].includes(s)),
+    });
+    tf.on('price', ({ symbol, price }) => {
+      const last = lastPriceBySymbol[symbol];
+      if (last && (Date.now() - last.ts) < 5 * 60 * 1000) return; // never stomp fresh live
+      onLivePrice(symbol, price, { source: 'treasury' });
+    });
+    tf.on('error', (err) => log.warn(`TreasuryFiscalFeed: ${feedErrorMessage(err)}`));
+    tf.start();
+    feeds.push({ name: 'TreasuryFiscal', instance: tf, symbols: ['EURUSD', 'GBPUSD', 'USDJPY'] });
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('Treasury', tf, ['EURUSD', 'GBPUSD', 'USDJPY']);
+    log.info('TreasuryFiscalFeed enabled — official quarterly FX (last-resort)');
+  }
+
+  if (FredFeed && process.env.FRED_API_KEY) {
+    const fred = new FredFeed({
+      apiKey: process.env.FRED_API_KEY,
+      symbols: SYMBOLS.filter((s) => ['EURUSD', 'GBPUSD', 'USDJPY'].includes(s)),
+    });
+    fred.on('price', ({ symbol, price }) => {
+      const last = lastPriceBySymbol[symbol];
+      if (last && last.rank >= PRICE_SOURCE_RANK.fred && (Date.now() - last.ts) < 60000) return;
+      if (last && last.rank > PRICE_SOURCE_RANK.fred && (Date.now() - last.ts) < 5 * 60 * 1000) return;
+      onLivePrice(symbol, price, { source: 'fred' });
+    });
+    fred.on('error', (err) => log.warn(`FredFeed: ${feedErrorMessage(err)}`));
+    fred.start();
+    feeds.push({ name: 'FRED', instance: fred, symbols: ['EURUSD', 'GBPUSD', 'USDJPY'] });
+    if (dataIntegrityMonitor) dataIntegrityMonitor.registerFeed('FRED', fred, ['EURUSD', 'GBPUSD', 'USDJPY']);
+    log.info('FredFeed enabled — daily FX series');
+  } else {
+    log.info('FredFeed disabled — set FRED_API_KEY to enable');
+  }
+
+  // Aletheia removed as UUP/USOIL source — was silent without key / unreliable.
+  // YahooQuoteFeed is the hard replacement (free, no key).
+  if (false && AletheiaFeed && (process.env.ALETHEIA_API_KEY || process.env.ALETHEIA_KEY)) {
+    log.info('AletheiaFeed skipped — disabled in favor of Yahoo for UUP/USOIL');
+  }
 
   if (dataIntegrityMonitor && finnhubFeed?.enabled?.()) {
     dataIntegrityMonitor.registerFeed('Finnhub', finnhubFeed, fxSymbols.length ? fxSymbols : SYMBOLS);
@@ -2474,6 +2842,31 @@ async function main() {
   }
 
   const feeds = buildFeeds();
+
+  // Keep prices "alive" on the wire even when the last tick value is unchanged —
+  // dashboard/socket clients see continuous market traffic instead of a frozen tape.
+  setInterval(() => {
+    if (!wsBus) return;
+    const now = Date.now();
+    for (const [symbol, row] of Object.entries(lastPriceBySymbol)) {
+      if (!row || !Number.isFinite(row.price)) continue;
+      if (now - (row.ts || 0) > 15 * 60 * 1000) continue; // drop truly dead quotes
+      try {
+        wsBus.emit('market_update', {
+          symbol,
+          price: row.price,
+          bid: row.bid ?? null,
+          ask: row.ask ?? null,
+          change: null,
+          bias: null,
+          source: row.source || 'candle',
+          heartbeat: true,
+          timestamp: now,
+        });
+      } catch (_) {}
+    }
+  }, Number(process.env.PRICE_HEARTBEAT_MS || 2000));
+
   // Seed OHLC so charts + signal agents work with PC/MT5 off
   setImmediate(() => {
     const crypto = SYMBOLS.filter(s => s.endsWith('USDT'));

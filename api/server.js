@@ -1499,30 +1499,62 @@ function startServer(config = {}) {
     } else if (RECENT_SIGNALS_CACHE.length > RECENT_SIGNALS_CACHE_LIMIT) {
       RECENT_SIGNALS_CACHE.length = RECENT_SIGNALS_CACHE_LIMIT;
     }
-    // Only persist real FIRE signals to Mongo (WAIT is desk telemetry only)
-    if (String(compact.action).toUpperCase() !== 'WAIT') {
-      db.saveSignal(payload).catch(err => console.warn('[API] persist signal:', err.message));
+    // Persist ONLY BUY/SELL for adaptive learning — never WAIT or other noise
+    {
+      const a = String(compact.action || '').toUpperCase();
+      if (a === 'BUY' || a === 'SELL' || a === 'LONG' || a === 'SHORT') {
+        db.saveSignal(payload).catch(err => console.warn('[API] persist signal:', err.message));
+      }
     }
   });
+  // FIX: this blindly overwrote MARKET_SNAPSHOT_CACHE with whatever
+  // market_update arrived last, with zero source-priority resolution —
+  // index.js's onMT5Tick/onLivePrice apply hold-timer logic before
+  // deciding whether to EMIT an update, but multiple sources (MT5, Deriv,
+  // Finnhub, TradingView, StockData...) can all legitimately emit for the
+  // same symbol, and once an event reached this handler there was no
+  // check for which one should actually win. A lower-priority update
+  // landing here a moment after a fresher MT5 tick would silently
+  // overwrite it, and /api/market (what the dashboard actually reads)
+  // would serve the lower-priority value with no way to know.
+  //
+  // Also folds in what used to be a separate forward('market_update',
+  // 'market', ...) call below — that pushed every RAW update to sockets
+  // unconditionally, bypassing this resolution entirely, so the socket
+  // path still needed client-side re-ranking even after fixing the REST
+  // cache. Now both /api/market and the socket 'market' push serve the
+  // exact same backend-resolved value — the frontend can trust either
+  // transport directly with no ranking of its own.
+  const SRC_RANK = { mt5_ea: 100, tradingview: 92, deriv: 70, finnhub: 60, binance: 58, exchangerate: 48, stockdata: 45, aletheia: 44, candle: 40, fred: 30, treasury: 20, unknown: 0 };
+  const PRICE_HOLD_MS = 10000; // higher-rank source blocks a lower-rank one for this long after its last update
   bus.on('market_update', payload => {
     if (!payload?.symbol || payload.price == null) return;
     const price = Number(payload.price);
     if (!Number.isFinite(price)) return;
+    const symbolKey = String(payload.symbol).toUpperCase();
+    const source = payload.source || 'unknown';
+    const rank = SRC_RANK[source] ?? 0;
+    const prev = MARKET_SNAPSHOT_CACHE.get(symbolKey);
+    if (prev && (SRC_RANK[prev.source] ?? 0) > rank && (Date.now() - (prev.timestamp || 0)) < PRICE_HOLD_MS) {
+      return; // a higher-priority source updated recently enough — this one doesn't win yet
+    }
     const bid = payload.bid != null ? Number(payload.bid) : null;
     const ask = payload.ask != null ? Number(payload.ask) : null;
     const mid = (Number.isFinite(bid) && Number.isFinite(ask)) ? (bid + ask) / 2 : price;
-    MARKET_SNAPSHOT_CACHE.set(String(payload.symbol).toUpperCase(), {
-      symbol: String(payload.symbol).toUpperCase(),
+    const resolved = {
+      symbol: symbolKey,
       price: mid,
       bid: Number.isFinite(bid) ? bid : null,
       ask: Number.isFinite(ask) ? ask : null,
       change: payload.change ?? null,
       bias: payload.bias ?? null,
-      source: payload.source || 'unknown',
+      source,
       timestamp: payload.timestamp || Date.now(),
-    });
+    };
+    MARKET_SNAPSHOT_CACHE.set(symbolKey, resolved);
+    io.emit('market', resolved);
+    db.saveMarketSnapshot(resolved).catch(err => console.warn('[API] persist market snapshot:', err.message));
   });
-  forward('market_update', 'market', db.saveMarketSnapshot);
   forward('risk_update', 'risk');
   forward('stats_update', 'stats');
   forward('regime_update', 'regime', payload => db.saveTelemetry({ type: 'regime_update', ...payload }));

@@ -168,11 +168,21 @@ async function ensureIndexes(db) {
 }
 
 async function saveSignal(signal) {
+  // Only BUY/SELL (LONG/SHORT) — adaptive learning must not train on WAIT noise
+  const action = String(signal?.action || '').toUpperCase();
+  const isFire = action === 'BUY' || action === 'SELL' || action === 'LONG' || action === 'SHORT';
+  if (!isFire) {
+    return { skipped: true, reason: 'non_fire_action' };
+  }
+  if (process.env.DISABLE_MONGO_SIGNALS === '1') {
+    return { skipped: true, reason: 'mongo signal save disabled' };
+  }
   try {
     const db = await getDB();
     if (!db) return { skipped: true, reason: 'MONGODB_URI not configured' };
     await indexPromise;
     const doc = compactSignal(signal);
+    doc.learningEligible = true;
     await db.collection('signals').updateOne(
       { id: doc.id || `${doc.symbol}:${doc.timeframe}:${doc.timestamp}` },
       { $set: doc, $setOnInsert: { firstSeenAt: new Date() } },

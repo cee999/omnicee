@@ -693,6 +693,9 @@ class MemoryManager extends EventEmitter {
 
   async saveSignal(signal) {
     if (!signal?.id) return;
+    // Adaptive learning: only store executable BUY/SELL — skip WAIT / noise
+    const act = String(signal.action || '').toUpperCase();
+    if (act !== 'BUY' && act !== 'SELL' && act !== 'LONG' && act !== 'SHORT') return;
     this._ops.saves++;
 
     const key   = `signal:${signal.id}`;

@@ -205,6 +205,34 @@ async function runTests() {
       if (!signal.action)   throw new Error('Missing signal.action');
       pass('Signal shape valid (symbol, action present)');
 
+      // FIX: this test only ever checked that a shape existed, not that
+      // the scorer actually reaches a fire decision — which is exactly
+      // how two absent-agent-dilution bugs in _resolveDirection() and
+      // _computeWeightedScore() went unnoticed: three agents unanimously
+      // LONG (85/78/72) produced action=WAIT, score=0 with the five
+      // agents that simply hadn't voted (macroSent/volumeOI/etc., all
+      // legitimately null/absent — sentiment and pattern alone only run
+      // ~34% of live cycles) treated as if they'd actively voted WAIT
+      // with full weight, able to outvote unanimous real consensus.
+      // Scores here are boosted enough (95/90/85) to survive even the
+      // worst-case 0.60x dead-zone session multiplier and still clear
+      // the 50-point floor, so this is deterministic regardless of what
+      // time it runs.
+      // Different symbol than the scorer.score() call above (XAUUSD) —
+      // reusing the same symbol+timeframe tripped the real signal-cooldown
+      // gate the first call had just set (keyed by `${symbol}_${timeframe}`
+      // in _lastSignalTime), which isn't what this test is checking.
+      const strongVotes = {
+        smc:      { direction: 'LONG', score: 95, reasons: ['Bullish OB'], analysis: { orderBlocks: [{ type: 'BULLISH', high: 1995, low: 1990 }], structure: { direction: 'BULLISH' } } },
+        mtf:      { direction: 'LONG', score: 90, reasons: ['D1 bullish'], analysis: { htfBias: { direction: 'LONG' } } },
+        momentum: { direction: 'LONG', score: 85, reasons: ['RSI oversold'], analysis: {} },
+        microstructure: null, volumeOI: null, fractal: null, macroSent: null, pattern: null,
+      };
+      const strongSignal = await scorer.score(strongVotes, { symbol: 'GBPUSD', timeframe: 'H1', currentPrice: 1.2694, timestamp: Date.now() });
+      if (strongSignal.action !== 'LONG') throw new Error(`3 unanimous strong agents (absent agents excluded) should fire LONG, got action=${strongSignal.action} reason="${strongSignal.reason}"`);
+      if (!(strongSignal.score?.final >= 50)) throw new Error(`expected fired score >= 50, got ${strongSignal.score?.final}`);
+      pass(`SignalScorer: absent agents correctly excluded from tally — 3/8 unanimous agents fire (score=${strongSignal.score.final}), not outvoted by 5 that never responded`);
+
     } catch (e) { fail('SignalScorer.score()', e); }
   }
 

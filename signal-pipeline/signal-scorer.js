@@ -479,18 +479,51 @@ class SignalScorer extends EventEmitter {
     ];
 
     const agentDirections = [];
+    // FIX: an agent with no vote (still warming up, on a reduced-cadence
+    // cycle with no cached lastVote yet, or errored that pass) is NOT the
+    // same thing as an agent that actually analyzed the market and
+    // concluded WAIT — but this loop was treating them identically,
+    // dumping the absent agent's full weight into votes.WAIT. With 8
+    // agents and no single one above 20% weight, it's easy for enough of
+    // them to be absent at once (sentiment/pattern alone only run ~34%
+    // of cycles — see runReducedCadenceAgents) that WAIT's combined
+    // "vote" from pure absence exceeds LONG or SHORT's real weight, even
+    // when every agent that DID actually respond unanimously agreed.
+    // That's not a strict system, it's a broken one: three agents in
+    // full agreement lost to five agents that were simply never asked.
+    // Absent agents are now excluded from the tally entirely, and the
+    // margin below is computed against the weight that actually
+    // responded, not the full theoretical 100%.
+    let respondedWeight = 0;
 
     for (const { key, weight } of agentList) {
       const vote = agentVotes[key];
       if (!vote || !vote.direction) {
-        votes['WAIT'] += weight;
-        agentDirections.push({ agent: key, direction: 'WAIT', weight, score: 0 });
+        agentDirections.push({ agent: key, direction: 'ABSENT', weight, score: 0 });
         continue;
       }
 
+      respondedWeight += weight;
       const dir = vote.direction.toUpperCase();
       votes[dir] = (votes[dir] || 0) + weight;
       agentDirections.push({ agent: key, direction: dir, weight, score: vote.score || 0 });
+    }
+
+    // A real, separate, explicit gate for "too few agents responded to
+    // trust any consensus" — rather than absence silently inflating
+    // WAIT's tally to manufacture the same outcome without saying so.
+    // SMC+MTF+MOMENTUM are already required upstream before score() is
+    // ever called (index.js: `if (!votes.smc || !votes.mtf ||
+    // !votes.momentum) return;`), which alone is 0.45 of total weight —
+    // so in live operation this floor is a safety net for a genuinely
+    // degenerate case, not a new everyday blocker.
+    if (respondedWeight < 0.40) {
+      return {
+        direction: 'WAIT',
+        reason:    `Only ${(respondedWeight * 100).toFixed(0)}% of agent weight responded — not enough to form a consensus`,
+        agentDirections,
+        votes,
+      };
     }
 
     // SMC and MTF must agree — they are the foundation
@@ -509,7 +542,12 @@ class SignalScorer extends EventEmitter {
     const maxVote   = Math.max(...Object.values(votes));
     const winner    = Object.keys(votes).find(k => votes[k] === maxVote);
     const loser     = winner === 'LONG' ? 'SHORT' : 'LONG';
-    const margin    = votes[winner] - (votes[loser] || 0);
+    // Margin as a share of weight that actually responded — matches
+    // "how sure were the agents that spoke", not diluted by ones that
+    // didn't. Behaviorally identical to before whenever most/all agents
+    // respond (the common case); only changes the outcome for the
+    // previously-broken case where several were absent.
+    const margin    = (votes[winner] - (votes[loser] || 0)) / respondedWeight;
 
     if (margin < 0.18 && winner !== 'WAIT') {
       return {
@@ -525,7 +563,7 @@ class SignalScorer extends EventEmitter {
       margin:     parseFloat(margin.toFixed(3)),
       agentDirections,
       votes,
-      reason:     `${winner} consensus — ${(maxVote * 100).toFixed(0)}% weighted agreement`,
+      reason:     `${winner} consensus — ${(votes[winner] / respondedWeight * 100).toFixed(0)}% of responding weight`,
     };
   }
 
@@ -548,8 +586,29 @@ class SignalScorer extends EventEmitter {
     for (const { key, label, weight } of agentMap) {
       const vote = agentVotes[key];
 
-      let agentScore = vote?.score ?? 0;
-      const agentDir = vote?.direction?.toUpperCase() ?? 'WAIT';
+      // FIX: same shape of bug as _resolveDirection's absent-agent
+      // handling above. An agent with no vote had its direction default
+      // to 'WAIT' and score to 0, then still had its full weight added
+      // to totalWeight (the denominator) below even though it
+      // contributed exactly 0 to weightedSum (the numerator) — not
+      // because it genuinely assessed low conviction, but purely because
+      // it wasn't there. Every absent agent silently dragged the average
+      // down proportional to its weight, on top of the separate
+      // direction-consensus bug. An agent that DID respond and said WAIT
+      // is real information (dampened 0.40x below, not excluded) — an
+      // agent that never spoke at all is not, and is now excluded from
+      // both numerator and denominator entirely instead of being treated
+      // as a responding zero.
+      if (!vote || !vote.direction) {
+        breakdown.push({
+          agent: key, label, weight: parseFloat((weight * 100).toFixed(0)) + '%',
+          rawScore: 0, contribution: 0, direction: 'ABSENT', status: 'ABSENT', reasons: [],
+        });
+        continue;
+      }
+
+      let agentScore = vote.score ?? 0;
+      const agentDir = vote.direction.toUpperCase();
 
       let contribution;
       let status;
