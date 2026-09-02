@@ -499,31 +499,41 @@ function ThemeStyle() {
           grid-template-columns: repeat(4, minmax(0, 1fr));
         }
       }
-      /* —— Charts: mobile-first —— */
+      /* —— Charts: fit every screen (phone → laptop → desktop) —— */
+      .omni-root.is-charts {
+        height: 100dvh;
+        max-height: 100dvh;
+        overflow: hidden;
+      }
+      .omni-root.is-charts .omni-main {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        padding: 0;
+      }
       .omni-charts-grid {
         display: flex;
         flex-direction: column;
         gap: 6px;
+        flex: 1 1 auto;
+        min-height: 0;
         height: 100%;
-        min-height: calc(100dvh - 120px);
-        padding: 6px;
-        box-sizing: border-box;
         width: 100%;
-        max-width: 100vw;
+        max-width: 100%;
+        box-sizing: border-box;
+        padding: 6px;
+        padding-bottom: max(6px, env(safe-area-inset-bottom, 0px));
         overflow: hidden;
-      }
-      .omni-root.is-charts .omni-main {
-        overflow: hidden;
-        display: flex;
-        flex-direction: column;
       }
       .omni-charts-toolbar {
         flex: 0 0 auto;
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 6px;
         padding: 8px 10px;
-        min-height: 52px;
+        min-height: 48px;
       }
       .omni-charts-active {
         flex: 1 1 auto;
@@ -531,26 +541,23 @@ function ThemeStyle() {
         display: flex;
         flex-wrap: wrap;
         align-items: baseline;
-        gap: 6px 10px;
+        justify-content: center;
+        gap: 4px 10px;
+        text-align: center;
       }
       .omni-charts-active-sym {
         font-family: ui-monospace, monospace;
-        font-size: 15px;
+        font-size: clamp(13px, 2.8vw, 16px);
         font-weight: 800;
         letter-spacing: 0.02em;
         color: var(--text);
       }
       .omni-charts-active-px {
         font-family: ui-monospace, monospace;
-        font-size: 13px;
+        font-size: clamp(12px, 2.4vw, 14px);
         font-weight: 600;
       }
-      .omni-charts-active-src {
-        font-family: ui-monospace, monospace;
-        font-size: 10px;
-        text-transform: uppercase;
-        color: var(--textFaint);
-      }
+      .omni-charts-active-src { display: none !important; }
       .omni-px-bid { color: var(--coral); }
       .omni-px-ask { color: var(--emerald); }
       .omni-px-mid { color: var(--textDim); }
@@ -564,53 +571,39 @@ function ThemeStyle() {
         overflow-y: hidden;
         -webkit-overflow-scrolling: touch;
         scroll-snap-type: x mandatory;
-        padding: 2px 2px 6px;
+        padding: 2px 2px 4px;
         scrollbar-width: none;
       }
       .omni-charts-quote-strip::-webkit-scrollbar { display: none; }
       .omni-sym-card {
         flex: 0 0 auto;
-        scroll-snap-align: start;
-        min-width: 112px;
-        min-height: 56px;
-        padding: 8px 12px;
+        scroll-snap-align: center;
+        min-width: 96px;
+        min-height: 52px;
+        padding: 8px 10px;
         border-radius: 12px;
+        text-align: left;
         border: 1px solid var(--glassBorder);
         background: var(--panel2);
         color: var(--text);
-        text-align: left;
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
         -webkit-tap-highlight-color: transparent;
         touch-action: manipulation;
         cursor: pointer;
       }
       .omni-sym-card.is-on {
         border-color: var(--emerald);
-        background: rgba(34, 197, 94, 0.12);
-        box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.25);
+        box-shadow: 0 0 0 1px var(--emerald);
       }
-      .omni-sym-card-name {
-        font-family: ui-monospace, monospace;
-        font-size: 12px;
-        font-weight: 700;
-      }
-      .omni-sym-card.is-on .omni-sym-card-name { color: var(--emerald); }
-      .omni-sym-card-src {
-        font-family: ui-monospace, monospace;
-        font-size: 9px;
-        text-transform: uppercase;
-        color: var(--textFaint);
-      }
+      .omni-sym-card-src { display: none !important; }
       .omni-sym-card-px {
         font-family: ui-monospace, monospace;
         font-size: 11px;
         margin-top: 2px;
       }
+      /* Chart stage fills remaining height */
       .omni-charts-stage {
         flex: 1 1 auto;
-        min-height: 42vh;
+        min-height: 0;
         position: relative;
         overflow: hidden;
         display: flex;
@@ -624,20 +617,22 @@ function ThemeStyle() {
         flex: 1 1 auto;
         width: 100%;
         height: 100%;
-        min-height: 220px;
+        min-height: 0;
         position: relative;
         border-radius: 14px;
         overflow: hidden;
       }
       .omni-tv-host iframe,
-      .omni-tv-host > div {
+      .omni-tv-host > div,
+      .omni-tv-host .tradingview-widget-container {
         width: 100% !important;
         height: 100% !important;
+        min-height: 100% !important;
       }
       .omni-chart-hud {
         position: absolute;
         left: 8px;
-        bottom: 64px;
+        bottom: 8px;
         z-index: 6;
         max-width: min(280px, calc(100% - 16px));
         pointer-events: none;
@@ -668,7 +663,7 @@ function ThemeStyle() {
       .omni-chart-hud-meta { color: var(--textFaint); font-size: 9px; }
       .omni-charts-rail {
         flex: 0 0 auto;
-        max-height: 28vh;
+        max-height: min(26vh, 220px);
         min-height: 0;
         display: flex;
         flex-direction: column;
@@ -685,98 +680,25 @@ function ThemeStyle() {
         flex: 0 0 auto;
         display: flex;
         align-items: center;
+        justify-content: space-between;
         gap: 8px;
-        width: 100%;
-        min-height: 44px;
-        padding: 10px 12px;
-        border: none;
-        background: transparent;
-        color: var(--textFaint);
-        font-family: ui-monospace, monospace;
-        font-size: 10px;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        -webkit-tap-highlight-color: transparent;
-        touch-action: manipulation;
-        cursor: pointer;
+        padding: 8px 10px;
+        min-height: 40px;
       }
       .omni-charts-rail-count {
-        font-weight: 700;
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
         color: var(--gold);
-        background: rgba(251, 191, 36, 0.12);
-        padding: 2px 8px;
-        border-radius: 999px;
       }
       .omni-charts-rail-body {
-        display: flex;
-        flex-direction: row;
-        gap: 8px;
+        flex: 1 1 auto;
+        min-height: 0;
         overflow-x: auto;
-        overflow-y: hidden;
+        overflow-y: auto;
         -webkit-overflow-scrolling: touch;
-        padding: 0 10px 10px;
-        scroll-snap-type: x mandatory;
-      }
-      .omni-charts-rail-empty {
-        font-family: ui-monospace, monospace;
-        font-size: 11px;
-        color: var(--textFaint);
-        padding: 4px 2px 8px;
-        min-width: 200px;
-      }
-      .omni-sig-card {
-        flex: 0 0 auto;
-        scroll-snap-align: start;
-        min-width: min(78vw, 260px);
-        max-width: 280px;
-        min-height: 88px;
-        padding: 12px 14px;
-        border-radius: 14px;
-        background: var(--panel2);
-        border: 1px solid var(--glassBorder);
-        -webkit-tap-highlight-color: transparent;
-        touch-action: manipulation;
-      }
-      .omni-sig-card-top {
         display: flex;
-        align-items: center;
         gap: 8px;
-        font-family: ui-monospace, monospace;
-        font-size: 13px;
-      }
-      .omni-sig-pill {
-        display: inline-flex;
-        align-items: center;
-        padding: 4px 10px;
-        border-radius: 999px;
-        font-weight: 800;
-        font-size: 12px;
-      }
-      .omni-sig-score {
-        margin-left: auto;
-        color: var(--gold);
-        font-weight: 800;
-        font-size: 13px;
-      }
-      .omni-sig-card-levels {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px 10px;
-        font-family: ui-monospace, monospace;
-        font-size: 11px;
-        color: var(--textDim);
-        margin-top: 8px;
-      }
-      .omni-sig-card-meta {
-        font-family: ui-monospace, monospace;
-        font-size: 10px;
-        color: var(--textFaint);
-        margin-top: 6px;
-      }
-      .omni-signal-strip {
-        touch-action: pan-x;
-        overscroll-behavior-x: contain;
-        padding-bottom: 12px !important;
+        padding: 0 8px 8px;
       }
       .omni-charts-rail-hint {
         font-size: 9px;
@@ -801,34 +723,105 @@ function ThemeStyle() {
         cursor: pointer;
       }
       .omni-sym-nav:active { background: rgba(34, 197, 94, 0.15); color: var(--emerald); }
+      .omni-chart-expand-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 44px;
+        min-width: 44px;
+        padding: 0 12px;
+        border-radius: 12px;
+        border: 1px solid var(--glassBorder);
+        background: var(--panel2);
+        color: var(--text);
+        font-size: 12px;
+        flex-shrink: 0;
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+      }
       .omni-gesture-edge {
         position: absolute;
         top: 0;
-        bottom: 56px;
-        width: 28px;
+        bottom: 0;
+        width: 24px;
         z-index: 8;
         touch-action: none;
       }
       .omni-gesture-edge--left { left: 0; }
       .omni-gesture-edge--right { right: 0; }
-      /* Desktop enhancements */
+      /* Fullscreen expand — every device */
+      .omni-charts-grid.is-chart-expanded {
+        position: fixed !important;
+        inset: 0 !important;
+        z-index: 9999 !important;
+        width: 100vw !important;
+        height: 100dvh !important;
+        max-height: 100dvh !important;
+        margin: 0 !important;
+        padding: max(6px, env(safe-area-inset-top, 6px)) 8px max(6px, env(safe-area-inset-bottom, 6px)) !important;
+        background: var(--void, #0b0f14);
+        display: flex !important;
+        flex-direction: column !important;
+        grid-template-columns: none !important;
+        grid-template-rows: none !important;
+      }
+      .omni-charts-grid.is-chart-expanded .omni-charts-quote-strip,
+      .omni-charts-grid.is-chart-expanded .omni-charts-rail {
+        display: none !important;
+      }
+      .omni-charts-grid.is-chart-expanded .omni-charts-stage {
+        flex: 1 1 auto !important;
+        min-height: 0 !important;
+        height: auto !important;
+        border-radius: 10px;
+      }
+      .omni-charts-grid.is-chart-expanded .omni-tv-host {
+        min-height: 0 !important;
+        height: 100% !important;
+      }
+      body.omni-chart-expanded-lock {
+        overflow: hidden !important;
+        touch-action: none;
+      }
+      /* Phone / small tablet — tall chart */
+      @media (max-width: 899px) {
+        .omni-charts-grid {
+          min-height: 0;
+          height: 100%;
+        }
+        .omni-charts-stage {
+          flex: 1 1 auto;
+          min-height: min(52vh, 480px);
+        }
+        .omni-charts-rail {
+          max-height: min(24vh, 200px);
+        }
+      }
+      /* Laptop / desktop */
       @media (min-width: 900px) {
         .omni-charts-grid {
           display: grid;
-          grid-template-columns: minmax(0, 1fr) minmax(260px, 300px);
-          grid-template-rows: auto auto 1fr;
+          grid-template-columns: minmax(0, 1fr) minmax(240px, 280px);
+          grid-template-rows: auto auto minmax(0, 1fr);
           gap: 8px;
-          min-height: calc(100dvh - 140px);
-          padding: 8px;
+          padding: 10px;
+          height: 100%;
+          min-height: 0;
         }
         .omni-charts-toolbar { grid-column: 1 / -1; grid-row: 1; }
         .omni-charts-quote-strip { grid-column: 1 / -1; grid-row: 2; }
-        .omni-charts-stage { grid-column: 1; grid-row: 3; min-height: 420px; }
+        .omni-charts-stage {
+          grid-column: 1;
+          grid-row: 3;
+          min-height: 0;
+          height: 100%;
+        }
         .omni-charts-rail {
           grid-column: 2;
           grid-row: 3;
           max-height: none;
           height: 100%;
+          min-height: 0;
         }
         .omni-charts-rail-body {
           flex-direction: column;
@@ -844,16 +837,42 @@ function ThemeStyle() {
           min-height: 0;
         }
         .omni-gesture-edge { display: none; }
-        .omni-tv-host { min-height: 420px; }
+        .omni-tv-host { min-height: 0; }
         .omni-chart-hud { bottom: 12px; max-width: min(340px, calc(100% - 24px)); }
       }
-      @media (max-width: 899px) {
+      /* Wide desktop */
+      @media (min-width: 1280px) {
         .omni-charts-grid {
-          min-height: calc(100dvh - 112px);
+          grid-template-columns: minmax(0, 1fr) minmax(280px, 320px);
+          gap: 12px;
+          padding: 12px 16px;
+          max-width: 1600px;
+          margin: 0 auto;
         }
-        .omni-charts-stage { min-height: 46vh; }
-        .omni-tv-host { min-height: 240px; }
+        .omni-charts-active-sym { font-size: 16px; }
+        .omni-charts-active-px { font-size: 14px; }
       }
+      /* Ultra-wide */
+      @media (min-width: 1600px) {
+        .omni-charts-grid {
+          max-width: 1800px;
+          grid-template-columns: minmax(0, 1fr) 340px;
+        }
+      }
+      /* Landscape phone — give chart more width, less rail */
+      @media (max-width: 899px) and (orientation: landscape) {
+        .omni-charts-grid {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(160px, 200px);
+          grid-template-rows: auto minmax(0, 1fr);
+          gap: 6px;
+        }
+        .omni-charts-toolbar { grid-column: 1 / -1; grid-row: 1; }
+        .omni-charts-quote-strip { display: none; }
+        .omni-charts-stage { grid-column: 1; grid-row: 2; min-height: 0; }
+        .omni-charts-rail { grid-column: 2; grid-row: 2; max-height: none; height: 100%; }
+      }
+
       .omni-signals-list {
         display: grid;
         grid-template-columns: 1fr;
@@ -904,19 +923,6 @@ function ThemeStyle() {
       .omni-quote-card:focus-visible {
         outline: 2px solid var(--ring);
         outline-offset: 2px;
-      }
-      @media (min-width: 900px) {
-        .omni-charts-grid {
-          min-height: calc(100dvh - 140px);
-        }
-        .omni-tv-host { min-height: 420px; }
-      }
-      @media (max-width: 899px) {
-        .omni-charts-grid {
-          min-height: calc(100dvh - 132px);
-          grid-template-rows: auto minmax(240px, 1fr) minmax(140px, 32vh);
-        }
-        .omni-tv-host { min-height: 220px; }
       }
       /* MOBILE-FIRST full chart — overlay above chrome (phone primary) */
       .omni-charts-grid.is-chart-expanded {
