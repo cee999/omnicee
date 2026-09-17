@@ -1,0 +1,5 @@
+# Optional ML extras. Install ONLY on a paid instance with >= 2 GB RAM.
+# The brain runs fully without these; anything here must degrade gracefully.
+-r requirements.txt
+onnxruntime>=1.18,<2.0   # ~54 MB. Inference for models trained OFFLINE.
+river>=0.21,<1.0         # pure-python online learning, tiny footprint

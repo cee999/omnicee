@@ -1,0 +1,26 @@
+# Runtime dependencies for the OMNICee Python brain.
+# Pinned to compatible ranges, not exact versions, so security patches land.
+#
+# Footprint on disk (measured, not estimated):
+#   numpy       ~40 MB
+#   scipy      ~109 MB   (required by scikit-learn)
+#   scikit-learn ~45 MB
+#   fastapi + uvicorn + pydantic  ~25 MB
+#   ------------------------------------
+#   total       ~220 MB   -> fits Render's free tier with room for the heap
+#
+# Deliberately ABSENT and why:
+#   torch / tensorflow  ~900 MB+ installed, 300 MB+ resident. Will not fit.
+#                       Train offline, export to ONNX, infer here.
+#   pandas              ~68 MB for dataframe convenience the numpy feature
+#                       layer does not need. Add only if a real need appears.
+#   ta-lib              needs a C toolchain at build time.
+
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+pydantic>=2.7,<3.0
+pydantic-settings>=2.3,<3.0
+numpy>=1.26,<3.0
+scikit-learn>=1.4,<2.0
+httpx>=0.27,<1.0
+orjson>=3.10,<4.0
