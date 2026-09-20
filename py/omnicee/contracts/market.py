@@ -11,7 +11,7 @@ placeholder, never carried forward from a previous bar.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -160,6 +160,18 @@ class MarketSnapshot(BaseModel):
     )
     source: str | None = Field(
         default=None, description="Which feed produced this, for audit"
+    )
+    last_tick_ms: int | None = Field(
+        default=None,
+        ge=0,
+        description="Engine-supplied last live tick (epoch ms). Staleness is "
+        "measured from this when present, because a just-opened bar is fresh "
+        "even though its open time is up to one bar-length old.",
+    )
+    external: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Engine context for context-aware agents: news, COT, "
+        "fear&greed, calendar. Absent keys are skipped, never zero-filled.",
     )
 
     @field_validator("symbol")

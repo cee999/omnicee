@@ -11,16 +11,17 @@ stop that.
 
 ## Current state of the repo
 
-There are **two backends**, on purpose, mid-migration.
+There is **one backend**: Python, in [`py/`](./py). The Node runtime was fully
+retired (owner decision); every Node module was ported behaviour-for-behaviour
+(porting specs were extracted from the code before deletion — see the git
+history of the migration commit).
 
 | | location | language | owns |
 |---|---|---|---|
-| **Edge** | repo root (`index.js`, `api/`, `feeds/`, `agents/`, `signal-pipeline/`, `risk-engine/`) | Node.js | 5 live price feeds, Socket.IO, Telegram bot, email auth, web push, static app, MongoDB writes, alert dispatch, MT5 bridge |
-| **Brain** | [`py/`](./py) | Python | regime classification, agent voting, probability calibration, risk gates, level placement, position sizing |
+| **Everything** | [`py/`](./py) | Python | feeds (WS + REST), candle stores, regime, 8 agents, consensus, calibration, validation stack (Monte Carlo / Bayesian / statistical / walk-forward / ensemble), risk stack, SL/TP + trap/compression/cycle engines, gold desk, orchestrator loop, REST `/api/*`, Socket.IO (`/socket.io`), Telegram + email auth, alerts, Mongo persistence, MT5 EA bridge, static `webapp-react/dist` |
 
-The Python brain is **Stage 1: built and tested, not yet deployed and not yet
-wired in.** It is strictly additive today — nothing in the Node service calls
-it yet, so it cannot break anything that currently works.
+Single service entrypoint: `omnicee.api.app:asgi` (FastAPI + python-socketio
+combined ASGI app). `DISABLE_ENGINE=1` gives you the old stateless-brain mode.
 
 **Before touching `py/`, read [`py/AGENTS.md`](./py/AGENTS.md).** It holds the
 architecture contract, the engineering rules in priority order, the two bugs
@@ -30,13 +31,15 @@ that must not be reintroduced, and the migration status table.
 
 ## Where the work is up to
 
-The next task is **Stage 2: shadow mode.** Wire `lib/brain-client.js` into the
-existing analysis loop so the Python brain is called alongside the Node
-pipeline, log both outputs, compare them, and **act on neither change yet.**
+The Node-to-Python migration is **complete and tested** (29 pytest green).
+Stage table: [`py/AGENTS.md`](./py/AGENTS.md) section 9. The frontend
+(`webapp-react/`) is unchanged and contract-compatible — same REST paths, same
+Socket.IO path/events.
 
-It is deliberately boring. Do not skip ahead to making Python authoritative
-because its output looks cleaner. The Node pipeline contains months of bug
-fixes that exist nowhere but in that code.
+Next candidate work: Myfxbook sentiment + OpenInsider feeds (keys exist in
+config), the researched API-vault candidates (Twelve Data, Tiingo, EODHD — see
+`py/omnicee/feeds/api_vault.py`), and frontend polish on the new
+engine-status endpoints (`/api/engine`, `/api/feed-health`, `/api/api-vault`).
 
 Full stage table: [`py/AGENTS.md`](./py/AGENTS.md) section 9. **Update it in
 the same commit as your code.** A status table that lags the code is worse

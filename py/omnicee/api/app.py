@@ -22,7 +22,7 @@ import secrets
 import time
 import uuid
 from contextlib import asynccontextmanager
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse
@@ -64,6 +64,8 @@ class AccountStatePayload(BaseModel):
 class AnalyzeRequest(BaseModel):
     snapshot: MarketSnapshot
     account: AccountStatePayload | None = None
+    # Engine context for context-aware agents (news, COT, sentiment, calendar).
+    external: dict[str, Any] = Field(default_factory=dict)
 
 
 class CalibrationFitRequest(BaseModel):
@@ -82,7 +84,26 @@ async def lifespan(app: FastAPI):
         "brain starting",
         extra={"env": cfg.NODE_ENV, "symbols": len(cfg.symbols), "version": SERVICE_VERSION},
     )
+    # ---- full backend wiring (feeds + engine + socket bridge) ----
+    # Never under pytest: live WS feeds would keep the loop alive forever.
+    if not cfg.DISABLE_ENGINE and cfg.NODE_ENV != "test":
+        from ..services.bus import EventBus
+        from ..services.db import Database
+        from .server import start_backend
+
+        app.state.bus = EventBus()
+        app.state.db = Database(
+            cfg.MONGODB_URI, cfg.MONGODB_DB, cfg.MONGODB_MAX_POOL,
+            cfg.MONGODB_SIGNAL_TTL_DAYS, cfg.MONGODB_TELEMETRY_TTL_DAYS,
+            cfg.DISABLE_MONGO_SIGNALS)
+        app.state.backend = await start_backend(app)
     yield
+    engine = getattr(app.state, "engine", None)
+    if engine:
+        engine.stop()
+    fm = getattr(app.state, "feed_manager", None)
+    if fm:
+        await fm.stop()
     log.info("brain shutting down")
 
 
@@ -163,7 +184,8 @@ async def analyze(req: AnalyzeRequest, request: Request) -> AnalysisResult:
     deps = PipelineDeps(settings=app.state.settings, calibrator=app.state.calibrator)
     account = req.account.to_state() if req.account else AccountState()
     return await analyse(
-        req.snapshot, deps, account=account, request_id=request.state.request_id
+        req.snapshot, deps, account=account, request_id=request.state.request_id,
+        external=req.external,
     )
 
 
@@ -187,12 +209,44 @@ async def list_agents() -> list[dict[str, object]]:
     ]
 
 
+# ---- full public surface (replaces the Node api/server.js routes) ----
+from .server import router as api_router  # noqa: E402
+from .server import sio  # noqa: E402
+
+app.include_router(api_router)
+
+import socketio as _socketio  # noqa: E402
+
+# Combined ASGI entrypoint: Socket.IO at /socket.io/*, FastAPI elsewhere.
+asgi = _socketio.ASGIApp(sio, other_asgi_app=app, socketio_path="socket.io")
+
+
+@app.get("/api/socket-health", tags=["ops"], include_in_schema=False)
+async def socket_health() -> dict[str, object]:
+    return {"ok": True, "transport": "socket.io", "path": "socket.io"}
+
+
+# ---- static React dashboard (webapp-react/dist), built at deploy time ----
+# The Node service used to serve this; now FastAPI does. Mounted last so
+# /api/*, /health and /docs always win.
+from pathlib import Path as _Path  # noqa: E402
+
+_DIST = _Path(__file__).resolve().parents[3] / "webapp-react" / "dist"
+if _DIST.is_dir():
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/", StaticFiles(directory=str(_DIST), html=True), name="dashboard")
+    log.info("serving React dashboard from %s", _DIST)
+else:
+    log.info("webapp-react/dist not found — API-only mode")
+
+
 def run() -> None:  # pragma: no cover - entrypoint
     import uvicorn
 
     cfg = get_settings()
     uvicorn.run(
-        "omnicee.api.app:app",
+        "omnicee.api.app:asgi",
         host="0.0.0.0",
         port=int(os.environ.get("PORT", cfg.PORT)),
         log_level=cfg.LOG_LEVEL if cfg.LOG_LEVEL != "warn" else "warning",

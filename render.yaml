@@ -1,15 +1,10 @@
 # ═══════════════════════════════════════════════════════════
-#  OMNICEE — Render Blueprint
-#  Deploys ONE combined service from this repo:
-#    REST + Socket.IO + Telegram Mini App frontend + the
-#    trading/signal engine (index.js), all in a single process.
-#  See the IMPORTANT note above `services:` below for why this
-#  can't be split into two separate Render services.
-#
-#  Deploy: push this file to your repo root, then in the Render
-#  Dashboard choose New > Blueprint and select this repo. Render
-#  will prompt you to fill in every `sync: false` value below —
-#  nothing secret is stored in this file or in git.
+#  OMNICEE — Render Blueprint (pure-Python backend)
+#  ONE service, ONE process:
+#    FastAPI REST  +  Socket.IO  +  feeds  +  engine  +  the
+#    built React dashboard, all served from omnicee.api.app:asgi.
+#  The Node runtime has been fully retired; there is nothing
+#  left to wire between two runtimes.
 # ═══════════════════════════════════════════════════════════
 
 envVarGroups:
@@ -22,53 +17,52 @@ envVarGroups:
         sync: false
       - key: TELEGRAM_ALLOWED_USER_IDS
         sync: false
+      - key: GRADE_A_CHANNEL_ID
+        sync: false
 
-      # ── Alternate Mini App auth (optional) ─────────────────
-      # Shared-secret token, checked before Telegram initData. Leave blank
-      # to disable — Telegram auth is unaffected either way.
+      # ── Dashboard auth ─────────────────────────────────────
       - key: APP_ACCESS_TOKEN
         sync: false
       - key: PUBLIC_DASHBOARD_READ
         value: "true"
 
-      # ── Python brain service (py/) ──────────────────────────
-      # Shared secret Node and the brain service both check on every
-      # /v1/analyze call. Shared here (not generateValue on just one
-      # service) so both services get the identical value from a single
-      # dashboard prompt instead of a manual copy-paste between them.
-      - key: BRAIN_SHARED_SECRET
-        sync: false
-
       # ── EA (MT5 Expert Advisor) auth ────────────────────────
-      # FIX: was missing from this blueprint entirely. Without it,
-      # api/server.js's EA_SECRET defaults to '' and /api/ea/signals — the
-      # live signal feed an MT5 EA polls to place real trades — runs with
-      # NO authentication (see the explicit warning api/server.js logs on
-      # boot when this is unset). Required for a production deployment.
       - key: EA_SECRET
+        sync: false
+      - key: TRADINGVIEW_WEBHOOK_SECRET
         sync: false
 
       # ── Data feeds ────────────────────────────────────────
-      - key: TWELVE_DATA_API_KEY
-        sync: false
       - key: FINNHUB_API_KEY
         sync: false
       - key: FMP_API_KEY
         sync: false
       - key: ALPHA_VANTAGE_API_KEY
         sync: false
-      - key: BINANCE_API_KEY
+      - key: TWELVE_DATA_API_KEY
         sync: false
-      - key: BINANCE_API_SECRET
+      - key: TIINGO_API_KEY
+        sync: false
+      - key: EODHD_API_TOKEN
+        sync: false
+      - key: STOCKDATA_API_TOKEN
+        sync: false
+      - key: ALETHEIA_API_KEY
+        sync: false
+      - key: FRED_API_KEY
+        sync: false
+      - key: PARSE_API_KEY
         sync: false
       - key: MYFXBOOK_EMAIL
         sync: false
       - key: MYFXBOOK_PASSWORD
         sync: false
-      - key: PARSE_API_KEY
-        sync: false
+      - key: DERIV_APP_ID
+        value: "1089"
+      - key: DISABLE_DERIV
+        value: "0"
 
-      # ── MongoDB Atlas (external — Render has no native Mongo) ──
+      # ── MongoDB Atlas ─────────────────────────────────────
       - key: MONGODB_URI
         sync: false
       - key: MONGODB_DB
@@ -80,9 +74,7 @@ envVarGroups:
       - key: MONGODB_TELEMETRY_TTL_DAYS
         value: "7"
 
-      # ── Email OTP login (Brevo) ───────────────────────────────
-      # Create API key: https://app.brevo.com → SMTP & API → API keys
-      # Verify a sender/domain in Brevo, then set EMAIL_FROM to that address.
+      # ── Email OTP login (Brevo) ────────────────────────────
       - key: BREVO_API_KEY
         sync: false
       - key: OTP_PEPPER
@@ -93,33 +85,11 @@ envVarGroups:
         value: "false"
       - key: EMAIL_AUTH_REQUIRED
         value: "true"
-      # Optional shared desk password required with email before OTP is sent
       - key: LOGIN_PASSWORD
         sync: false
-      - key: GOLD_MIN_SCORE
-        value: "50"
-      - key: DERIV_APP_ID
-        value: "1089"
-      - key: DISABLE_DERIV
-        value: "0"
 
       # ── Trading config ────────────────────────────────────
-      # FIX: was hardcoded here to "BTCUSDT,XAUUSD,EURUSD" — the original
-      # 3-symbol default — which silently overrode index.js's own default
-      # (already updated to all 6 tracked symbols) on every deploy. That's
-      # the actual reason GBPUSD/USDJPY/ETHUSDT showed no live price data:
-      # the backend was never told to track them at all, regardless of
-      # what the frontend expected. Removed rather than re-hardcoded to
-      # avoid this exact class of drift recurring — index.js's own
-      # requireEnv('SYMBOLS', ...) default is the single source of truth.
-      # Set an explicit value here only if you deliberately want this
-      # deployment tracking a different symbol set than the code default.
       - key: TIMEFRAMES
-        # FIX: was "15m,H1,H4,D1" — lowercase "15m" doesn't match the
-        # codebase's uppercase-only timeframe codes (agents/mtf-agent.js
-        # TF_HIERARCHY etc.), so the 15-minute timeframe would silently do
-        # nothing in production. Same bug already fixed in .env.example;
-        # this file wasn't updated to match. Fixed to M15.
         value: "M15,H1,H4,D1"
       - key: RISK_PCT_PER_TRADE
         value: "1.0"
@@ -145,112 +115,26 @@ envVarGroups:
         value: ""
 
 services:
-  # ── Single combined service: REST API + Socket.IO + Telegram Mini App
-  # frontend + the trading/signal engine, all in ONE process.
-  #
-  # IMPORTANT: index.js and api/server.js share live data (signals, risk
-  # updates, market ticks) through an in-memory EventEmitter, not a network
-  # transport. That only works if both run in the same Node process — see
-  # package.json's "start:all" script, which is exactly what startCommand
-  # below reproduces. Splitting these into two separate Render services
-  # (e.g. a web service + a worker) would silently break every live update
-  # reaching the frontend, since each process would get its own disconnected
-  # copy of that EventEmitter.
+  # ── Single combined service: REST + Socket.IO + feeds + engine +
+  # React dashboard, all in ONE Python process. The old two-service
+  # split (Node edge + Python brain) is gone: in-process calls replace
+  # the HTTP hop, BRAIN_URL/BRAIN_SHARED_SECRET are no longer needed.
   - type: web
     name: omnicee
-    runtime: node
-    # Free tier: $0, no card required at deploy time, spins down after ~15
-    # minutes of no traffic (mitigated with a keepalive ping — see README).
-    # Upgrade to `starter` (~$7/mo, no spin-down at all) once you're ready
-    # to trade on this for real and want zero cold-start latency on signals.
-    plan: free
-    # FIX: was 'oregon' (US West) — Binance's public WebSocket market-data
-    # endpoints return HTTP 451 (Unavailable For Legal Reasons) to
-    # connections from US-region IPs, causing an endless reconnect loop in
-    # production (confirmed in live Render logs: "WebSocket error:
-    # Unexpected server response: 451"). Render's non-US regions are
-    # frankfurt and singapore; singapore avoids this for every exchange
-    # feed this project uses, not just Binance. Region can't be changed
-    # after a service already exists — this only takes effect on a fresh
-    # deploy or a manually recreated service.
-    region: singapore
-    # FIX: was just `npm ci --omit=dev` (root only) — api/server.js now
-    # serves webapp-react/dist instead of the retired webapp/ static
-    # folder, so the React app has to actually be built during deploy or
-    # dist/ won't exist and every route falls through to a 404/blank page.
-    # webapp-react's own deps (vite, tailwind, etc.) are devDependencies it
-    # needs at build time, so that install can't use --omit=dev the way the
-    # root one does — only the root server bundle skips dev deps.
-    # FIX: this service's NODE_ENV=production env var (below) gets injected
-    # into the BUILD environment too, not just runtime — so a plain `npm ci`
-    # for webapp-react silently omits its devDependencies (vite, tailwind,
-    # postcss, autoprefixer — everything the build itself needs), even
-    # though nothing here passes --omit=dev for that install. Confirmed by
-    # reproducing the actual failure: `NODE_ENV=production npm ci` inside
-    # webapp-react installs 54 packages instead of 176 and vite is simply
-    # absent, so `vite build` then fails with "sh: 1: vite: not found" —
-    # exactly the error from the first deploy after this became the
-    # frontend. --include=dev overrides the ambient NODE_ENV for just that
-    # install; the root install's explicit --omit=dev is deliberate and
-    # unaffected (the server bundle genuinely doesn't need dev tooling).
-    # FIX: webapp-react/src/App.jsx sends APP_TOKEN as the x-app-token header
-    # on every /api/* call (telegramAuthMiddleware requires it or real
-    # Telegram initData — see api/telegram-auth.js), but Vite only bakes in
-    # VITE_-prefixed vars that exist in *this build's* environment, and
-    # nothing here ever passed this service's APP_ACCESS_TOKEN through under
-    # that name. Net effect in production: the unauthenticated /health check
-    # succeeds (top bar shows LIVE), but every actual data call — signals,
-    # outlook, journal, heatmap, everything — silently 401s and stays on
-    # "Waiting for backend" forever, because the frontend bundle always had
-    # an empty token baked in. This is almost certainly the real cause of
-    # "most tabs are dead silent" even once the backend itself is healthy.
-    # vite is under webapp-react dependencies. Do NOT pass --no-optional on the
-    # webapp-react install — Rollup needs @rollup/rollup-linux-x64-gnu or vite
-    # fails with MODULE_NOT_FOUND. Fail deploy if dist/index.html is missing.
-    buildCommand: npm install --omit=dev --no-optional --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000 && npm --prefix webapp-react install --include=dev --fetch-retries=5 --fetch-retry-mintimeout=20000 && VITE_APP_TOKEN=$APP_ACCESS_TOKEN npm --prefix webapp-react run build && test -f webapp-react/dist/index.html
-    startCommand: node start-all.js
-    healthCheckPath: /health
-    autoDeployTrigger: commit
-    envVars:
-      - key: NODE_VERSION
-        value: "20.18.0"
-      # Python brain (py/) — see the omnicee-brain service below.
-      # lib/brain-client.js exists but is NOT yet called from index.js or
-      # api/server.js — wiring it in (shadow mode: log the brain's output,
-      # act on nothing yet) is the next task, not done by this commit.
-      # URL is predictable from the service name below, not a secret.
-      - key: BRAIN_URL
-        value: https://omnicee-brain.onrender.com
-      - key: BRAIN_TIMEOUT_MS
-        value: "5000"
-      - fromGroup: omnicee-shared
-
-  # ── Python analytical brain (py/) — stateless HTTP service Node calls
-  # for analysis. Does NOT own feeds, sockets, or auth — see py/AGENTS.md
-  # for the full contract. Runs as a second, independent Render service
-  # (not merged into the Node one above) since it has its own runtime,
-  # deploy cadence, and dependency set.
-  #
-  # Free tier reality check: 512 MB RAM, ~220 MB measured on disk, one
-  # worker only. PyTorch (~900 MB) will not fit here — see py/AGENTS.md's
-  # "Deployment constraints" section before adding any ML dependency;
-  # train offline, export ONNX, infer with onnxruntime instead.
-  - type: web
-    name: omnicee-brain
     runtime: python
+    # Free tier: 512 MB RAM, spins down after ~15 min idle. Measured
+    # dependency footprint is ~225 MB (see py/requirements.txt), leaving
+    # headroom for the asyncio engine. Upgrade to `starter` when going live.
     plan: free
-    region: singapore  # same region as the Node service — cross-region adds latency to every call
-    buildCommand: cd py && pip install --no-cache-dir -r requirements.txt
-    startCommand: cd py && uvicorn omnicee.api.app:app --host 0.0.0.0 --port $PORT --workers 1
+    region: singapore   # Binance/Deriv WS reachable from here (US IPs get 451)
+    # Build: install Python deps, then build the React dashboard.
+    # NODE_ENV=production is ambient during build, so webapp-react's dev
+    # deps must be forced with --include=dev (vite lives there).
+    buildCommand: pip install --no-cache-dir -r py/requirements.txt && npm --prefix webapp-react install --include=dev --fetch-retries=5 --fetch-retry-mintimeout=20000 && npm --prefix webapp-react run build && test -f webapp-react/dist/index.html
+    startCommand: cd py && uvicorn omnicee.api.app:asgi --host 0.0.0.0 --port $PORT --workers 1
     healthCheckPath: /health
     autoDeployTrigger: commit
     envVars:
       - key: PYTHON_VERSION
-        value: "3.12"
-      - key: LOG_LEVEL
-        value: info
-      # SYMBOLS deliberately not set here, same reasoning as the Node
-      # service above: omnicee/config.py's own default is the single
-      # source of truth, so the two services can't silently drift onto
-      # different symbol sets the way a hardcoded duplicate would risk.
+        value: "3.12.6"
       - fromGroup: omnicee-shared

@@ -23,6 +23,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -134,6 +135,7 @@ async def analyse(
     deps: PipelineDeps,
     account: AccountState | None = None,
     request_id: str | None = None,
+    external: dict[str, Any] | None = None,
 ) -> AnalysisResult:
     """Run the full analysis chain for one symbol."""
     rid = request_id or uuid.uuid4().hex[:12]
@@ -156,7 +158,8 @@ async def analyse(
 
     # ---- stage 2: agents ---------------------------------------------------
     agents = build_agents()
-    ctx = AgentContext(snapshot=snapshot, regime=regime_read, request_id=rid)
+    ctx = AgentContext(snapshot=snapshot, regime=regime_read, request_id=rid,
+                       external=dict(external or {}))
     votes = await run_agents(agents, ctx, cfg.AGENT_TIMEOUT_MS)
     timer.stage("agents")
 

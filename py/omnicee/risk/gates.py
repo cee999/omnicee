@@ -71,8 +71,14 @@ def evaluate_gates(
     warnings: list[str] = []
 
     # ---- data integrity. Never analyse on stale or thin data. -----------
+    # Freshness is measured against the last real tick when the engine
+    # supplies one: a just-opened M15 bar is fresh even though its open time
+    # is up to one bar-length old. Bar-open age remains the fallback.
     primary = snapshot.primary()
-    age = primary.age_ms(snapshot.received_at)
+    if snapshot.last_tick_ms is not None:
+        age = max(0, snapshot.received_at - snapshot.last_tick_ms)
+    else:
+        age = primary.age_ms(snapshot.received_at)
     if age > max_price_age_ms:
         blocks.append(
             f"price data is {age / 1000:.0f}s old (limit {max_price_age_ms / 1000:.0f}s)"
