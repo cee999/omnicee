@@ -96,7 +96,7 @@ async def market(request: Request, symbols: str | None = None) -> dict[str, Any]
         raise HTTPException(503, "engine disabled")
     want = [s.strip().upper() for s in symbols.split(",")] if symbols else None
     rows = fm.resolved_market_rows(want)
-    return {"ok": bool(rows), "rows": rows, "count": len(rows), "timestamp": int(time.time() * 1000),
+    return {"ok": bool(rows), "market": rows, "rows": rows, "count": len(rows), "timestamp": int(time.time() * 1000),
             "note": None if rows else "no live prices yet — feeds warming up"}
 
 
@@ -126,34 +126,47 @@ async def heatmap(request: Request) -> dict[str, Any]:
             else:
                 row[tf] = None
         out.append(row)
-    return {"ok": True, "rows": out, "timeframes": _cfg(request).timeframes}
+    return {"ok": True, "tiles": out, "rows": out, "timeframes": _cfg(request).timeframes}
 
 
 @router.get("/levels")
-async def levels(request: Request, symbol: str) -> dict[str, Any]:
+async def levels(request: Request, symbol: str | None = None) -> dict[str, Any]:
     fm = _fm(request)
     if fm is None:
         raise HTTPException(503, "engine disabled")
-    arr = fm.store.get(symbol.upper(), "D1") or fm.store.get(symbol.upper(), "H4")
-    if len(arr) < 10:
-        return {"ok": False, "symbol": symbol.upper(), "levels": [], "note": "insufficient candles"}
-    high = max(float(c["high"]) for c in arr[-30:])
-    low = min(float(c["low"]) for c in arr[-30:])
-    close = float(arr[-1]["close"])
-    rng = max(high - low, 1e-12)
-    piv = (high + low + close) / 3
-    return {"ok": True, "symbol": symbol.upper(), "levels": [
-        {"name": "R3", "price": round(high + 2 * (piv - low), 6)},
-        {"name": "R2", "price": round(piv + rng / 2, 6)},
-        {"name": "R1", "price": round(2 * piv - low, 6)},
-        {"name": "PP", "price": round(piv, 6)},
-        {"name": "S1", "price": round(2 * piv - high, 6)},
-        {"name": "S2", "price": round(piv - rng / 2, 6)},
-        {"name": "S3", "price": round(low - 2 * (high - piv), 6)},
-    ]}
+
+    def _calc(sym: str) -> list[dict[str, Any]] | None:
+        arr = fm.store.get(sym, "D1") or fm.store.get(sym, "H4")
+        if len(arr) < 10:
+            return None
+        high = max(float(c["high"]) for c in arr[-30:])
+        low = min(float(c["low"]) for c in arr[-30:])
+        close = float(arr[-1]["close"])
+        rng = max(high - low, 1e-12)
+        piv = (high + low + close) / 3
+        return [
+            {"name": "R3", "price": round(high + 2 * (piv - low), 6)},
+            {"name": "R2", "price": round(piv + rng / 2, 6)},
+            {"name": "R1", "price": round(2 * piv - low, 6)},
+            {"name": "PP", "price": round(piv, 6)},
+            {"name": "S1", "price": round(2 * piv - high, 6)},
+            {"name": "S2", "price": round(piv - rng / 2, 6)},
+            {"name": "S3", "price": round(low - 2 * (high - piv), 6)},
+        ]
+
+    if symbol:
+        sym = symbol.upper()
+        ls = _calc(sym)
+        return {"ok": ls is not None, "symbol": sym, "levels": ls or [],
+                "note": None if ls else "insufficient candles"}
+    # No symbol → full map for the desk (frontend polls it without args).
+    return {"ok": True, "levels": {s: _calc(s) for s in _cfg(request).symbols}}
 
 
 # -------------------------------------------------------------------- engine
+_BOOT_MS = int(time.time() * 1000)
+
+
 @router.get("/health")
 async def health(request: Request) -> dict[str, Any]:
     engine = _engine(request)
@@ -165,7 +178,11 @@ async def health(request: Request) -> dict[str, Any]:
         "service": "omnicee-python-backend",
         "engine": engine.status() if engine else {"running": False, "reason": "DISABLE_ENGINE=1"},
         "mongo": db.health() if db else {"ok": None, "enabled": False},
-        "feeds": feed_health["summary"],
+        "feeds": feed_health["feeds"],
+        "summary": feed_health["summary"],
+        "uptime": round((int(time.time() * 1000) - _BOOT_MS) / 1000),
+        "eaAuthFailures": None,
+        "eaAuthLastFailureAt": None,
         "timestamp": int(time.time() * 1000),
     }
 
@@ -182,7 +199,8 @@ async def signals(request: Request, symbol: str | None = None, limit: int = 100)
 async def audit_trail(request: Request, limit: int = 100) -> dict[str, Any]:
     engine = _engine(request)
     rows = engine.audit.tail(min(limit, 500)) if engine else []
-    return {"ok": True, "entries": rows, "count": len(rows)}
+    near = [e for e in rows if str(e.get("action", "")).upper() in ("WAIT", "NEAR_MISS")]
+    return {"ok": True, "entries": rows, "nearMisses": near, "count": len(rows)}
 
 
 @router.get("/status")
@@ -223,7 +241,7 @@ async def hurst(request: Request) -> dict[str, Any]:
         h = hurst_fn(closes)
         rows.append({"symbol": sym, "hurst": round(float(h), 4),
                      "character": "trending" if h > 0.55 else "mean-reverting" if h < 0.45 else "random-walk"})
-    return {"ok": True, "rows": rows}
+    return {"ok": True, "board": rows, "rows": rows}
 
 
 # ------------------------------------------------------------------- content
@@ -265,7 +283,10 @@ async def outlook(request: Request) -> dict[str, Any]:
     bear = [r for r in ranked if r.get("action") in ("SHORT", "SELL")]
     return {"ok": True, "topOpportunities": ranked[:5],
             "bias": "RISK-ON" if len(bull) > len(bear) else "RISK-OFF" if len(bear) > len(bull) else "MIXED",
-            "pricesTracked": len(rows)}
+            "pricesTracked": len(rows),
+            "outlook": {"topOpportunities": ranked[:5],
+                        "bias": "RISK-ON" if len(bull) > len(bear) else "RISK-OFF" if len(bear) > len(bull) else "MIXED",
+                        "pricesTracked": len(rows)}}
 
 
 # -------------------------------------------------------------------- feeds
@@ -299,12 +320,21 @@ async def api_vault() -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------- auth
+@router.get("/auth/email/config")
+async def auth_email_config(request: Request) -> dict[str, Any]:
+    cfg = _cfg(request)
+    return {"ok": True, "passwordRequired": bool(cfg.LOGIN_PASSWORD)}
+
+
 @router.post("/auth/email")
+@router.post("/auth/email/request")
 async def auth_email(request: Request, body: dict[str, Any]) -> dict[str, Any]:
     auth = getattr(request.app.state, "auth", None)
     if auth is None:
         raise HTTPException(503, "auth not configured")
     cfg = _cfg(request)
+    if cfg.LOGIN_PASSWORD and str(body.get("password", "")) != cfg.LOGIN_PASSWORD:
+        raise HTTPException(401, "invalid desk password")
     out = auth.request_otp(str(body.get("email", "")), request.client.host if request.client else "unknown")
     if out.get("status"):
         raise HTTPException(out.pop("status"), out.get("error", "rate limited"))
@@ -314,6 +344,7 @@ async def auth_email(request: Request, body: dict[str, Any]) -> dict[str, Any]:
 
 
 @router.post("/auth/verify")
+@router.post("/auth/email/verify")
 async def auth_verify(request: Request, body: dict[str, Any]) -> dict[str, Any]:
     auth = getattr(request.app.state, "auth", None)
     if auth is None:
@@ -352,6 +383,65 @@ async def alerts_test(request: Request) -> dict[str, Any]:
 
 
 # ------------------------------------------------- frontend-only endpoints
+@router.get("/watchlist")
+async def watchlist(request: Request) -> dict[str, Any]:
+    """Opportunity ranking + real relative strength from live candle closes."""
+    engine = _engine(request)
+    fm = _fm(request)
+    ranked = engine.ranker.get_ranked(10) if engine else []
+    rs: list[dict[str, Any]] = []
+    if fm:
+        for sym in _cfg(request).symbols:
+            arr = fm.store.get(sym, "H1") or fm.store.get(sym, "M15")
+            if len(arr) >= 2:
+                prev, last = float(arr[-2]["close"]), float(arr[-1]["close"])
+                if prev:
+                    rs.append({"symbol": sym, "change": round((last - prev) / prev * 100, 3)})
+    rs.sort(key=lambda r: r["change"], reverse=True)
+    return {"ok": True, "opportunities": ranked, "relativeStrength": rs or None,
+            "note": None if (rs or ranked) else "insufficient data for watchlist scoring"}
+
+
+@router.get("/journal")
+async def journal(request: Request, limit: int = 500) -> dict[str, Any]:
+    """Aggregate trading-journal stats from recorded outcomes (real only)."""
+    db = _db(request)
+    rows = db.get_outcomes(limit) if db else []
+    wins = sum(1 for r in rows if r.get("outcome") == "WIN")
+    losses = sum(1 for r in rows if r.get("outcome") == "LOSS")
+    breaks = sum(1 for r in rows if r.get("outcome") == "BE")
+    total = len(rows)
+    return {"ok": True, "count": total,
+            "stats": {"total": total, "wins": wins, "losses": losses, "breakEven": breaks,
+                      "winRate": round(wins / total, 4) if total else None}}
+
+
+@router.get("/desk-brief")
+async def desk_brief(request: Request) -> dict[str, Any]:
+    """Session briefing composed from real engine/calendar state only."""
+    engine = _engine(request)
+    fm = _fm(request)
+    cal = getattr(request.app.state, "calendar", None)
+    ranked = engine.ranker.get_ranked(5) if engine else []
+    events = cal.upcoming(3) if cal else []
+    utc_h = time.gmtime().tm_hour
+    if utc_h < 8:
+        session = "Sydney / Tokyo"
+    elif utc_h < 13:
+        session = "London"
+    elif utc_h < 16:
+        session = "London / New York overlap"
+    elif utc_h < 21:
+        session = "New York"
+    else:
+        session = "Late New York / Sydney"
+    rows = fm.resolved_market_rows() if fm else []
+    return {"ok": True, "session": session, "utcHour": utc_h,
+            "topOpportunities": ranked, "nextEvents": events,
+            "pricesTracked": len(rows),
+            "note": None if (ranked or events) else "engine warming up — brief fills in as feeds connect"}
+
+
 @router.get("/engine")
 async def engine_status(request: Request) -> dict[str, Any]:
     engine = _engine(request)
@@ -365,7 +455,13 @@ async def stats(request: Request) -> dict[str, Any]:
     db = _db(request)
     counts = db.get_stats() if db else {}
     engine = _engine(request)
-    return {"ok": True, "db": counts, "engine": engine._last_cycle_stats if engine else {}}
+    acct = engine.account_state if engine else None
+    return {"ok": True, "stats": counts, "db": counts,
+            "engine": engine._last_cycle_stats if engine else {},
+            # Real MT5-reported balance only — null until the EA syncs,
+            # never a fabricated number.
+            "accountBalance": acct.get("balance") if acct else None,
+            "accountEquity": acct.get("equity") if acct else None}
 
 
 @router.get("/outcomes")
@@ -435,6 +531,8 @@ async def ea_balance(request: Request, body: dict[str, Any],
         "margin": body.get("margin"), "freeMargin": body.get("freeMargin"),
         "atMs": int(time.time() * 1000),
     }
+    await engine.bus.emit("balance", {"balance": balance, "equity": equity,
+                                      "source": "mt5_ea", "at": engine.account_state["atMs"]})
     return {"ok": True, "balance": balance}
 
 

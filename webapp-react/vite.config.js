@@ -6,9 +6,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': { target: 'http://localhost:3001', changeOrigin: true },
-      '/health': { target: 'http://localhost:3001', changeOrigin: true },
-      '/socket.io': { target: 'http://localhost:3001', ws: true, changeOrigin: true },
+      // Single Python backend (uvicorn omnicee.api.app:asgi, default 8000).
+      '/api': { target: 'http://localhost:8000', changeOrigin: true },
+      '/health': { target: 'http://localhost:8000', changeOrigin: true },
+      '/socket.io': { target: 'http://localhost:8000', ws: true, changeOrigin: true },
     },
   },
   build: {
