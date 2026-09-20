@@ -35,15 +35,24 @@ class EventBus:
         self._emit_tasks: set[asyncio.Task[None]] = set()
 
     async def emit(self, channel: str, payload: Any) -> None:
+        """Fan out one payload. Plain subscribers receive the payload;
+        tagged subscribers (see subscribe_queue) receive (channel, payload).
+        A slow consumer never stalls the emitter: the oldest item is dropped."""
         for sub in list(self._subs.get(channel, ())):
             try:
-                sub.queue.put_nowait(payload)
+                if isinstance(sub, _TaggedSubscriber):
+                    sub.queue.put_nowait((channel, payload))
+                else:
+                    sub.queue.put_nowait(payload)
             except asyncio.QueueFull:
                 # A slow consumer must never stall the trading loop. Drop the
                 # oldest and log; silence is never an output, so this is loud.
                 try:
                     sub.queue.get_nowait()
-                    sub.queue.put_nowait(payload)
+                    if isinstance(sub, _TaggedSubscriber):
+                        sub.queue.put_nowait((channel, payload))
+                    else:
+                        sub.queue.put_nowait(payload)
                 except Exception:  # pragma: no cover
                     log.exception("bus drop failed", extra={"channel": channel})
 
@@ -82,25 +91,3 @@ class _TaggedSubscriber:
     def __init__(self, channel: str, queue: asyncio.Queue[tuple[str, Any]]) -> None:
         self.channel = channel
         self.queue = queue
-
-
-# Route emits to tagged subscribers as well.
-def _emit_impl(self: EventBus, channel: str, payload: Any) -> None:
-    for sub in list(self._subs.get(channel, ())):
-        try:
-            if isinstance(sub, _TaggedSubscriber):
-                sub.queue.put_nowait((channel, payload))
-            else:
-                sub.queue.put_nowait(payload)
-        except asyncio.QueueFull:
-            try:
-                sub.queue.get_nowait()
-                if isinstance(sub, _TaggedSubscriber):
-                    sub.queue.put_nowait((channel, payload))
-                else:
-                    sub.queue.put_nowait(payload)
-            except Exception:  # pragma: no cover
-                log.exception("bus drop failed", extra={"channel": channel})
-
-
-EventBus.emit = _emit_impl  # type: ignore[method-assign]

@@ -44,27 +44,28 @@ OMNICEE aggregates multi-agent confluence, session/risk gates, broker-grade pric
 ```
 
 **One backend, one process.** The Node runtime was fully retired; every module
-was ported behaviour-for-behaviour into `py/omnicee/`. A single Render service
-builds the React app and serves REST + Socket.IO + engine + static UI.
+was ported behaviour-for-behaviour into `omnicee/` at the repo root. A single
+Render service builds the React app and serves REST + Socket.IO + engine + static UI.
 
 ---
 
 ## Repository layout
 
 ```
-py/omnicee/          The entire backend (Python)
+omnicee/             The entire backend (Python, at the repo root)
   ├─ feeds/          WS + REST market data, news, calendar, COT, api_vault
   ├─ agents/         8 scorers (SMC, MTF, microstructure, pattern, ...)
   ├─ ensemble/       Monte Carlo, Bayesian, statistical, walk-forward gates
   ├─ risk/           Correlation, drawdown guard, session filter, sizing
-  ├─ orchestrator/   Engine loop, SL/TP, audit, opportunity ranker
+  ├─ engines/        SL/TP, trap, compression, cycle engines
+  ├─ orchestrator/   Engine loop, audit, opportunity ranker
   ├─ services/       Mongo persistence, event bus, auth, alerts
   └─ api/            FastAPI + Socket.IO (single ASGI app)
+tests/               pytest suite (29 tests)
 mt5/OmniceeEA.mq5    MetaTrader 5 bridge (prices + balance + approved trades)
 webapp-react/        Production frontend (Vite + React)
 render.yaml          Render Blueprint (single Python service)
 .env.example         All environment variables documented
-py/tests/            pytest suite (29 tests)
 ```
 
 ---
@@ -77,19 +78,19 @@ cd omnicee
 cp .env.example .env
 # Edit .env — at minimum MONGODB_URI + EA_SECRET for production use
 
-python -m venv py/.venv
-py/.venv/Scripts/pip install -r py/requirements.txt        # POSIX: py/.venv/bin/pip
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt               # POSIX: .venv/bin/pip
 npm --prefix webapp-react install
 npm --prefix webapp-react run build
 
-py/.venv/Scripts/python -m uvicorn omnicee.api.app:asgi --port 8000    # run from py/
+.venv\Scripts\python -m uvicorn omnicee.api.app:asgi --port 8000    # run from repo root
 # → http://localhost:8000
 ```
 
 Test suite (set `NODE_ENV=test` so the live engine never starts under tests):
 
 ```bash
-cd py && set NODE_ENV=test && python -m pytest tests -q
+set NODE_ENV=test&& python -m pytest tests -q
 ```
 
 ---
@@ -98,8 +99,8 @@ cd py && set NODE_ENV=test && python -m pytest tests -q
 
 1. Connect this repo; use **Blueprint** (`render.yaml`) or a single **Web Service**.
 2. **Build:**  
-   `pip install --no-cache-dir -r py/requirements.txt && npm --prefix webapp-react install --include=dev && npm --prefix webapp-react run build`
-3. **Start:** `uvicorn omnicee.api.app:asgi --host 0.0.0.0 --port $PORT` (working dir `py/`)
+   `pip install --no-cache-dir -r requirements.txt && npm --prefix webapp-react install --include=dev && npm --prefix webapp-react run build`
+3. **Start:** `uvicorn omnicee.api.app:asgi --host 0.0.0.0 --port $PORT` (working dir: repo root)
 4. **Health:** `GET /health`
 
 ### Required environment
@@ -192,9 +193,9 @@ Default symbols include major FX, gold, oil, dollar proxy (`UUP`), and major cry
 
 | Command | Action |
 |---------|--------|
-| `uvicorn omnicee.api.app:asgi` | Single service: REST + Socket.IO + engine (run from `py/`) |
+| `uvicorn omnicee.api.app:asgi` | Single service: REST + Socket.IO + engine (run from repo root) |
 | `DISABLE_ENGINE=1 uvicorn omnicee.api.app:asgi` | Stateless API mode (no live loop) |
-| `python -m pytest tests -q` | Test suite (run from `py/` with `NODE_ENV=test`) |
+| `python -m pytest tests -q` | Test suite (run from repo root with `NODE_ENV=test`) |
 | `npm run build --prefix webapp-react` | Build UI into `webapp-react/dist` |
 
 ---

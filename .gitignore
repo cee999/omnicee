@@ -4,3 +4,14 @@ node_modules/
 .DS_Store
 coverage/
 dist/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+.venv313/
+venv/
+*.egg-info/
+.cache/

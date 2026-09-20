@@ -78,17 +78,47 @@ class Database:
 
     def _setup_indexes(self) -> None:
         db = self._client[self._db_name]
-        db.signals.create_index([("timestamp", DESCENDING)])
-        db.signals.create_index([("symbol", ASCENDING), ("timeframe", ASCENDING), ("timestamp", DESCENDING)])
-        db.signals.create_index("expiresAt", expireAfterSeconds=0)
-        db.telemetry.create_index("expiresAt", expireAfterSeconds=0)
-        db.users.create_index("telegramId", unique=True)
-        db.users.create_index("email", unique=True, sparse=True)
-        db.email_otps.create_index("expiresAt", expireAfterSeconds=0)
-        db.sessions.create_index("expiresAt", expireAfterSeconds=0)
-        db.market_snapshots.create_index("createdAt", expireAfterSeconds=3 * 86400)
-        db.trade_outcomes.create_index("signalId", unique=True, sparse=True)
-        db.candle_history.create_index([("source", ASCENDING), ("symbol", ASCENDING), ("timeframe", ASCENDING)], unique=True)
+        plans: list[tuple[str, object, dict[str, Any]]] = [
+            ("signals", [("timestamp", DESCENDING)], {}),
+            ("signals", [("symbol", ASCENDING), ("timeframe", ASCENDING), ("timestamp", DESCENDING)], {}),
+            ("signals", "expiresAt", {"expireAfterSeconds": 0}),
+            ("telemetry", "expiresAt", {"expireAfterSeconds": 0}),
+            ("users", "telegramId", {"unique": True}),
+            ("users", "email", {"unique": True, "sparse": True}),
+            ("email_otps", "expiresAt", {"expireAfterSeconds": 0}),
+            ("sessions", "expiresAt", {"expireAfterSeconds": 0}),
+            ("market_snapshots", "createdAt", {"expireAfterSeconds": 3 * 86400}),
+            ("trade_outcomes", "signalId", {"unique": True, "sparse": True}),
+            ("candle_history",
+             [("source", ASCENDING), ("symbol", ASCENDING), ("timeframe", ASCENDING)],
+             {"unique": True}),
+        ]
+        for coll_name, keys, opts in plans:
+            try:
+                db[coll_name].create_index(keys, **opts)
+            except Exception:
+                # Legacy (Node-era) databases hold some of these indexes under
+                # different names (e.g. signal_lookup) — create_index then fails
+                # with IndexOptionsConflict. Reuse the existing index instead of
+                # killing the Mongo connection; one bad index must never take
+                # persistence down.
+                if not self._reuse_matching_index(db[coll_name], keys):
+                    log.exception("index setup failed on %s", coll_name)
+
+    @staticmethod
+    def _reuse_matching_index(coll: Any, keys: object) -> bool:
+        key_map = {keys: 1} if isinstance(keys, str) else dict(keys)  # type: ignore[arg-type]
+        try:
+            for idx in coll.list_indexes():
+                if dict(idx.get("key", {})) == key_map:
+                    log.warning(
+                        "index on %s: reusing existing index named %s (created under a different name)",
+                        coll.name, idx.get("name"),
+                    )
+                    return True
+        except Exception:
+            log.exception("list_indexes failed on %s", coll.name)
+        return False
 
     def health(self) -> dict[str, Any]:
         if not self.enabled:

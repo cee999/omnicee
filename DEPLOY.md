@@ -7,11 +7,11 @@ runtime was fully retired.
 ## Render (recommended)
 
 Use the Blueprint in [`render.yaml`](render.yaml) — it builds the React app,
-installs `py/requirements.txt`, and starts uvicorn with the right env vars.
+installs `requirements.txt`, and starts uvicorn with the right env vars.
 Manual equivalent for a single Web Service:
 
-- **Build:** `pip install --no-cache-dir -r py/requirements.txt && npm --prefix webapp-react install --include=dev && npm --prefix webapp-react run build`
-- **Start:** `uvicorn omnicee.api.app:asgi --host 0.0.0.0 --port $PORT` (working dir `py/`)
+- **Build:** `pip install --no-cache-dir -r requirements.txt && npm --prefix webapp-react install --include=dev && npm --prefix webapp-react run build`
+- **Start:** `uvicorn omnicee.api.app:asgi --host 0.0.0.0 --port $PORT` (working dir: repo root)
 - **Health check:** `/health`
 
 Required env vars (see [`.env.example`](.env.example) for the full list):
@@ -29,9 +29,9 @@ After=network.target
 [Service]
 Type=simple
 User=your-user
-WorkingDirectory=/path/to/omnicee/py
+WorkingDirectory=/path/to/omnicee
 Environment=NODE_ENV=production
-Environment=PYTHONPATH=/path/to/omnicee/py
+Environment=PYTHONPATH=/path/to/omnicee
 ExecStart=/usr/bin/python3 -m uvicorn omnicee.api.app:asgi --host 0.0.0.0 --port 8000
 Restart=on-failure
 RestartSec=10
@@ -53,7 +53,7 @@ sudo journalctl -u omnicee -f
 - `DISABLE_ENGINE=1` gives the old stateless-brain mode (REST API only, no
   live loop) — useful for debugging the API surface in isolation.
 - For durable persistence enable MongoDB and set `MONGODB_URI`.
-- A lightweight market/candles cache is persisted to `py/.cache/` for faster
-  cold starts (gitignored — never commit it).
+- A lightweight market/candles cache is persisted to `.cache/` at the working
+  directory root (gitignored — never commit it).
 
 *** End of file

@@ -123,15 +123,15 @@ services:
     name: omnicee
     runtime: python
     # Free tier: 512 MB RAM, spins down after ~15 min idle. Measured
-    # dependency footprint is ~225 MB (see py/requirements.txt), leaving
+    # dependency footprint is ~225 MB (see requirements.txt), leaving
     # headroom for the asyncio engine. Upgrade to `starter` when going live.
     plan: free
     region: singapore   # Binance/Deriv WS reachable from here (US IPs get 451)
     # Build: install Python deps, then build the React dashboard.
     # NODE_ENV=production is ambient during build, so webapp-react's dev
     # deps must be forced with --include=dev (vite lives there).
-    buildCommand: pip install --no-cache-dir -r py/requirements.txt && npm --prefix webapp-react install --include=dev --fetch-retries=5 --fetch-retry-mintimeout=20000 && npm --prefix webapp-react run build && test -f webapp-react/dist/index.html
-    startCommand: cd py && uvicorn omnicee.api.app:asgi --host 0.0.0.0 --port $PORT --workers 1
+    buildCommand: pip install --no-cache-dir -r requirements.txt && npm --prefix webapp-react install --include=dev --fetch-retries=5 --fetch-retry-mintimeout=20000 && npm --prefix webapp-react run build && test -f webapp-react/dist/index.html
+    startCommand: uvicorn omnicee.api.app:asgi --host 0.0.0.0 --port $PORT --workers 1
     healthCheckPath: /health
     autoDeployTrigger: commit
     envVars:

@@ -231,7 +231,8 @@ async def socket_health() -> dict[str, object]:
 # /api/*, /health and /docs always win.
 from pathlib import Path as _Path  # noqa: E402
 
-_DIST = _Path(__file__).resolve().parents[3] / "webapp-react" / "dist"
+# omnicee/api/app.py -> parents[0]=api, [1]=omnicee, [2]=repo root
+_DIST = _Path(__file__).resolve().parents[2] / "webapp-react" / "dist"
 if _DIST.is_dir():
     from fastapi.staticfiles import StaticFiles
 

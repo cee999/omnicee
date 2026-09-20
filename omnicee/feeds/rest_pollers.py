@@ -170,7 +170,9 @@ class BiQuotePoller(RestPoller):
 class TradingViewPoller(RestPoller):
     name = "tradingview"
     MARKETS: ClassVar[dict[str, dict[str, Any]]] = {
-        "forex-am": {"prefix": "OANDA:", "syms": ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "NZDUSD", "USDCHF"]},
+        # NOTE: the scanner market for OANDA forex is `forex` — `forex-am`
+        # returns 404 (verified live). crypto/cfd/america are valid.
+        "forex": {"prefix": "OANDA:", "syms": ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "NZDUSD", "USDCHF"]},
         "crypto": {"prefix": "BINANCE:", "syms": ["BTCUSDT", "ETHUSDT"]},
         "cfd": {"prefix": "TVC:", "syms": ["USOIL"]},
         "america": {"prefix": "AMEX:", "syms": ["UUP"]},
