@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
-from typing import Literal
+from typing import ClassVar, Literal
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -165,6 +165,35 @@ class Settings(BaseSettings):
         if not cleaned:
             raise ValueError("must contain at least one entry")
         return cleaned
+
+    # Fields expressed on a 0.0-1.0 scale. The retired Node service carried
+    # some of these on a 0-100 scale, and stale env groups (Render) may still
+    # hold e.g. ENSEMBLE_MIN_CONFIDENCE=60. Normalise >1 down by /100 instead
+    # of refusing to boot.
+    _ZERO_ONE_SCALE: ClassVar[tuple[str, ...]] = (
+        "BAYES_PRIOR",
+        "BAYES_MIN_POSTERIOR",
+        "MC_MIN_WIN_PROB",
+        "ENSEMBLE_MIN_CONFIDENCE",
+        "LEARNING_WARN_WIN_RATE",
+        "LEARNING_BLOCK_WIN_RATE",
+        "KELLY_FRACTION_CAP",
+    )
+
+    @field_validator(*_ZERO_ONE_SCALE, mode="before")
+    @classmethod
+    def _normalize_legacy_percent(cls, v: object) -> object:
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return v / 100.0 if v > 1.0 else v
+        if isinstance(v, str):
+            try:
+                f = float(v.strip())
+            except ValueError:
+                return v  # let pydantic raise a proper type error
+            return f / 100.0 if f > 1.0 else v
+        return v
 
     @field_validator("MONGODB_URI", "BRAIN_SHARED_SECRET", mode="before")
     @classmethod
