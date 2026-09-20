@@ -1,13 +1,15 @@
-# Runtime dependencies for the OMNICee Python brain.
-# Pinned to compatible ranges, not exact versions, so security patches land.
+# Runtime dependencies for the OMNICee Python backend (single-service).
 #
 # Footprint on disk (measured, not estimated):
-#   numpy       ~40 MB
-#   scipy      ~109 MB   (required by scikit-learn)
+#   numpy        ~40 MB
+#   scipy       ~109 MB   (required by scikit-learn)
 #   scikit-learn ~45 MB
 #   fastapi + uvicorn + pydantic  ~25 MB
-#   ------------------------------------
-#   total       ~220 MB   -> fits Render's free tier with room for the heap
+#   pymongo      ~1 MB    (MongoDB driver, pure C extensions)
+#   python-socketio ~1 MB (Socket.IO v4 protocol server — same wire protocol
+#                          as socket.io-client v4 used by webapp-react)
+#   --------------------------------------------------
+#   total       ~225 MB   -> fits Render's free tier with room for the heap
 #
 # Deliberately ABSENT and why:
 #   torch / tensorflow  ~900 MB+ installed, 300 MB+ resident. Will not fit.
@@ -24,3 +26,6 @@ numpy>=1.26,<3.0
 scikit-learn>=1.4,<2.0
 httpx>=0.27,<1.0
 orjson>=3.10,<4.0
+pymongo>=4.6,<5.0
+python-socketio>=5.11,<6.0
+websockets>=12.0,<16.0

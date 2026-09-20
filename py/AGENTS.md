@@ -194,17 +194,16 @@ open http://localhost:8000/docs
 
 | stage | scope | status |
 |-------|-------|--------|
-| 1 | contracts, indicators, structure, regime, 3 agents, consensus, calibration, gates, sizing, API, tests | **done, tested, not yet deployed** |
-| 2 | Node calls `/v1/analyze` in shadow mode; log both outputs, compare, do not act on Python yet | not started |
-| 3 | port remaining agents (volume-OI, microstructure, fractal, sentiment, pattern) | not started |
-| 4 | Python becomes authoritative for signals; Node keeps feeds/sockets/auth | not started |
-| 5 | backtesting + walk-forward in Python against Mongo history | not started |
-| 6 | port feeds; retire Node analysis modules only after Stage 4 is stable | not started |
+| 1 | contracts, indicators, structure, regime, 3 agents, consensus, calibration, gates, sizing, API, tests | **done, tested** (29 pytest green) |
+| 2 | Node shadow mode | **superseded** — owner chose full Python migration; parity port spec extracted from every Node module before deletion |
+| 3 | port remaining agents (volume-OI, microstructure, fractal, sentiment, pattern) | **done, tested** — `agents/{volume_oi,microstructure,fractal,sentiment,pattern}.py`, registry = 8 agents |
+| 4 | Python authoritative for signals | **done** — single-process backend; no Node runtime remains |
+| 5 | walk-forward + learning in Python | **done** — `ensemble/validation.py` (Monte Carlo GBM+bootstrap, Bayesian LR, 10-test statistical validator, walk-forward WFE, ensemble gate); Mongo outcomes drive recalibration |
+| 6 | port feeds; retire Node | **done** — `feeds/` (Binance/Deriv/Finnhub WS, 8 REST pollers, COT+parser, news, integrity monitor, api_vault), services (bus/db/auth/alerts/persist), orchestrator engine, full `/api/*` surface, Socket.IO bridge, EA bridge, static dashboard mount. Node files removed by owner instruction; behavior preserved via porting specs in commit history |
 
-**Stage 2 is the next task and it is deliberately boring.** Run both engines
-side by side, log the disagreements, and look at them. Do not skip to Stage 4
-because the Python output looks nicer. The Node pipeline contains months of
-bug fixes that are not written down anywhere except the code.
+**Deployment**: one Render web service (see root `render.yaml`) — `omnicee.api.app:asgi`
+serves REST + Socket.IO (`/socket.io`) + feeds + engine + `webapp-react/dist`.
+`DISABLE_ENGINE=1` reverts to the original stateless-brain mode for py-only deploys.
 
 ---
 

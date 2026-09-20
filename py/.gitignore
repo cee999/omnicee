@@ -6,3 +6,8 @@ __pycache__/
 venv/
 *.egg-info/
 .env
+py/.gitignore:1:__pycache__/
+py/.gitignore:3:.pytest_cache/
+py/.gitignore:4:.ruff_cache/
+py/.gitignore:5:.venv/
+py/.gitignore:6:venv/

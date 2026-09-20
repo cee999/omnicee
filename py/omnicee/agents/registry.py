@@ -8,9 +8,14 @@ persisted on every historical signal and used to weight the learner.
 from __future__ import annotations
 
 from .base import Agent
+from .fractal import FractalAgent
+from .microstructure import MicrostructureAgent
 from .momentum import MomentumAgent
 from .mtf import MTFAgent
+from .pattern import PatternAgent
+from .sentiment import SentimentAgent
 from .smc import SMCAgent
+from .volume_oi import VolumeOIAgent
 
 __all__ = ["AGENT_CLASSES", "build_agents"]
 
@@ -18,6 +23,11 @@ AGENT_CLASSES: list[type[Agent]] = [
     SMCAgent,
     MTFAgent,
     MomentumAgent,
+    PatternAgent,
+    SentimentAgent,
+    VolumeOIAgent,
+    MicrostructureAgent,
+    FractalAgent,
 ]
 
 
