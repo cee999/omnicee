@@ -24,7 +24,8 @@ import abc
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 from ..contracts.market import MarketSnapshot
 from ..contracts.signals import AgentVote, Direction
@@ -42,6 +43,8 @@ class AgentContext:
     snapshot: MarketSnapshot
     regime: RegimeRead
     request_id: str = ""
+    #: engine context (news, COT, sentiment) for context-aware agents
+    external: dict[str, Any] = field(default_factory=dict)
 
 
 class Agent(abc.ABC):

@@ -14,9 +14,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..contracts.market import MarketSnapshot
 from ..contracts.signals import AgentVote, Direction
-from ..features.regime import RegimeRead
 from .base import Agent, AgentContext
 
 

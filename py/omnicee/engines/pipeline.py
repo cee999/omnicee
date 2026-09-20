@@ -12,7 +12,6 @@ from typing import Any
 
 import numpy as np
 
-
 # ---------------------------------------------------------------------------
 # SL/TP engine
 
@@ -241,9 +240,7 @@ def select_strategy(regime: dict[str, Any], signal_action: str) -> dict[str, Any
     elif volatility == "COMPRESSION":
         mult *= 0.95
     trend = str(regime.get("trend", "")).upper()
-    if trend == "BULL_TREND" and signal_action.upper() in ("SHORT", "SELL"):
-        mult *= 0.9
-    elif trend == "BEAR_TREND" and signal_action.upper() in ("LONG", "BUY"):
+    if (trend == "BULL_TREND" and signal_action.upper() in ("SHORT", "SELL")) or (trend == "BEAR_TREND" and signal_action.upper() in ("LONG", "BUY")):
         mult *= 0.9
     elif trend in ("BULL_TREND", "BEAR_TREND"):
         mult *= 1.05

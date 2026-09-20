@@ -15,7 +15,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from ..config import Settings
 from ..services.bus import EventBus
@@ -81,12 +82,10 @@ class CandleStore:
     def _valid(c: dict[str, Any]) -> bool:
         try:
             t = float(c["time"])
-            o, h, l, cl = float(c["open"]), float(c["high"]), float(c["low"]), float(c["close"])
+            o, h, lo, cl = float(c["open"]), float(c["high"]), float(c["low"]), float(c["close"])
         except (KeyError, TypeError, ValueError):
             return False
-        if min(t, o, h, l, cl) <= 0 or h < l or o < l or o > h or cl < l or cl > h:
-            return False
-        return True
+        return not (min(t, o, h, lo, cl) <= 0 or h < lo or o < lo or o > h or cl < lo or cl > h)
 
 
 class FeedManager:
@@ -100,6 +99,7 @@ class FeedManager:
         self._last_market_emit: dict[str, float] = {}
         self._hold_price: dict[str, tuple[float, int, str]] = {}  # symbol -> (price, until_ms, source)
         self._tasks: list[asyncio.Task[None]] = []
+        self._tick_tasks: set[asyncio.Task[None]] = set()
 
     # ------------------------------------------------------------ ingestion
     async def on_price(self, symbol: str, price: float, source: str,
@@ -149,7 +149,9 @@ class FeedManager:
     def on_tick(self, symbol: str, price: float, source: str, **kw: Any) -> None:
         """Sync bridge for WS feeds running their own tasks."""
         loop = asyncio.get_running_loop()
-        loop.create_task(self.on_price(symbol, price, source, **kw))
+        task = loop.create_task(self.on_price(symbol, price, source, **kw))
+        self._tick_tasks.add(task)
+        task.add_done_callback(self._tick_tasks.discard)
 
     # ------------------------------------------------------------ resolution
     def resolved_market_rows(self, symbols: list[str] | None = None) -> list[dict[str, Any]]:
@@ -170,6 +172,19 @@ class FeedManager:
 
     def spawn(self, coro: Any) -> None:
         self._tasks.append(asyncio.get_running_loop().create_task(coro))
+
+    async def stop(self) -> None:
+        """Cancel every spawned task (feeds, engine loop, persist, bridge)."""
+        for task in self._tasks:
+            task.cancel()
+        for task in self._tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                log.exception("task failed during shutdown")
+        self._tasks.clear()
 
     async def health_report(self) -> dict[str, Any]:
         feeds = [s.as_dict() for s in self.stats.values()]

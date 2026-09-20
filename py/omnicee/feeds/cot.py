@@ -38,12 +38,14 @@ class CotReport:
 
     def ingest(self, symbol: str, rows: list[dict[str, Any]]) -> None:
         hist = self._history.setdefault(symbol, deque(maxlen=HISTORY_WEEKS))
+
+        def _num(field: str) -> int:
+            try:
+                return int(r.get(field) or 0)
+            except (TypeError, ValueError):
+                return 0
+
         for r in rows:
-            def _num(field: str) -> int:
-                try:
-                    return int(r.get(field) or 0)
-                except (TypeError, ValueError):
-                    return 0
             hist.append({
                 "date": r.get("report_date_as_yyyy_mm_dd"),
                 "commercialLong": _num("comm_positions_long_all"),

@@ -22,7 +22,7 @@ import secrets
 import time
 import uuid
 from contextlib import asynccontextmanager
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse
@@ -64,6 +64,8 @@ class AccountStatePayload(BaseModel):
 class AnalyzeRequest(BaseModel):
     snapshot: MarketSnapshot
     account: AccountStatePayload | None = None
+    # Engine context for context-aware agents (news, COT, sentiment, calendar).
+    external: dict[str, Any] = Field(default_factory=dict)
 
 
 class CalibrationFitRequest(BaseModel):
@@ -99,6 +101,9 @@ async def lifespan(app: FastAPI):
     engine = getattr(app.state, "engine", None)
     if engine:
         engine.stop()
+    fm = getattr(app.state, "feed_manager", None)
+    if fm:
+        await fm.stop()
     log.info("brain shutting down")
 
 
@@ -179,7 +184,8 @@ async def analyze(req: AnalyzeRequest, request: Request) -> AnalysisResult:
     deps = PipelineDeps(settings=app.state.settings, calibrator=app.state.calibrator)
     account = req.account.to_state() if req.account else AccountState()
     return await analyse(
-        req.snapshot, deps, account=account, request_id=request.state.request_id
+        req.snapshot, deps, account=account, request_id=request.state.request_id,
+        external=req.external,
     )
 
 
@@ -204,7 +210,8 @@ async def list_agents() -> list[dict[str, object]]:
 
 
 # ---- full public surface (replaces the Node api/server.js routes) ----
-from .server import router as api_router, sio  # noqa: E402
+from .server import router as api_router  # noqa: E402
+from .server import sio  # noqa: E402
 
 app.include_router(api_router)
 

@@ -9,11 +9,9 @@ from __future__ import annotations
 
 import time
 from collections import deque
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
-
-from ..engines.pipeline import atr_wilder
 
 KNOWN_CORRELATIONS = {
     ("EURUSD", "GBPUSD"): 0.85, ("EURUSD", "USDCHF"): -0.90, ("BTCUSDT", "ETHUSDT"): 0.90,
@@ -209,7 +207,7 @@ class DrawdownGuard:
 class SessionFilter:
     """Session/news/weekend gate — returns a size multiplier (0 = block)."""
 
-    LIQUIDITY: dict[str, list[float]] = {
+    LIQUIDITY: ClassVar[dict[str, list[float]]] = {
         "FOREX_MAJOR": [0.3, 0.2, 0.2, 0.2, 0.3, 0.5, 0.7, 0.9, 1.0, 0.95, 0.9, 0.85, 0.8, 0.9, 1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.35, 0.35, 0.3],
         "CRYPTO": [0.8] * 24,
         "METALS": [0.3, 0.2, 0.2, 0.2, 0.3, 0.5, 0.7, 0.9, 1.0, 0.95, 0.9, 0.85, 0.8, 0.9, 1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.35, 0.35, 0.3],
@@ -267,7 +265,7 @@ class SessionFilter:
 class PositionSizer:
     """ATR-based sizing with volatility scaling, drawdown and session factors."""
 
-    LOT_STEP = {"BTCUSDT": 0.001, "ETHUSDT": 0.01, "XAUUSD": 0.01, "EURUSD": 0.01, "GBPUSD": 0.01}
+    LOT_STEP: ClassVar[dict[str, float]] = {"BTCUSDT": 0.001, "ETHUSDT": 0.01, "XAUUSD": 0.01, "EURUSD": 0.01, "GBPUSD": 0.01}
 
     def __init__(self, balance: float, risk_pct: float, max_risk_pct: float = 2.0,
                  leverage: int = 20, drawdown: DrawdownGuard | None = None) -> None:

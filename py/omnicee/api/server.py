@@ -35,26 +35,31 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import socketio
 import time
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+import socketio
+from fastapi import APIRouter, Header, HTTPException, Request
 
-from ..config import get_settings
-from ..services.auth import timing_safe_eq
 from ..feeds.api_vault import status_report as vault_report
 from ..feeds.cot import CotFeed, CotReport
 from ..feeds.integrity import DataIntegrityMonitor
 from ..feeds.manager import FeedManager
 from ..feeds.news import fetch_news
-from ..feeds.rest_pollers import (AlphaVantageSentiment, BiQuotePoller,
-                                  CalendarPoller, ExchangeRatePoller,
-                                  FrankfurterPoller, FredPoller,
-                                  MarketInfoPoller, TradingViewPoller,
-                                  YahooQuotePoller)
+from ..feeds.rest_pollers import (
+    AlphaVantageSentiment,
+    BiQuotePoller,
+    CalendarPoller,
+    ExchangeRatePoller,
+    FrankfurterPoller,
+    FredPoller,
+    MarketInfoPoller,
+    TradingViewPoller,
+    YahooQuotePoller,
+)
 from ..feeds.ws_feeds import BinanceFeed, DerivFeed, FinnhubWS
 from ..orchestrator.engine import Orchestrator
+from ..services.auth import timing_safe_eq
 
 log = logging.getLogger("omnicee.api.server")
 
@@ -203,6 +208,7 @@ async def equity_curve(request: Request) -> dict[str, Any]:
 @router.get("/hurst")
 async def hurst(request: Request) -> dict[str, Any]:
     import numpy as np
+
     from ..features.indicators import hurst as hurst_fn
     fm = _fm(request)
     if fm is None:
@@ -273,7 +279,6 @@ async def feed_health(request: Request) -> dict[str, Any]:
 @router.get("/cache/status")
 async def cache_status(request: Request) -> dict[str, Any]:
     fm = _fm(request)
-    persist = fm.persist if fm else None
     import os
     files = {}
     for name in ("market.json", "candles.json"):
@@ -409,6 +414,30 @@ def _require_ea_secret(request: Request, secret: str | None) -> None:
         raise HTTPException(401, "invalid EA secret")
 
 
+@router.post("/ea/balance")
+async def ea_balance(request: Request, body: dict[str, Any],
+                     x_ea_secret: Annotated[str | None, Header()] = None,
+                     secret: str | None = None) -> dict[str, Any]:
+    """MT5 EA account sync — gates and sizing run on the real balance."""
+    _require_ea_secret(request, secret or x_ea_secret)
+    engine = _engine(request)
+    if engine is None:
+        raise HTTPException(503, "engine disabled")
+    try:
+        balance = float(body.get("balance") or 0.0)
+        equity = float(body.get("equity") or 0.0)
+    except (TypeError, ValueError):
+        raise HTTPException(422, "balance and equity must be numbers") from None
+    if balance <= 0:
+        raise HTTPException(422, "balance must be positive")
+    engine.account_state = {
+        "balance": balance, "equity": equity,
+        "margin": body.get("margin"), "freeMargin": body.get("freeMargin"),
+        "atMs": int(time.time() * 1000),
+    }
+    return {"ok": True, "balance": balance}
+
+
 @router.get("/ea/signals")
 async def ea_signals(request: Request, secret: str | None = None) -> dict[str, Any]:
     """Latest executable signals for the MT5 EA poller."""
@@ -416,8 +445,14 @@ async def ea_signals(request: Request, secret: str | None = None) -> dict[str, A
     db = _db(request)
     rows = db.get_signals(limit=20) if db else []
     now = time.time() * 1000
-    fresh = [r for r in rows if now - float(r.get("timestamp") or 0) < 10 * 60_000]
-    return {"ok": True, "signals": fresh[:5]}
+    # Only calibrated-confidence signals are executable: CANDIDATE means
+    # confidence was never earned, and the EA must not trade on it.
+    executable = {"validated", "approved"}
+    fresh = [r for r in rows
+             if now - float(r.get("timestamp") or 0) < 10 * 60_000
+             and str(r.get("state") or "") in executable]
+    return {"ok": True, "signals": fresh[:5],
+            "note": None if fresh else "no validated signals in the last 10 minutes"}
 
 
 @router.post("/ea/prices")
@@ -448,16 +483,76 @@ async def ea_prices(request: Request, body: dict[str, Any], secret: str | None =
 
 
 # ------------------------------------------------------------ socket bridge
+# The React app listens on these names (the Node contract); the bus emits the
+# engine's internal names. Map at the boundary, never inside the engine.
+CHANNEL_ALIAS = {"market_update": "market", "engine_telemetry": "telemetry"}
+
+
 async def _socket_bridge(app) -> None:
     """Fan the event bus out to connected Socket.IO clients."""
     bus = app.state.bus
-    q = bus.subscribe_queue("market_update", "signal", "engine_telemetry", "feed_health", "candles_seeded")
+    q = bus.subscribe_queue("market_update", "signal", "engine_telemetry",
+                            "feed_health", "candles_seeded")
     while True:
         channel, payload = await q.get()
         try:
-            await sio.emit(channel, payload)
+            await sio.emit(CHANNEL_ALIAS.get(channel, channel), payload)
         except Exception:
             log.exception("socket emit failed for %s", channel)
+
+
+# ---- Socket.IO client contract (subscribe / history / heartbeat) ---------
+@sio.event
+async def connect(sid: str, environ: dict[str, Any]) -> None:
+    state = getattr(sio, "omnicee_state", None)
+    ready = state is not None and getattr(state, "engine", None) is not None
+    try:
+        await sio.emit("engine_ready", {"ok": ready}, to=sid)
+    except Exception:
+        log.exception("engine_ready emit failed")
+
+
+@sio.on("subscribe")
+async def on_subscribe(sid: str, data: Any = None) -> None:
+    channels = data.get("channels") if isinstance(data, dict) else None
+    try:
+        await sio.emit("subscribed", {"ok": True, "channels": channels or []}, to=sid)
+    except Exception:
+        log.exception("subscribed ack failed")
+
+
+@sio.on("get_history")
+async def on_get_history(sid: str, data: Any = None) -> None:
+    """Recent signals + current market rows, replayed on (re)connect."""
+    state = getattr(sio, "omnicee_state", None)
+    limit = int(data.get("limit") or 40) if isinstance(data, dict) else 40
+    db = getattr(state, "db", None)
+    fm = getattr(state, "feed_manager", None)
+    try:
+        signals = db.get_signals(limit=limit) if db else []
+    except Exception:
+        log.exception("get_history signals query failed")
+        signals = []
+    try:
+        rows = fm.resolved_market_rows() if fm else []
+    except Exception:
+        log.exception("get_history market rows failed")
+        rows = []
+    try:
+        await sio.emit("history", {"signals": signals, "market": rows,
+                                   "serverTime": int(time.time() * 1000)}, to=sid)
+    except Exception:
+        log.exception("history emit failed")
+
+
+@sio.on("heartbeat")
+async def on_heartbeat(sid: str, data: Any = None) -> None:
+    try:
+        await sio.emit("heartbeat_ack",
+                       {"t": data.get("t") if isinstance(data, dict) else None,
+                        "serverTime": int(time.time() * 1000)}, to=sid)
+    except Exception:
+        log.exception("heartbeat ack failed")
 
 
 # ------------------------------------------------------------------ assembly
@@ -496,10 +591,10 @@ async def start_backend(app) -> dict[str, Any]:
     engine = Orchestrator(cfg, bus, db, fm, cot_feed, market_info, calendar)
     app.state.engine = engine
 
-    from ..services.alerts import AlertDispatcher
     from ..services.auth import AuthService
     app.state.auth = AuthService(cfg, db)
     app.state.alerts = engine.alerts
+    sio.omnicee_state = app.state  # for socket handlers needing engine/db/feeds
 
     monitor = DataIntegrityMonitor()
     feeds: list[Any] = []

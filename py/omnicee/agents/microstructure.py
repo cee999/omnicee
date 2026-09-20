@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..contracts.market import MarketSnapshot
 from ..contracts.signals import AgentVote, Direction
 from .base import Agent, AgentContext
 
@@ -98,7 +97,6 @@ def _cvd(open_: np.ndarray, high: np.ndarray, low: np.ndarray, close: np.ndarray
         return slope / mean
 
     cvd_slope = _norm_slope(cvd)
-    price_slope = _norm_slope(close)
     half = min(30, n) // 2
     divergence = "NONE"
     if half >= 2:
@@ -130,13 +128,13 @@ class MicrostructureAgent(Agent):
         s = ctx.snapshot.primary()
         o = np.asarray(s.open, dtype=float)
         h = np.asarray(s.high, dtype=float)
-        l = np.asarray(s.low, dtype=float)
+        lo = np.asarray(s.low, dtype=float)
         c = np.asarray(s.close, dtype=float)
         v = np.asarray(s.volume if s.volume is not None and len(s.volume) == len(c) else np.ones(len(c)), dtype=float)
         reasons: list[str] = []
         long_s = short_s = 45.0
 
-        profile = _volume_profile(h[-100:], l[-100:], o[-100:], c[-100:], v[-100:])
+        profile = _volume_profile(h[-100:], lo[-100:], o[-100:], c[-100:], v[-100:])
         if profile:
             poc = profile["poc"]
             price = float(c[-1])
@@ -165,7 +163,7 @@ class MicrostructureAgent(Agent):
                 short_s += 12
                 reasons.append("initiative selling below value")
 
-        cvd = _cvd(o, h, l, c, v)
+        cvd = _cvd(o, h, lo, c, v)
         if cvd:
             if cvd["trend"] == "ACCUMULATION":
                 long_s += 12

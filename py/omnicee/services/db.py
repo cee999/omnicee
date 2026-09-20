@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pymongo import ASCENDING, DESCENDING, MongoClient, ReturnDocument
@@ -25,7 +25,7 @@ MAX_STORED_CANDLES = 500
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _ttl_expiry(days: int) -> datetime:
@@ -340,7 +340,7 @@ class Database:
             if key:
                 by_key.setdefault(key, []).append(o)
         profiles = []
-        for key, rows in by_key.items():
+        for key in by_key:
             prof = self.get_learning_profile(key)
             if prof:
                 profiles.append(prof)

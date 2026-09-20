@@ -11,11 +11,11 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any
+from typing import Any, ClassVar
 
 import websockets
 
-from .base import FeedStats, TF_SECONDS, to_ms
+from .base import FeedStats, to_ms
 
 log = logging.getLogger(__name__)
 
@@ -132,7 +132,7 @@ class DerivFeed:
                             last_drain = now
                         try:
                             raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
-                        except asyncio.TimeoutError:
+                        except TimeoutError:
                             if self._last_tick_ms and now * 1000 - self._last_tick_ms > 25_000:
                                 log.warning("deriv watchdog: no tick for 25s, reconnecting")
                                 break
@@ -181,10 +181,10 @@ class DerivFeed:
 class FinnhubWS:
     name = "finnhub_ws"
 
-    FOREX_MAP = {"XAUUSD": "OANDA:XAU_USD", "EURUSD": "OANDA:EUR_USD", "GBPUSD": "OANDA:GBP_USD",
-                 "USDJPY": "OANDA:USD_JPY", "AUDUSD": "OANDA:AUD_USD", "USDCAD": "OANDA:USD_CAD",
-                 "NZDUSD": "OANDA:NZD_USD", "USDCHF": "OANDA:USD_CHF"}
-    EQUITY_MAP = {"UUP": "UUP", "USOIL": "USO"}
+    FOREX_MAP: ClassVar[dict[str, str]] = {"XAUUSD": "OANDA:XAU_USD", "EURUSD": "OANDA:EUR_USD", "GBPUSD": "OANDA:GBP_USD",
+                                           "USDJPY": "OANDA:USD_JPY", "AUDUSD": "OANDA:AUD_USD", "USDCAD": "OANDA:USD_CAD",
+                                           "NZDUSD": "OANDA:NZD_USD", "USDCHF": "OANDA:USD_CHF"}
+    EQUITY_MAP: ClassVar[dict[str, str]] = {"UUP": "UUP", "USOIL": "USO"}
 
     def __init__(self, api_key: str, symbols: list[str], on_price: Any) -> None:
         self.api_key = (api_key or "").strip()

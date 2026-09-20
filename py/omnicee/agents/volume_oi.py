@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..contracts.market import MarketSnapshot
 from ..contracts.signals import AgentVote, Direction
 from .base import Agent, AgentContext
 
@@ -21,7 +20,7 @@ class VolumeOIAgent(Agent):
         s = ctx.snapshot.primary()
         o = np.asarray(s.open, dtype=float)
         h = np.asarray(s.high, dtype=float)
-        l = np.asarray(s.low, dtype=float)
+        lo = np.asarray(s.low, dtype=float)
         c = np.asarray(s.close, dtype=float)
         v = np.asarray(s.volume if s.volume is not None and len(s.volume) == len(c) else np.ones(len(c)), dtype=float)
         reasons: list[str] = []
@@ -32,8 +31,8 @@ class VolumeOIAgent(Agent):
         vol_mean = float(prior.mean()) if prior.size else 0.0
         vol_std = float(np.sqrt(((prior - vol_mean) ** 2).mean())) if prior.size else 0.0
         volume_z = (last_vol - vol_mean) / vol_std if vol_std > 0 else 0.0
-        spread = max(float(h[-1] - l[-1]), 1e-12)
-        close_loc = float((c[-1] - l[-1]) / spread)
+        spread = max(float(h[-1] - lo[-1]), 1e-12)
+        close_loc = float((c[-1] - lo[-1]) / spread)
         bullish = c[-1] > o[-1]
 
         if volume_z > 1.2 and bullish and close_loc > 0.62:

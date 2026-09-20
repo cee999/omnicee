@@ -18,7 +18,7 @@ timestamps are always ms epoch; every failure is logged and surfaced via
 """
 
 from .base import SOURCE_RANK, FeedStats, build_headers
-from .manager import FeedManager
 from .integrity import DataIntegrityMonitor
+from .manager import FeedManager
 
-__all__ = ["SOURCE_RANK", "FeedStats", "FeedManager", "DataIntegrityMonitor", "build_headers"]
+__all__ = ["SOURCE_RANK", "DataIntegrityMonitor", "FeedManager", "FeedStats", "build_headers"]

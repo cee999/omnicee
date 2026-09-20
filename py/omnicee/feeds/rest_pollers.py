@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any
+from typing import Any, ClassVar
 
 from .base import FeedStats, build_headers, fetch_json, to_ms
 
@@ -46,8 +46,8 @@ class RestPoller:
 
 class YahooQuotePoller(RestPoller):
     name = "yahoo"
-    MAP = {"UUP": "UUP", "USOIL": "CL=F", "XAUUSD": "GC=F", "BTCUSDT": "BTC-USD",
-           "ETHUSDT": "ETH-USD", "EURUSD": "EURUSD=X", "GBPUSD": "GBPUSD=X", "USDJPY": "USDJPY=X"}
+    MAP: ClassVar[dict[str, str]] = {"UUP": "UUP", "USOIL": "CL=F", "XAUUSD": "GC=F", "BTCUSDT": "BTC-USD",
+                                     "ETHUSDT": "ETH-USD", "EURUSD": "EURUSD=X", "GBPUSD": "GBPUSD=X", "USDJPY": "USDJPY=X"}
 
     def __init__(self, symbols: list[str], on_price: Any, poll_ms: int = 8000) -> None:
         super().__init__(max(5000, poll_ms))
@@ -134,8 +134,8 @@ class FrankfurterPoller(RestPoller):
 
 class BiQuotePoller(RestPoller):
     name = "biquote"
-    MAP = {"BTCUSDT": "BTCUSD", "ETHUSDT": "ETHUSD", "EURUSD": "EURUSD", "GBPUSD": "GBPUSD",
-           "USDJPY": "USDJPY", "XAUUSD": "XAUUSD", "USOIL": "USOIL"}
+    MAP: ClassVar[dict[str, str]] = {"BTCUSDT": "BTCUSD", "ETHUSDT": "ETHUSD", "EURUSD": "EURUSD", "GBPUSD": "GBPUSD",
+                                     "USDJPY": "USDJPY", "XAUUSD": "XAUUSD", "USOIL": "USOIL"}
 
     def __init__(self, symbols: list[str], on_price: Any, poll_ms: int = 2500) -> None:
         super().__init__(max(1500, poll_ms))
@@ -169,7 +169,7 @@ class BiQuotePoller(RestPoller):
 
 class TradingViewPoller(RestPoller):
     name = "tradingview"
-    MARKETS = {
+    MARKETS: ClassVar[dict[str, dict[str, Any]]] = {
         "forex-am": {"prefix": "OANDA:", "syms": ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "NZDUSD", "USDCHF"]},
         "crypto": {"prefix": "BINANCE:", "syms": ["BTCUSDT", "ETHUSDT"]},
         "cfd": {"prefix": "TVC:", "syms": ["USOIL"]},
@@ -182,7 +182,7 @@ class TradingViewPoller(RestPoller):
         self.stats.symbols = symbols
         self.enabled = True
         self.ticker_map: dict[str, str] = {}
-        for market, cfg in self.MARKETS.items():
+        for _market, cfg in self.MARKETS.items():
             for s in cfg["syms"]:
                 if s in symbols:
                     self.ticker_map[f"{cfg['prefix']}{s}"] = s
@@ -253,9 +253,9 @@ class CalendarPoller(RestPoller):
     """ForexFactory weekly calendar, Finnhub + FMP fallbacks (priority order)."""
     name = "calendar"
 
-    CCY = {"USD": "USD", "EUR": "EUR", "GBP": "GBP", "JPY": "JPY", "CHF": "CHF",
-           "CAD": "CAD", "AUD": "AUD", "NZD": "NZD", "CNY": "USD"}
-    TIER = {"high": "TIER_1", "medium": "TIER_2", "low": "TIER_3", "holiday": "TIER_4"}
+    CCY: ClassVar[dict[str, str]] = {"USD": "USD", "EUR": "EUR", "GBP": "GBP", "JPY": "JPY", "CHF": "CHF",
+                                     "CAD": "CAD", "AUD": "AUD", "NZD": "NZD", "CNY": "USD"}
+    TIER: ClassVar[dict[str, str]] = {"high": "TIER_1", "medium": "TIER_2", "low": "TIER_3", "holiday": "TIER_4"}
 
     def __init__(self, finnhub_key: str, fmp_key: str, poll_ms: int = 900_000) -> None:
         super().__init__(poll_ms)
@@ -403,7 +403,7 @@ class AlphaVantageSentiment(RestPoller):
 
 class FredPoller(RestPoller):
     name = "fred"
-    SERIES = {"EURUSD": ("DEXUSEU", False), "GBPUSD": ("DEXUSUK", False), "USDJPY": ("DEXJPUS", False)}
+    SERIES: ClassVar[dict[str, tuple[str, bool]]] = {"EURUSD": ("DEXUSEU", False), "GBPUSD": ("DEXUSUK", False), "USDJPY": ("DEXJPUS", False)}
 
     def __init__(self, api_key: str, symbols: list[str], on_price: Any) -> None:
         super().__init__(30 * 60_000)

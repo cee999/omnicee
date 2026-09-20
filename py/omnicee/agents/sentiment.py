@@ -12,7 +12,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ..contracts.market import MarketSnapshot
 from ..contracts.signals import AgentVote, Direction
 from .base import Agent, AgentContext
 
@@ -82,12 +81,9 @@ class SentimentAgent(Agent):
     min_bars = 60
 
     def evaluate(self, ctx: AgentContext) -> AgentVote:
-        s = ctx.snapshot.primary()
-        ext: dict[str, Any] = {}
-        try:
-            ext = dict(s.external or {})  # type: ignore[attr-defined]
-        except AttributeError:
-            ext = {}
+        # External context (news, COT, fear&greed, calendar) is injected by
+        # the engine through the agent context; absent keys are skipped.
+        ext = ctx.external or {}
         reasons: list[str] = []
         bull = bear = 0.0
 

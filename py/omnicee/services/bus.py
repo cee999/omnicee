@@ -14,8 +14,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ class EventBus:
     def __init__(self) -> None:
         self._subs: dict[str, set[_Subscriber]] = defaultdict(set)
         self._lock = asyncio.Lock()
+        self._emit_tasks: set[asyncio.Task[None]] = set()
 
     async def emit(self, channel: str, payload: Any) -> None:
         for sub in list(self._subs.get(channel, ())):
@@ -47,7 +49,9 @@ class EventBus:
 
     def emit_nowait(self, channel: str, payload: Any) -> None:
         loop = asyncio.get_running_loop()
-        loop.create_task(self.emit(channel, payload))
+        task = loop.create_task(self.emit(channel, payload))
+        self._emit_tasks.add(task)
+        task.add_done_callback(self._emit_tasks.discard)
 
     async def subscribe(self, *channels: str) -> AsyncIterator[tuple[str, Any]]:
         sub = _Subscriber()

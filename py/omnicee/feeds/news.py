@@ -9,10 +9,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import time
 from typing import Any
 
-from .base import fetch_json, build_headers
+from .base import build_headers, fetch_json
 from .rest_pollers import now_ms
 
 log = logging.getLogger(__name__)

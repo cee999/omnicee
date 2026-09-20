@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..contracts.market import MarketSnapshot
 from ..contracts.signals import AgentVote, Direction
 from .base import Agent, AgentContext
 
@@ -27,14 +26,14 @@ def _pivots(high: np.ndarray, low: np.ndarray, strength: int = 3) -> tuple[list[
     return highs, lows
 
 
-def _chart_patterns(o: np.ndarray, h: np.ndarray, l: np.ndarray, c: np.ndarray,
+def _chart_patterns(o: np.ndarray, h: np.ndarray, lo: np.ndarray, c: np.ndarray,
                     price: float) -> tuple[float, float, list[str]]:
     """Returns (bull_points, bear_points, reasons)."""
     bull = bear = 0.0
     reasons: list[str] = []
-    hi_p, lo_p = _pivots(h, l)
+    hi_p, lo_p = _pivots(h, lo)
     hi_p = [i for i in hi_p if i >= h.size - 60][-3:]
-    lo_p = [i for i in lo_p if i >= l.size - 60][-3:]
+    lo_p = [i for i in lo_p if i >= lo.size - 60][-3:]
 
     if len(hi_p) == 3:
         a, head, b = hi_p
@@ -43,7 +42,7 @@ def _chart_patterns(o: np.ndarray, h: np.ndarray, l: np.ndarray, c: np.ndarray,
             reasons.append("head & shoulders broken")
     if len(lo_p) == 3:
         a, head, b = lo_p
-        if l[head] < l[a] and l[head] < l[b] and abs(l[a] - l[b]) / l[a] < 0.03 and c[-1] > l[b]:
+        if lo[head] < lo[a] and lo[head] < lo[b] and abs(lo[a] - lo[b]) / lo[a] < 0.03 and c[-1] > lo[b]:
             bull += 0.9 * 2
             reasons.append("inverse head & shoulders broken")
     if len(hi_p) >= 2:
@@ -53,12 +52,12 @@ def _chart_patterns(o: np.ndarray, h: np.ndarray, l: np.ndarray, c: np.ndarray,
             reasons.append("double top")
     if len(lo_p) >= 2:
         p1, p2 = lo_p[-2], lo_p[-1]
-        if abs(l[p1] - l[p2]) / l[p1] < 0.025 and p2 - p1 >= 5:
+        if abs(lo[p1] - lo[p2]) / lo[p1] < 0.025 and p2 - p1 >= 5:
             bull += 0.85 * 2
             reasons.append("double bottom")
     if len(hi_p) >= 2 and len(lo_p) >= 2:
         hi_slope = h[hi_p[-1]] - h[hi_p[0]]
-        lo_slope = l[lo_p[-1]] - l[lo_p[0]]
+        lo_slope = lo[lo_p[-1]] - lo[lo_p[0]]
         if hi_slope < 0.001 * price and lo_slope > 0:
             bull += 0.75 * 2
             reasons.append("ascending triangle")
@@ -80,7 +79,7 @@ def _chart_patterns(o: np.ndarray, h: np.ndarray, l: np.ndarray, c: np.ndarray,
                 reasons.append("bear flag")
     if len(hi_p) >= 2 and len(lo_p) >= 2:
         hs = np.polyfit(hi_p, h[hi_p], 1)[0]
-        ls = np.polyfit(lo_p, l[lo_p], 1)[0]
+        ls = np.polyfit(lo_p, lo[lo_p], 1)[0]
         if hs > 0 and ls > 0 and ls > hs:
             bear += 0.70 * 2
             reasons.append("rising wedge")
@@ -90,11 +89,11 @@ def _chart_patterns(o: np.ndarray, h: np.ndarray, l: np.ndarray, c: np.ndarray,
     return bull, bear, reasons
 
 
-def _harmonics(h: np.ndarray, l: np.ndarray, price: float) -> tuple[float, float, list[str]]:
+def _harmonics(h: np.ndarray, lo: np.ndarray, price: float) -> tuple[float, float, list[str]]:
     bull = bear = 0.0
     reasons: list[str] = []
-    hi_p, lo_p = _pivots(h, l, 3)
-    pts = sorted([(i, "H", float(h[i])) for i in hi_p[-6:]] + [(i, "L", float(l[i])) for i in lo_p[-6:]])
+    hi_p, lo_p = _pivots(h, lo, 3)
+    pts = sorted([(i, "H", float(h[i])) for i in hi_p[-6:]] + [(i, "L", float(lo[i])) for i in lo_p[-6:]])
     if len(pts) >= 5:
         pts = pts[-5:]
         X, A, B, C, D = [p[2] for p in pts]
@@ -104,7 +103,6 @@ def _harmonics(h: np.ndarray, l: np.ndarray, price: float) -> tuple[float, float
 
         rAB = abs(B - A) / abs(A - X) if abs(A - X) else 0
         rBC = abs(C - B) / abs(B - A) if abs(B - A) else 0
-        rCD = abs(D - C) / abs(C - B) if abs(C - B) else 0
         rXD = abs(D - X) / abs(A - X) if abs(A - X) else 0
         tol = 0.05
         bullish = A < X
@@ -128,7 +126,7 @@ def _harmonics(h: np.ndarray, l: np.ndarray, price: float) -> tuple[float, float
     return bull, bear, reasons
 
 
-def _wyckoff(o: np.ndarray, h: np.ndarray, l: np.ndarray, c: np.ndarray,
+def _wyckoff(o: np.ndarray, h: np.ndarray, lo: np.ndarray, c: np.ndarray,
              v: np.ndarray) -> tuple[float, float, list[str]]:
     bull = bear = 0.0
     reasons: list[str] = []
@@ -136,11 +134,11 @@ def _wyckoff(o: np.ndarray, h: np.ndarray, l: np.ndarray, c: np.ndarray,
     if n < 60:
         return bull, bear, reasons
     avg_vol30 = float(v[-30:].mean())
-    range_recent = float((h[-20:] - l[-20:]).mean())
-    range_all = float((h[-60:] - l[-60:]).mean())
+    range_recent = float((h[-20:] - lo[-20:]).mean())
+    range_all = float((h[-60:] - lo[-60:]).mean())
     contracting = range_recent < 0.7 * range_all
     vol20, vol60 = float(v[-20:].mean()), float(v[-60:].mean())
-    pos = (c[-1] - float(l[-60:].min())) / max(float(h[-60:].max() - l[-60:].min()), 1e-12)
+    pos = (c[-1] - float(lo[-60:].min())) / max(float(h[-60:].max() - lo[-60:].min()), 1e-12)
     if pos < 0.4 and (vol20 < 0.8 * vol60 or contracting):
         bull += 0.75 * 3
         reasons.append("wyckoff accumulation")
@@ -167,22 +165,22 @@ class PatternAgent(Agent):
         s = ctx.snapshot.primary()
         o = np.asarray(s.open, dtype=float)
         h = np.asarray(s.high, dtype=float)
-        l = np.asarray(s.low, dtype=float)
+        lo = np.asarray(s.low, dtype=float)
         c = np.asarray(s.close, dtype=float)
         v = np.asarray(s.volume if s.volume is not None and len(s.volume) == len(c) else np.ones(len(c)), dtype=float)
         price = float(c[-1])
         reasons: list[str] = []
         bull = bear = 0.0
 
-        b1, b2, r1 = _chart_patterns(o, h, l, c, price)
+        b1, b2, r1 = _chart_patterns(o, h, lo, c, price)
         bull += b1
         bear += b2
         reasons.extend(r1)
-        b3, b4, r2 = _harmonics(h, l, price)
+        b3, b4, r2 = _harmonics(h, lo, price)
         bull += b3
         bear += b4
         reasons.extend(r2)
-        b5, b6, r3 = _wyckoff(o, h, l, c, v)
+        b5, b6, r3 = _wyckoff(o, h, lo, c, v)
         bull += b5
         bear += b6
         reasons.extend(r3)
@@ -199,7 +197,7 @@ class PatternAgent(Agent):
             elif price_slope >= 0 > obv_slope:
                 bear += 1.5
                 reasons.append("bearish obv divergence")
-            mfm = ((c - l) - (h - c)) / np.where(h - l > 0, h - l, 1)
+            mfm = ((c - lo) - (h - c)) / np.where(h - lo > 0, h - lo, 1)
             cmf = float((mfm[-20:] * v[-20:]).sum() / max(v[-20:].sum(), 1e-12))
             if cmf > 0.05:
                 bull += 1

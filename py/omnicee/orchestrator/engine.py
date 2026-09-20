@@ -22,24 +22,33 @@ from typing import Any
 
 import numpy as np
 
-from ..agents.base import AgentContext
 from ..agents.registry import build_agents
 from ..config import Settings
 from ..contracts.market import Candle, MarketSnapshot, Series
 from ..contracts.signals import Direction
+from ..engines.pipeline import (
+    OpportunityRanker,
+    build_trade_plan,
+    detect_compression,
+    detect_traps,
+    evaluate_gold_desk,
+    institutional_gates,
+    intermarket_check,
+    select_strategy,
+    should_dampen_breakout,
+)
 from ..ensemble.calibration import Calibrator
-from ..ensemble.validation import (bayesian_posterior, ensemble_gate,
-                                   monte_carlo_validate, statistical_validate,
-                                   walk_forward)
-from ..engines.pipeline import (OpportunityRanker, build_trade_plan,
-                                detect_compression, detect_traps,
-                                evaluate_gold_desk, intermarket_check,
-                                institutional_gates, select_strategy,
-                                should_dampen_breakout)
+from ..ensemble.validation import (
+    bayesian_posterior,
+    ensemble_gate,
+    monte_carlo_validate,
+    statistical_validate,
+    walk_forward,
+)
 from ..feeds.news import fetch_news
 from ..pipeline import PipelineDeps, analyse
-from ..risk.stack import (CorrelationFilter, DrawdownGuard, PositionSizer,
-                          SessionFilter)
+from ..risk.gates import AccountState
+from ..risk.stack import CorrelationFilter, DrawdownGuard, PositionSizer, SessionFilter
 from ..services.alerts import AlertDispatcher
 from ..services.bus import EventBus
 from ..services.db import Database
@@ -72,6 +81,9 @@ class Orchestrator:
         self.dxy_prices: deque[float] = deque(maxlen=30)
         self.equity_prices: deque[float] = deque(maxlen=30)
         self.symbol_loss_streak: dict[str, int] = {}
+        # Latest MT5 EA account sync (balance/equity) — makes gates and sizing
+        # run on the real account. None until the EA pushes /api/ea/balance.
+        self.account_state: dict[str, Any] | None = None
         self._running = False
         self._last_cycle_stats: dict[str, Any] = {}
         self._boot_ms = time.time() * 1000
@@ -163,7 +175,18 @@ class Orchestrator:
         if last_row.get("bid") and last_row.get("ask"):
             spread = float(last_row["ask"]) - float(last_row["bid"])
         return MarketSnapshot(symbol=symbol, series=series, spread=spread,
-                              source=f"python-feeds:{last_row.get('source') or 'unknown'}")
+                              source=f"python-feeds:{last_row.get('source') or 'unknown'}",
+                              last_tick_ms=last_row.get("atMs"))
+
+    def _account(self) -> AccountState:
+        """Live account state from the EA sync, or unknown (safe defaults)."""
+        st = self.account_state
+        if not st:
+            return AccountState()
+        balance = float(st.get("balance") or 0.0)
+        if balance <= 0:
+            return AccountState()
+        return AccountState(balance=balance, known=True)
 
     @staticmethod
     def _score_from_raw(raw: float) -> float:
@@ -194,7 +217,7 @@ class Orchestrator:
 
         # ---- Stage-1 pipeline (regime -> agents -> consensus -> gates -> levels)
         deps = PipelineDeps(settings=self.cfg, calibrator=self.calibrator)
-        result = await analyse(snapshot, deps)
+        result = await analyse(snapshot, deps, account=self._account(), external=external)
         consensus = result.consensus
         direction = consensus.direction
         votes = consensus.votes
@@ -347,8 +370,10 @@ class Orchestrator:
         self.ranker.update(symbol, action=final_action, score=round(score, 1),
                            reason="; ".join((gates.get("failures") or [])[:2]) or None,
                            regime=result.regime.get("regime"))
-        await self.bus.emit("signal", sig_doc)
+        # Only actionable signals go out on the `signal` channel — WAIT docs
+        # are visible in the audit trail and engine telemetry, not as signals.
         if final_action in ("LONG", "SHORT", "BUY", "SELL"):
+            await self.bus.emit("signal", sig_doc)
             if self.db:
                 self.db.save_signal(sig_doc)
             try:

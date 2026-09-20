@@ -9,6 +9,7 @@ plain dicts so they can be unit-tested without the pipeline.
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 import numpy as np
@@ -77,7 +78,7 @@ def monte_carlo_validate(candles: dict[str, Any], direction: str, entry: float,
                 if hit_sl:
                     outcome = -risk / entry
                     break
-                for ti, tp in enumerate(targets):
+                for tp in targets:
                     if (sign > 0 and price >= tp) or (sign < 0 and price <= tp):
                         outcome = sign * (tp - entry) / entry
                         break
@@ -186,8 +187,6 @@ def bayesian_posterior(features: dict[str, Any], prior: float = 0.50,
 
 # ---------------------------------------------------------------------------
 # Statistical validator — 10 hypothesis tests, gate at >= 5 passed
-
-import math
 
 
 def _normal_cdf(x: float) -> float:
@@ -359,6 +358,6 @@ def ensemble_gate(layers: dict[str, dict[str, Any]], signal_score: float, *,
     return {"approved": approved, "ensembleScore": round(ensemble_score, 2),
             "totalPenalty": round(total_penalty, 2),
             "adjustedScore": max(0.0, signal_score - total_penalty),
-            "approvedLayers": sum(1 for l in scored if l["approved"]),
-            "rejectedLayers": sum(1 for l in scored if not l["approved"]),
+            "approvedLayers": sum(1 for row in scored if row["approved"]),
+            "rejectedLayers": sum(1 for row in scored if not row["approved"]),
             "hardRejections": hard_rejections, "layers": scored}
