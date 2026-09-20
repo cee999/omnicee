@@ -31,6 +31,14 @@ envVarGroups:
       - key: PUBLIC_DASHBOARD_READ
         value: "true"
 
+      # ── Python brain service (py/) ──────────────────────────
+      # Shared secret Node and the brain service both check on every
+      # /v1/analyze call. Shared here (not generateValue on just one
+      # service) so both services get the identical value from a single
+      # dashboard prompt instead of a manual copy-paste between them.
+      - key: BRAIN_SHARED_SECRET
+        sync: false
+
       # ── EA (MT5 Expert Advisor) auth ────────────────────────
       # FIX: was missing from this blueprint entirely. Without it,
       # api/server.js's EA_SECRET defaults to '' and /api/ea/signals — the
@@ -206,4 +214,43 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "20.18.0"
+      # Python brain (py/) — see the omnicee-brain service below.
+      # lib/brain-client.js exists but is NOT yet called from index.js or
+      # api/server.js — wiring it in (shadow mode: log the brain's output,
+      # act on nothing yet) is the next task, not done by this commit.
+      # URL is predictable from the service name below, not a secret.
+      - key: BRAIN_URL
+        value: https://omnicee-brain.onrender.com
+      - key: BRAIN_TIMEOUT_MS
+        value: "5000"
+      - fromGroup: omnicee-shared
+
+  # ── Python analytical brain (py/) — stateless HTTP service Node calls
+  # for analysis. Does NOT own feeds, sockets, or auth — see py/AGENTS.md
+  # for the full contract. Runs as a second, independent Render service
+  # (not merged into the Node one above) since it has its own runtime,
+  # deploy cadence, and dependency set.
+  #
+  # Free tier reality check: 512 MB RAM, ~220 MB measured on disk, one
+  # worker only. PyTorch (~900 MB) will not fit here — see py/AGENTS.md's
+  # "Deployment constraints" section before adding any ML dependency;
+  # train offline, export ONNX, infer with onnxruntime instead.
+  - type: web
+    name: omnicee-brain
+    runtime: python
+    plan: free
+    region: singapore  # same region as the Node service — cross-region adds latency to every call
+    buildCommand: cd py && pip install --no-cache-dir -r requirements.txt
+    startCommand: cd py && uvicorn omnicee.api.app:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+      - key: LOG_LEVEL
+        value: info
+      # SYMBOLS deliberately not set here, same reasoning as the Node
+      # service above: omnicee/config.py's own default is the single
+      # source of truth, so the two services can't silently drift onto
+      # different symbol sets the way a hardcoded duplicate would risk.
       - fromGroup: omnicee-shared
