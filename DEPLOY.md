@@ -1,56 +1,38 @@
-# Deployment notes — OMNICEE
+# Deployment notes — OMNICEE (single Python service)
 
-This file shows quick steps to run OMNICEE 24/7 with `pm2` or `systemd`.
+The backend is one Python ASGI app (`omnicee.api.app:asgi`): FastAPI REST +
+python-socketio + the live engine, all in one uvicorn process. The Node
+runtime was fully retired.
 
-## Using pm2 (recommended for Node apps)
+## Render (recommended)
 
-Install pm2 globally:
+Use the Blueprint in [`render.yaml`](render.yaml) — it builds the React app,
+installs `py/requirements.txt`, and starts uvicorn with the right env vars.
+Manual equivalent for a single Web Service:
 
-```bash
-npm install -g pm2
-```
+- **Build:** `pip install --no-cache-dir -r py/requirements.txt && npm --prefix webapp-react install --include=dev && npm --prefix webapp-react run build`
+- **Start:** `uvicorn omnicee.api.app:asgi --host 0.0.0.0 --port $PORT` (working dir `py/`)
+- **Health check:** `/health`
 
-Start the app using the existing PM2 ecosystem file:
+Required env vars (see [`.env.example`](.env.example) for the full list):
+`EA_SECRET`, `MONGODB_URI` (both required in `NODE_ENV=production`).
 
-```bash
-# start with ecosystem
-pm2 start ecosystem.config.js
+## Bare metal / VPS (systemd)
 
-# save process list for startup
-pm2 save
-
-# generate startup script (run the printed command as root)
-pm2 startup
-```
-
-To check logs:
-
-```bash
-pm2 ls
-pm2 logs omnicee --lines 200
-```
-
-To restart:
-
-```bash
-pm2 restart omnicee
-```
-
-## Using systemd
-
-Create a service file `/etc/systemd/system/omnicee.service` with the following content (run as root):
+Create `/etc/systemd/system/omnicee.service`:
 
 ```ini
 [Unit]
-Description=OMNICEE trading engine
+Description=OMNICEE trading service (Python)
 After=network.target
 
 [Service]
 Type=simple
 User=your-user
-WorkingDirectory=/path/to/omnicee
+WorkingDirectory=/path/to/omnicee/py
 Environment=NODE_ENV=production
-ExecStart=/usr/bin/node start-all.js
+Environment=PYTHONPATH=/path/to/omnicee/py
+ExecStart=/usr/bin/python3 -m uvicorn omnicee.api.app:asgi --host 0.0.0.0 --port 8000
 Restart=on-failure
 RestartSec=10
 LimitNOFILE=65536
@@ -58,8 +40,6 @@ LimitNOFILE=65536
 [Install]
 WantedBy=multi-user.target
 ```
-
-Then enable and start:
 
 ```bash
 sudo systemctl daemon-reload
@@ -69,8 +49,11 @@ sudo journalctl -u omnicee -f
 ```
 
 ## Notes
-- The repo already contains `ecosystem.config.js` which starts `start-all.js` (API + engine).
-- For durable persistence enable MongoDB and set `MONGODB_URI` in your environment.
-- The app now persists a lightweight market/candles cache to `.cache/` for faster cold starts.
+
+- `DISABLE_ENGINE=1` gives the old stateless-brain mode (REST API only, no
+  live loop) — useful for debugging the API surface in isolation.
+- For durable persistence enable MongoDB and set `MONGODB_URI`.
+- A lightweight market/candles cache is persisted to `py/.cache/` for faster
+  cold starts (gitignored — never commit it).
 
 *** End of file

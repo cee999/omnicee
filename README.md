@@ -31,37 +31,40 @@ OMNICEE aggregates multi-agent confluence, session/risk gates, broker-grade pric
 └────────────────────────────┬────────────────────────────────┘
                              │ REST + Socket.IO
 ┌────────────────────────────▼────────────────────────────────┐
-│  start-all.js                                                │
-│    ├─ api/server.js   REST, Socket.IO, static UI, EA routes │
-│    └─ index.js        signal engine, agents, risk, feeds    │
+│  omnicee.api.app:asgi  — single Python service (uvicorn)     │
+│    ├─ api/server.py   REST, Socket.IO, static UI, EA routes │
+│    └─ orchestrator/   engine loop: feeds → agents → risk    │
 └────────────────────────────┬────────────────────────────────┘
                              │
         ┌────────────────────┼────────────────────┐
         ▼                    ▼                    ▼
    MongoDB Atlas      MT5 OmniceeEA.mq5      External feeds
-   signals/sessions   prices + optional      Finnhub, calendar,
-   users/outcomes     approved execution     news, COT, …
+   signals/sessions   prices + balance sync  Finnhub, Deriv,
+   users/outcomes     approved execution     Binance, news, COT
 ```
 
-**Single Render service** builds the React app and runs API + engine in one process (`node start-all.js`).
+**One backend, one process.** The Node runtime was fully retired; every module
+was ported behaviour-for-behaviour into `py/omnicee/`. A single Render service
+builds the React app and serves REST + Socket.IO + engine + static UI.
 
 ---
 
 ## Repository layout
 
 ```
-agents/              Multi-agent scorers (SMC, MTF, microstructure, …)
-api/                 Express + Socket.IO server, email OTP auth
-feeds/               Market data, news, calendar, COT, …
-mt5/OmniceeEA.mq5    MetaTrader 5 bridge (prices + approved trades)
-orchestrator/        Conflict resolution, audit, scheduling
-risk-engine/         Drawdown, session filter, sizing, intermarket
-signal-pipeline/     Scoring, regime, outlook, gates, learning
+py/omnicee/          The entire backend (Python)
+  ├─ feeds/          WS + REST market data, news, calendar, COT, api_vault
+  ├─ agents/         8 scorers (SMC, MTF, microstructure, pattern, ...)
+  ├─ ensemble/       Monte Carlo, Bayesian, statistical, walk-forward gates
+  ├─ risk/           Correlation, drawdown guard, session filter, sizing
+  ├─ orchestrator/   Engine loop, SL/TP, audit, opportunity ranker
+  ├─ services/       Mongo persistence, event bus, auth, alerts
+  └─ api/            FastAPI + Socket.IO (single ASGI app)
+mt5/OmniceeEA.mq5    MetaTrader 5 bridge (prices + balance + approved trades)
 webapp-react/        Production frontend (Vite + React)
-index.js             Signal / trading engine entry
-start-all.js         Boots API then engine
-render.yaml          Render Blueprint
+render.yaml          Render Blueprint (single Python service)
 .env.example         All environment variables documented
+py/tests/            pytest suite (29 tests)
 ```
 
 ---
@@ -72,20 +75,21 @@ render.yaml          Render Blueprint
 git clone https://github.com/cee999/omnicee.git
 cd omnicee
 cp .env.example .env
-# Edit .env — at minimum MONGODB_URI; for full desk also EA_SECRET, feed keys
+# Edit .env — at minimum MONGODB_URI + EA_SECRET for production use
 
-npm install
+python -m venv py/.venv
+py/.venv/Scripts/pip install -r py/requirements.txt        # POSIX: py/.venv/bin/pip
 npm --prefix webapp-react install
 npm --prefix webapp-react run build
 
-node start-all.js
-# → http://localhost:3001  (or PORT)
+py/.venv/Scripts/python -m uvicorn omnicee.api.app:asgi --port 8000    # run from py/
+# → http://localhost:8000
 ```
 
-Smoke test (no keys required for basic syntax path):
+Test suite (set `NODE_ENV=test` so the live engine never starts under tests):
 
 ```bash
-npm test
+cd py && set NODE_ENV=test && python -m pytest tests -q
 ```
 
 ---
@@ -94,17 +98,16 @@ npm test
 
 1. Connect this repo; use **Blueprint** (`render.yaml`) or a single **Web Service**.
 2. **Build:**  
-   `npm ci --omit=dev && npm --prefix webapp-react ci --include=dev && VITE_APP_TOKEN=$APP_ACCESS_TOKEN npm --prefix webapp-react run build`
-3. **Start:** `node start-all.js`
+   `pip install --no-cache-dir -r py/requirements.txt && npm --prefix webapp-react install --include=dev && npm --prefix webapp-react run build`
+3. **Start:** `uvicorn omnicee.api.app:asgi --host 0.0.0.0 --port $PORT` (working dir `py/`)
 4. **Health:** `GET /health`
 
 ### Required environment
 
 | Variable | Purpose |
 |----------|---------|
-| `MONGODB_URI` | MongoDB Atlas connection string |
-| `MONGODB_DB` | Database name (default `omnicee_db`) |
-| `EA_SECRET` | Shared secret for MT5 EA (`/api/ea/*`) |
+| `MONGODB_URI` | MongoDB Atlas connection string (required in production) |
+| `EA_SECRET` | Shared secret for MT5 EA (`/api/ea/*`), required in production |
 | `SYMBOLS` | Comma list, e.g. `BTCUSDT,ETHUSDT,XAUUSD,USOIL,UUP,EURUSD,GBPUSD,USDJPY` |
 
 ### Email login (friends / web)
@@ -189,10 +192,9 @@ Default symbols include major FX, gold, oil, dollar proxy (`UUP`), and major cry
 
 | Command | Action |
 |---------|--------|
-| `node start-all.js` | Production-style: API + engine |
-| `npm start` | Engine only (`index.js`) — no HTTP UI |
-| `npm run start:api` | API only |
-| `npm test` | Smoke tests |
+| `uvicorn omnicee.api.app:asgi` | Single service: REST + Socket.IO + engine (run from `py/`) |
+| `DISABLE_ENGINE=1 uvicorn omnicee.api.app:asgi` | Stateless API mode (no live loop) |
+| `python -m pytest tests -q` | Test suite (run from `py/` with `NODE_ENV=test`) |
 | `npm run build --prefix webapp-react` | Build UI into `webapp-react/dist` |
 
 ---
