@@ -729,7 +729,7 @@ async def start_backend(app) -> dict[str, Any]:
         while True:
             try:
                 report = monitor.check([f.stats for f in feeds], fm.store.all())
-                report["feeds"] = [f.as_dict() for f in feeds]
+                report["feeds"] = [f.stats.as_dict() for f in feeds]
                 await emit("feed_health", report)
             except Exception:
                 log.exception("feed health loop failed")
