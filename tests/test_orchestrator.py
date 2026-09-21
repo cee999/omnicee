@@ -15,9 +15,9 @@ import asyncio
 
 import pytest
 
-from omnicee.config import Settings
-from omnicee.orchestrator.engine import Orchestrator
-from omnicee.services.bus import EventBus
+from config import Settings
+from orchestrator.engine import Orchestrator
+from services.bus import EventBus
 from tests.conftest import make_series
 
 
