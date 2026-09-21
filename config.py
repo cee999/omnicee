@@ -55,13 +55,7 @@ class Settings(BaseSettings):
     OTP_PEPPER: str = "omnicee-local-dev-otp"
     BREVO_API_KEY: str = ""
     EMAIL_FROM: str = "OMNICEE <noreply@omnicee.app>"
-    SMTP_HOST: str = ""
-    SMTP_PORT: int = 587
-    SMTP_SECURE: bool = False
-    SMTP_USER: str = ""
-    SMTP_PASS: str = ""
     ALLOW_DEV_OTP: bool = False
-    LOGIN_PASSWORD: str = ""
 
     # ---- telegram / alerts ----------------------------------------------
     TELEGRAM_BOT_TOKEN: str = ""

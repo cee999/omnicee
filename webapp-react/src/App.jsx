@@ -1329,28 +1329,16 @@ async function probeBackend(timeoutMs = 6000) {
 
 function LoginGate({ onAuthed, theme, onToggleTheme }) {
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
   const [step, setStep] = useState('email');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
-  const [passwordRequired, setPasswordRequired] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch(API_BASE + '/api/auth/email/config', { cache: 'no-store' })
-      .then(r => r.json().catch(() => ({})))
-      .then(d => { if (!cancelled && d?.passwordRequired) setPasswordRequired(true); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
 
   const requestCode = async () => {
     setBusy(true); setErr(''); setMsg('');
     try {
       const body = { email: email.trim() };
-      if (passwordRequired || password) body.password = password;
       const r = await fetch(API_BASE + '/api/auth/email/request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1491,28 +1479,6 @@ function LoginGate({ onAuthed, theme, onToggleTheme }) {
           />
         </label>
 
-        {step === 'email' && (passwordRequired || true) && (
-          <label style={{ display: 'block', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', color: faint, marginBottom: 12 }}>
-            Desk password {passwordRequired ? '' : '(optional if not required by server)'}
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder={passwordRequired ? 'Required' : 'Leave blank if not set'}
-              autoComplete="current-password"
-              enterKeyHint="go"
-              aria-required={passwordRequired ? 'true' : 'false'}
-              style={{
-                display: 'block', width: '100%', marginTop: 6,
-                padding: '14px 14px', borderRadius: 10,
-                border: `1px solid ${border}`, background: panel2, color: text,
-                fontSize: 16, outline: 'none', boxSizing: 'border-box',
-                minHeight: 48,
-              }}
-            />
-          </label>
-        )}
-
         {step === 'code' && (
           <label style={{ display: 'block', fontSize: 10, textTransform: 'uppercase', color: faint, marginBottom: 12 }}>
             6-digit code
@@ -1543,13 +1509,13 @@ function LoginGate({ onAuthed, theme, onToggleTheme }) {
           {step === 'email' ? (
             <button
               type="button"
-              disabled={busy || !email.includes('@') || (passwordRequired && !password)}
+              disabled={busy || !email.includes('@')}
               onClick={requestCode}
               aria-busy={busy ? 'true' : 'false'}
               style={{
                 flex: 1, padding: '12px 14px', borderRadius: 8, border: 'none',
                 background: green, color: bg, fontWeight: 700, fontSize: 13,
-                cursor: busy ? 'wait' : 'pointer', opacity: (busy || !email.includes('@') || (passwordRequired && !password)) ? 0.55 : 1,
+                cursor: busy ? 'wait' : 'pointer', opacity: (busy || !email.includes('@')) ? 0.55 : 1,
                 minHeight: 44,
               }}
             >

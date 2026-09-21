@@ -1,9 +1,10 @@
-"""Authentication — faithful port of the Node auth surface.
+"""Authentication.
 
-Three mechanisms, exactly as before:
+Three mechanisms:
   1. APP_ACCESS_TOKEN — static bearer (`x-app-token`), timing-safe.
-  2. Email OTP sessions — Brevo/SMTP delivery, peppered SHA-256 code hashes,
-     Mongo-backed sessions (30 days).
+  2. Email OTP sessions — Brevo delivery, peppered SHA-256 code hashes,
+     Mongo-backed sessions (30 days). The single web login path; no
+     second factor layered on top.
   3. Telegram Mini App initData — HMAC-SHA256 per Telegram's spec, 24h window.
 
 The dashboard-read policy is ported verbatim from `dashboardReadAuth`:
@@ -123,11 +124,6 @@ class AuthService:
             return {"ok": False, "error": "daily limit reached", "status": 429}
         if not _prune(ip, self._otp_ip_log, 3600, 20):
             return {"ok": False, "error": "hourly limit reached", "status": 429}
-
-        if self.cfg.LOGIN_PASSWORD:
-            # Desk password is checked at request time by the caller; enforced
-            # only when configured. Kept here as the single policy point.
-            pass
 
         code = str(secrets.randbelow(900000) + 100000)
         self.db.save_otp(email, self._code_hash(email, code))

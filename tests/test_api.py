@@ -83,3 +83,45 @@ def test_agents_endpoint_lists_the_registry(client):
     assert r.status_code == 200
     names = {a["name"] for a in r.json()}
     assert {"smc", "mtf", "momentum"} <= names
+
+
+# --------------------------------------------------------------------- auth
+# Login is email-OTP only now — no desk password. These lock in the route
+# consolidation: exactly one path per action, the old bare aliases gone,
+# and the config/passwordRequired probe removed. `client` doesn't wire up
+# a real auth service (NODE_ENV=test skips DB/backend startup entirely —
+# see api/app.py lifespan), so tests that need `request.app.state.auth`
+# attach a minimal AuthService with db=None; only inputs that never reach
+# the db (invalid email, tokenless logout) are exercised, so that's safe.
+
+@pytest.fixture
+def authed_client(client):
+    from services.auth import AuthService
+    client.app.state.auth = AuthService(client.app.state.settings, None)
+    return client
+
+
+def test_password_field_is_ignored_not_required(authed_client):
+    r = authed_client.post("/api/auth/email/request", json={"email": "not-an-email"})
+    assert r.status_code == 200
+    assert r.json() == {"ok": False, "error": "invalid email"}
+
+
+def test_logout_lives_at_the_path_the_frontend_calls(authed_client):
+    r = authed_client.post("/api/auth/email/logout", json={})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
+
+
+@pytest.mark.parametrize("path", [
+    "/api/auth/email",          # pre-consolidation alias for /email/request
+    "/api/auth/verify",         # pre-consolidation alias for /email/verify
+    "/api/auth/logout",         # frontend never called this one; /email/logout did
+    "/api/auth/email/config",   # passwordRequired probe, no longer exists
+])
+def test_retired_auth_aliases_are_gone(client, path):
+    r = client.post(path, json={})
+    # 404 when running API-only; 405 when webapp-react/dist is present, since
+    # the SPA static mount then catches the unmatched path and rejects POST.
+    # Either way, no auth route is answering it anymore.
+    assert r.status_code in (404, 405)

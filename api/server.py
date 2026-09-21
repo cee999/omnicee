@@ -22,10 +22,10 @@ contract so `webapp-react` keeps working unchanged:
   GET  /api/feed-health       per-feed connection matrix
   GET  /api/cache/status      warm/cold cache state
   GET  /api/api-vault         researched provider catalog
-  POST /api/auth/email        request OTP
-  POST /api/auth/verify       verify OTP -> session token
-  POST /api/auth/logout       drop session
-  GET  /api/auth/me           session identity
+  POST /api/auth/email/request    request OTP
+  POST /api/auth/email/verify     verify OTP -> session token
+  POST /api/auth/email/logout     drop session
+  GET  /api/auth/me               session identity
   POST /api/alerts/test       fire a test push/telegram
 
 Socket.IO events out: market_update, signal, engine_telemetry, feed_health.
@@ -320,21 +320,19 @@ async def api_vault() -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------- auth
-@router.get("/auth/email/config")
-async def auth_email_config(request: Request) -> dict[str, Any]:
-    cfg = _cfg(request)
-    return {"ok": True, "passwordRequired": bool(cfg.LOGIN_PASSWORD)}
-
-
-@router.post("/auth/email")
+# Single mechanism for the web login: email OTP. No desk password — that was
+# a second, half-wired gate (frontend copy literally called it "optional if
+# not required") layered on top of the thing that actually authenticates.
+# One canonical path per action; the old bare /auth/email, /auth/verify and
+# /auth/logout aliases were unused (webapp-react has only ever called the
+# /auth/email/* forms) and /auth/email/logout — the one path the frontend
+# actually calls — was never registered, so logout has been silently 404ing.
 @router.post("/auth/email/request")
-async def auth_email(request: Request, body: dict[str, Any]) -> dict[str, Any]:
+async def auth_email_request(request: Request, body: dict[str, Any]) -> dict[str, Any]:
     auth = getattr(request.app.state, "auth", None)
     if auth is None:
         raise HTTPException(503, "auth not configured")
     cfg = _cfg(request)
-    if cfg.LOGIN_PASSWORD and str(body.get("password", "")) != cfg.LOGIN_PASSWORD:
-        raise HTTPException(401, "invalid desk password")
     out = auth.request_otp(str(body.get("email", "")), request.client.host if request.client else "unknown")
     if out.get("status"):
         raise HTTPException(out.pop("status"), out.get("error", "rate limited"))
@@ -343,9 +341,8 @@ async def auth_email(request: Request, body: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-@router.post("/auth/verify")
 @router.post("/auth/email/verify")
-async def auth_verify(request: Request, body: dict[str, Any]) -> dict[str, Any]:
+async def auth_email_verify(request: Request, body: dict[str, Any]) -> dict[str, Any]:
     auth = getattr(request.app.state, "auth", None)
     if auth is None:
         raise HTTPException(503, "auth not configured")
@@ -355,8 +352,8 @@ async def auth_verify(request: Request, body: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-@router.post("/auth/logout")
-async def auth_logout(request: Request, body: dict[str, Any]) -> dict[str, Any]:
+@router.post("/auth/email/logout")
+async def auth_email_logout(request: Request, body: dict[str, Any]) -> dict[str, Any]:
     auth = getattr(request.app.state, "auth", None)
     if auth:
         auth.logout(body.get("token"))

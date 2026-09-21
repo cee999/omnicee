@@ -85,8 +85,6 @@ envVarGroups:
         value: "false"
       - key: EMAIL_AUTH_REQUIRED
         value: "true"
-      - key: LOGIN_PASSWORD
-        sync: false
 
       # ── Trading config ────────────────────────────────────
       - key: TIMEFRAMES
