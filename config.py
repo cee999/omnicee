@@ -195,12 +195,18 @@ class Settings(BaseSettings):
             return f / 100.0 if f > 1.0 else v
         return v
 
-    @field_validator("MONGODB_URI", "BRAIN_SHARED_SECRET", mode="before")
+    @model_validator(mode="before")
     @classmethod
-    def _trim(cls, v: object) -> object:
-        # Pasted env values routinely carry trailing whitespace/newlines.
-        # This exact class of bug has bitten this project before.
-        return v.strip() if isinstance(v, str) else v
+    def _trim_all_strings(cls, data: object) -> object:
+        # Pasted env values routinely carry trailing whitespace/newlines
+        # (Render's env-var UI is especially prone to this). This exact
+        # class of bug has already broken Mongo, the app token, and now
+        # Brevo email delivery — each time because one specific field was
+        # hand-added to a trim list. Trim every string field once, here,
+        # instead of trusting that list to stay complete.
+        if isinstance(data, dict):
+            return {k: (v.strip() if isinstance(v, str) else v) for k, v in data.items()}
+        return data
 
     @model_validator(mode="after")
     def _production_requirements(self) -> Settings:
