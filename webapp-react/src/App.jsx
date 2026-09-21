@@ -1359,6 +1359,11 @@ function LoginGate({ onAuthed, theme, onToggleTheme }) {
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
         const raw = data.error || `Could not send code (HTTP ${r.status})`;
+        if (/email delivery failed/i.test(raw)) {
+          throw new Error(
+            'Email delivery failed. Brevo rejected the send - check that the Brevo API key has SMTP permission and that the account is within its sending limits. You can also enable ALLOW_DEV_OTP for on-screen codes.'
+          );
+        }
         if (/Email not configured/i.test(raw)) {
           throw new Error(
             'Email provider rejected this address. Verify EMAIL_FROM as a sender in Brevo, or enable ALLOW_DEV_OTP for on-screen codes.'

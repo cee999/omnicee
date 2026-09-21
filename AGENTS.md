@@ -134,10 +134,17 @@ uncalibrated number is sizing off noise.
 
 ## Where the work is up to
 
-The Node-to-Python migration is **complete and tested** (29 pytest green).
-The backend was restructured to the repo root (2026-09). The frontend
-(`webapp-react/`) is unchanged and contract-compatible — same REST paths, same
+The Node-to-Python migration is **complete and tested** (37 pytest green).
+The frontend (`webapp-react/`) is contract-compatible — same REST paths, same
 Socket.IO path/events.
+
+**2026-09-21 — Email OTP login fix.** `AuthService.request_otp` no longer
+reports success when Brevo rejects the send. Failed delivery now returns
+`{ok: false, error: "email delivery failed"}` (HTTP 502 at the route) with a
+matching actionable message in the `LoginGate` UI. Previously a rejected Brevo
+send was swallowed server-side and the UI lied with "Code sent — check inbox
+and spam". Preserved: `ALLOW_DEV_OTP` fallback and the unconfigured-provider
+fallback, both covered in `tests/test_auth.py`.
 
 Next candidate work: Myfxbook sentiment + OpenInsider feeds (keys exist in
 config), the researched API-vault candidates (Twelve Data, Tiingo, EODHD — see

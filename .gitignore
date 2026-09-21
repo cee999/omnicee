@@ -15,3 +15,8 @@ __pycache__/
 venv/
 *.egg-info/
 .cache/
+
+# Session-local python bootstrap artifacts (regenerable via ensurepip)
+Lib/
+Scripts/
+pyvenv.cfg

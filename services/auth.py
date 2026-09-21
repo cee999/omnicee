@@ -132,6 +132,12 @@ class AuthService:
         code = str(secrets.randbelow(900000) + 100000)
         self.db.save_otp(email, self._code_hash(email, code))
         sent_via = self._send_email(email, code)
+        if sent_via == "none":
+            # Brevo configured but the provider rejected the send. Reporting
+            # success here makes the user wait for an email that never comes
+            # (project rule 4/5/9: silence is not success — surface the
+            # failure visibly). The route turns this into HTTP 502.
+            return {"ok": False, "error": "email delivery failed", "status": 502}
         out: dict[str, Any] = {"ok": True, "message": "code sent", "expiresInSec": 600}
         if sent_via == "dev":
             out["devCode"] = code
