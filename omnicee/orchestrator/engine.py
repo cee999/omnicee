@@ -228,7 +228,7 @@ class Orchestrator:
                         "low": [float(c["low"]) for c in candles],
                         "close": [float(c["close"]) for c in candles],
                         "volume": [float(c.get("volume") or 0.0) for c in candles],
-                        "regime": str(result.regime.get("regime", ""))}
+                        "regime": result.regime.value}
         score = self._score_from_raw(consensus.raw_score)
 
         # ---- engines
@@ -243,10 +243,34 @@ class Orchestrator:
             if dampen.get("dampen"):
                 score *= float(dampen.get("factor", 1.0))
         dir_str = direction.value if direction is not Direction.FLAT else "WAIT"
-        strategy = select_strategy({"structure": result.regime.get("structure", "CHOP"),
-                                    "volatility": result.regime.get("volatility", "NORMAL"),
-                                    "trend": result.regime.get("trend", ""),
-                                    "tradeability": result.regime.get("tradeability", 50)}, dir_str)
+
+        # engines/pipeline.py's select_strategy/institutional_gates were
+        # written against the old Node-style regime dict (structure/
+        # volatility/trend/tradeability/earlyWarning). The new pipeline's
+        # AnalysisResult.regime is just the Regime enum — the richer detail
+        # (direction/volatility axes, confidence) lives in
+        # result.data_quality["regime"] (RegimeRead.as_dict()). Translate
+        # once here rather than re-deriving it at every call site.
+        _regime_detail = result.data_quality.get("regime") or {}
+        _direction_axis = _regime_detail.get("directionAxis", "UNCLEAR")
+        _volatility_axis = _regime_detail.get("volatilityAxis", "NORMAL")
+        _regime_confidence = float(_regime_detail.get("confidence") or 0.0)
+        regime_legacy = {
+            "structure": {"TRENDING": "DIRECTIONAL", "RANGING": "RANGE"}.get(_direction_axis, "CHOP"),
+            "volatility": {"HIGH": "EXPANSION", "COMPRESSED": "COMPRESSION"}.get(_volatility_axis, "NORMAL"),
+            # No direct bull/bear read in the new contract — only meaningful
+            # while the direction axis itself says TRENDING, using the
+            # consensus direction as the closest available proxy.
+            "trend": ({"LONG": "BULL_TREND", "SHORT": "BEAR_TREND"}.get(direction.value, "")
+                      if _direction_axis == "TRENDING" else ""),
+            # No direct tradeability score in the new contract — regime
+            # confidence is the closest proxy (a confidently-read regime is
+            # one worth sizing into; an UNCLEAR/low-confidence read should
+            # gate down, which is what tradeability originally did).
+            "tradeability": round(_regime_confidence * 100, 1),
+            "earlyWarning": None,
+        }
+        strategy = select_strategy(regime_legacy, dir_str)
         inter = intermarket_check(symbol, dir_str, self.dxy_prices, self.equity_prices)
         session = self.session.check(symbol, news_events=events)
 
@@ -291,7 +315,7 @@ class Orchestrator:
                                   simulations=self.cfg.MC_SIMULATIONS)
         bayes = bayesian_posterior(
             {"agentAgreement": consensus.agreement, "score": score,
-             "tradeability": result.regime.get("tradeability", 50),
+             "tradeability": regime_legacy["tradeability"],
              "rr": rr or 0, "riskRejected": (not risk_approved) and direction is not Direction.FLAT},
             prior=self.cfg.BAYES_PRIOR, min_posterior=self.cfg.BAYES_MIN_POSTERIOR)
         stat = statistical_validate(candles_dict, dir_str, score,
@@ -320,8 +344,8 @@ class Orchestrator:
                 core_directions[v.agent] = v.direction.value
         gates = institutional_gates(
             score=score, rr=rr or 0,
-            regime={"structure": result.regime.get("structure", "CHOP"),
-                    "tradeability": result.regime.get("tradeability", 50)},
+            regime={"structure": regime_legacy["structure"],
+                    "tradeability": regime_legacy["tradeability"]},
             risk_approved=risk_approved, effective_risk=effective_risk,
             consensus=consensus.agreement, ensemble=ensemble,
             learning_action=None, symbol_loss_streak=self.symbol_loss_streak.get(symbol, 0),
@@ -369,7 +393,7 @@ class Orchestrator:
         }
         self.ranker.update(symbol, action=final_action, score=round(score, 1),
                            reason="; ".join((gates.get("failures") or [])[:2]) or None,
-                           regime=result.regime.get("regime"))
+                           regime=result.regime.value)
         # Only actionable signals go out on the `signal` channel — WAIT docs
         # are visible in the audit trail and engine telemetry, not as signals.
         if final_action in ("LONG", "SHORT", "BUY", "SELL"):
