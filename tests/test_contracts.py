@@ -1,8 +1,8 @@
 import pytest
 from pydantic import ValidationError
 
-from omnicee.contracts.market import Candle, MarketSnapshot, Series
-from omnicee.contracts.signals import Direction, Levels, Signal, SignalState
+from contracts.market import Candle, MarketSnapshot, Series
+from contracts.signals import Direction, Levels, Signal, SignalState
 
 
 def test_candle_rejects_incoherent_ohlc():

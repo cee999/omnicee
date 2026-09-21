@@ -11,7 +11,7 @@ stop that.
 
 ## Current state of the repo
 
-There is **one backend**: Python, at the **repo root** (the `omnicee/` package).
+There is **one backend**: Python, at the **repo root** as top-level modules (no package wrapper).
 The Node runtime was fully retired (owner decision) and the backend now lives
 at the root, not in `py/` — every Node module was ported
 behaviour-for-behaviour (porting specs were extracted from the code before
@@ -19,17 +19,16 @@ deletion — see the git history of the migration commit).
 
 | | location | language | owns |
 |---|---|---|---|
-| **Everything** | [`omnicee/`](./omnicee) | Python | feeds (WS + REST), candle stores, regime, 8 agents, consensus, calibration, validation stack (Monte Carlo / Bayesian / statistical / walk-forward / ensemble), risk stack, SL/TP + trap/compression/cycle engines, gold desk, orchestrator loop, REST `/api/*`, Socket.IO (`/socket.io`), Telegram + email auth, alerts, Mongo persistence, MT5 EA bridge, static `webapp-react/dist` |
+| **Everything** | [top-level modules](.) | Python | feeds (WS + REST), candle stores, regime, 8 agents, consensus, calibration, validation stack (Monte Carlo / Bayesian / statistical / walk-forward / ensemble), risk stack, SL/TP + trap/compression/cycle engines, gold desk, orchestrator loop, REST `/api/*`, Socket.IO (`/socket.io`), Telegram + email auth, alerts, Mongo persistence, MT5 EA bridge, static `webapp-react/dist` |
 
-Single service entrypoint: `omnicee.api.app:asgi` (FastAPI + python-socketio
+Single service entrypoint: `api.app:asgi` (FastAPI + python-socketio
 combined ASGI app), run from the repo root. `DISABLE_ENGINE=1` gives you the
 old stateless-brain mode.
 
 ### Layout
 
 ```
-omnicee/
-  config.py           all env, validated once at boot. Nothing else reads os.environ.
+config.py           all env, validated once at boot. Nothing else reads os.environ.
   pipeline.py         the analysis chain. One entry point: analyse().
   contracts/          Candle, Series, MarketSnapshot, Signal, AgentVote, Consensus
   features/           numpy indicators, SMC structure, two-axis regime classifier
@@ -58,7 +57,7 @@ These are not style preferences. Breaking one is a bug even if tests pass.
    probability. `confidence` stays `null` until `Calibrator` has fitted on
    enough real closed outcomes (see Calibration below).
 3. **Risk gates are deterministic and final.** No agent, no model, no AI
-   advisor overrides `omnicee/risk/gates.py`. Gates block with stated reasons.
+   advisor overrides `risk/gates.py`. Gates block with stated reasons.
 4. **Silence is never an output.** Every analysis returns a body. Either a
    signal, or `blocked_reasons` saying exactly why not. "Nothing fired" and
    "the pipeline crashed" must never look identical to the UI.
@@ -70,7 +69,7 @@ These are not style preferences. Breaking one is a bug even if tests pass.
    makes a broken pipeline look merely indecisive.
 7. **No stale analysis.** Price older than `MAX_PRICE_AGE_MS` blocks.
 8. **Contracts are the source of truth.** Anything crossing the API boundary
-   is defined in `omnicee/contracts/`. FastAPI publishes them at
+   is defined in `contracts/`. FastAPI publishes them at
    `/openapi.json`. Do not hand-write a duplicate type.
 9. **Do not swallow exceptions.** Log them, surface them, degrade visibly.
 10. **Do not delete working code** because a rewrite looks cleaner. Incremental
@@ -84,7 +83,7 @@ These are not style preferences. Breaking one is a bug even if tests pass.
 volatility on a single ballot. A squeeze inside a strong trend then outvoted
 ADX and labelled the market COMPRESSED, which down-weighted every
 trend-following agent at exactly the wrong moment. It is now two orthogonal
-axes with an explicit resolution order (`omnicee/features/regime.py`). If you
+axes with an explicit resolution order (`features/regime.py`). If you
 "simplify" it back to one vote you will reintroduce the bug.
 
 **Hurst exponent.** It was computed on log *returns*, which differences the
@@ -102,7 +101,7 @@ killed the `market_update` stream. Never patch it back to a sync callable.
 
 ## Adding an agent (the common task)
 
-1. Create `omnicee/agents/yourname.py`, subclass `Agent`.
+1. Create `agents/yourname.py`, subclass `Agent`.
 2. Implement `evaluate(ctx) -> AgentVote`. It must be **pure**: no I/O, no
    globals, no mutation of `ctx`. That is what makes it safe to run
    concurrently and testable.
@@ -142,7 +141,7 @@ Socket.IO path/events.
 
 Next candidate work: Myfxbook sentiment + OpenInsider feeds (keys exist in
 config), the researched API-vault candidates (Twelve Data, Tiingo, EODHD — see
-`omnicee/feeds/api_vault.py`), and frontend polish on the new
+`feeds/feeds_feeds.py`), and frontend polish on the new
 engine-status endpoints (`/api/engine`, `/api/feed-health`, `/api/api-vault`).
 
 **Update this section in the same commit as your code.** Documentation that
@@ -174,8 +173,8 @@ work in this repo.
 # from the repo root
 pip install -r requirements-dev.txt
 set NODE_ENV=test&& python -m pytest tests -q     # 29 tests, all must pass
-python -m ruff check omnicee tests                # must be clean
-uvicorn omnicee.api.app:asgi --port 8000          # http://localhost:8000/docs
+python -m ruff check .                # must be clean
+uvicorn api.app:asgi --port 8000          # http://localhost:8000/docs
 ```
 
 ---
@@ -185,7 +184,7 @@ uvicorn omnicee.api.app:asgi --port 8000          # http://localhost:8000/docs
 Production is **Render free tier: 512 MB RAM, 0.1 CPU, spins down when idle**,
 Singapore region, with MongoDB Atlas M0. Blueprint: [`render.yaml`](render.yaml)
 — build installs `requirements.txt` + builds `webapp-react/dist`, start is
-`uvicorn omnicee.api.app:asgi` from the repo root.
+`uvicorn api.app:asgi` from the repo root.
 
 Measured install sizes, not estimates:
 

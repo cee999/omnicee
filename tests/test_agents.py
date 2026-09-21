@@ -1,9 +1,9 @@
 import asyncio
 
-from omnicee.agents.base import Agent, AgentContext, run_agents
-from omnicee.agents.registry import build_agents
-from omnicee.contracts.signals import AgentVote, Direction
-from omnicee.features.regime import classify_regime
+from agents.base import Agent, AgentContext, run_agents
+from agents.registry import build_agents
+from contracts.signals import AgentVote, Direction
+from features.regime import classify_regime
 
 
 class Exploding(Agent):

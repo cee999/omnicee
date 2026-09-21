@@ -2,11 +2,11 @@ import asyncio
 
 import numpy as np
 
-from omnicee.config import Settings
-from omnicee.contracts.signals import Direction, SignalState
-from omnicee.ensemble.calibration import Calibrator
-from omnicee.pipeline import PipelineDeps, analyse
-from omnicee.risk.gates import AccountState
+from config import Settings
+from contracts.signals import Direction, SignalState
+from ensemble.calibration import Calibrator
+from pipeline import PipelineDeps, analyse
+from risk.gates import AccountState
 
 
 def _deps(**overrides):

@@ -31,7 +31,7 @@ OMNICEE aggregates multi-agent confluence, session/risk gates, broker-grade pric
 └────────────────────────────┬────────────────────────────────┘
                              │ REST + Socket.IO
 ┌────────────────────────────▼────────────────────────────────┐
-│  omnicee.api.app:asgi  — single Python service (uvicorn)     │
+│  api.app:asgi  — single Python service (uvicorn)     │
 │    ├─ api/server.py   REST, Socket.IO, static UI, EA routes │
 │    └─ orchestrator/   engine loop: feeds → agents → risk    │
 └────────────────────────────┬────────────────────────────────┘
@@ -44,7 +44,7 @@ OMNICEE aggregates multi-agent confluence, session/risk gates, broker-grade pric
 ```
 
 **One backend, one process.** The Node runtime was fully retired; every module
-was ported behaviour-for-behaviour into `omnicee/` at the repo root. A single
+was ported behaviour-for-behaviour as top-level modules at the repo root. A single
 Render service builds the React app and serves REST + Socket.IO + engine + static UI.
 
 ---
@@ -52,7 +52,7 @@ Render service builds the React app and serves REST + Socket.IO + engine + stati
 ## Repository layout
 
 ```
-omnicee/             The entire backend (Python, at the repo root)
+agents/  feeds/  ...  The entire backend (Python, top-level modules)
   ├─ feeds/          WS + REST market data, news, calendar, COT, api_vault
   ├─ agents/         8 scorers (SMC, MTF, microstructure, pattern, ...)
   ├─ ensemble/       Monte Carlo, Bayesian, statistical, walk-forward gates
@@ -83,7 +83,7 @@ python -m venv .venv
 npm --prefix webapp-react install
 npm --prefix webapp-react run build
 
-.venv\Scripts\python -m uvicorn omnicee.api.app:asgi --port 8000    # run from repo root
+.venv\Scripts\python -m uvicorn api.app:asgi --port 8000    # run from repo root
 # → http://localhost:8000
 ```
 
@@ -100,7 +100,7 @@ set NODE_ENV=test&& python -m pytest tests -q
 1. Connect this repo; use **Blueprint** (`render.yaml`) or a single **Web Service**.
 2. **Build:**  
    `pip install --no-cache-dir -r requirements.txt && npm --prefix webapp-react install --include=dev && npm --prefix webapp-react run build`
-3. **Start:** `uvicorn omnicee.api.app:asgi --host 0.0.0.0 --port $PORT` (working dir: repo root)
+3. **Start:** `uvicorn api.app:asgi --host 0.0.0.0 --port $PORT` (working dir: repo root)
 4. **Health:** `GET /health`
 
 ### Required environment
@@ -193,8 +193,8 @@ Default symbols include major FX, gold, oil, dollar proxy (`UUP`), and major cry
 
 | Command | Action |
 |---------|--------|
-| `uvicorn omnicee.api.app:asgi` | Single service: REST + Socket.IO + engine (run from repo root) |
-| `DISABLE_ENGINE=1 uvicorn omnicee.api.app:asgi` | Stateless API mode (no live loop) |
+| `uvicorn api.app:asgi` | Single service: REST + Socket.IO + engine (run from repo root) |
+| `DISABLE_ENGINE=1 uvicorn api.app:asgi` | Stateless API mode (no live loop) |
 | `python -m pytest tests -q` | Test suite (run from repo root with `NODE_ENV=test`) |
 | `npm run build --prefix webapp-react` | Build UI into `webapp-react/dist` |
 

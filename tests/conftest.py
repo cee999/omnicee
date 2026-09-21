@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from omnicee.contracts.market import Candle, MarketSnapshot, Series
+from contracts.market import Candle, MarketSnapshot, Series
 
 
 def make_series(symbol="EURUSD", timeframe="M15", n=250, kind="trend", seed=1, start_ms=1_700_000_000_000):

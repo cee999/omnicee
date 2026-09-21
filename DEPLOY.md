@@ -1,6 +1,6 @@
 # Deployment notes — OMNICEE (single Python service)
 
-The backend is one Python ASGI app (`omnicee.api.app:asgi`): FastAPI REST +
+The backend is one Python ASGI app (`api.app:asgi`): FastAPI REST +
 python-socketio + the live engine, all in one uvicorn process. The Node
 runtime was fully retired.
 
@@ -11,7 +11,7 @@ installs `requirements.txt`, and starts uvicorn with the right env vars.
 Manual equivalent for a single Web Service:
 
 - **Build:** `pip install --no-cache-dir -r requirements.txt && npm --prefix webapp-react install --include=dev && npm --prefix webapp-react run build`
-- **Start:** `uvicorn omnicee.api.app:asgi --host 0.0.0.0 --port $PORT` (working dir: repo root)
+- **Start:** `uvicorn api.app:asgi --host 0.0.0.0 --port $PORT` (working dir: repo root)
 - **Health check:** `/health`
 
 Required env vars (see [`.env.example`](.env.example) for the full list):
@@ -32,7 +32,7 @@ User=your-user
 WorkingDirectory=/path/to/omnicee
 Environment=NODE_ENV=production
 Environment=PYTHONPATH=/path/to/omnicee
-ExecStart=/usr/bin/python3 -m uvicorn omnicee.api.app:asgi --host 0.0.0.0 --port 8000
+ExecStart=/usr/bin/python3 -m uvicorn api.app:asgi --host 0.0.0.0 --port 8000
 Restart=on-failure
 RestartSec=10
 LimitNOFILE=65536

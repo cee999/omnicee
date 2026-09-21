@@ -2,7 +2,7 @@
 #  OMNICEE — Render Blueprint (pure-Python backend)
 #  ONE service, ONE process:
 #    FastAPI REST  +  Socket.IO  +  feeds  +  engine  +  the
-#    built React dashboard, all served from omnicee.api.app:asgi.
+#    built React dashboard, all served from api.app:asgi.
 #  The Node runtime has been fully retired; there is nothing
 #  left to wire between two runtimes.
 # ═══════════════════════════════════════════════════════════
@@ -131,7 +131,7 @@ services:
     # NODE_ENV=production is ambient during build, so webapp-react's dev
     # deps must be forced with --include=dev (vite lives there).
     buildCommand: pip install --no-cache-dir -r requirements.txt && npm --prefix webapp-react install --include=dev --fetch-retries=5 --fetch-retry-mintimeout=20000 && npm --prefix webapp-react run build && test -f webapp-react/dist/index.html
-    startCommand: uvicorn omnicee.api.app:asgi --host 0.0.0.0 --port $PORT --workers 1
+    startCommand: uvicorn api.app:asgi --host 0.0.0.0 --port $PORT --workers 1
     healthCheckPath: /health
     autoDeployTrigger: commit
     envVars:

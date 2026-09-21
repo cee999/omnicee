@@ -2,8 +2,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from omnicee.api.app import app
-from omnicee.config import reset_settings_cache
+from api.app import app
+from config import reset_settings_cache
 
 
 @pytest.fixture
