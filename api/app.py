@@ -1,13 +1,15 @@
-"""FastAPI application — the brain's only interface.
+"""FastAPI application — the single OMNICee backend.
 
-This service is never exposed to browsers. The Node edge holds the feeds,
-the auth and the public surface; it calls this service over the private
-network with a shared secret. That boundary is deliberate:
+The Node edge has been fully retired (see render.yaml). This one process
+now owns everything: feeds, auth, the Socket.IO bridge, the REST surface
+in api/server.py, and the analytical pipeline below. `analyse()` is called
+in-process from orchestrator/engine.py — nothing calls it over HTTP anymore.
 
-  * a crashed brain cannot drop ticks (Node still has the feeds)
-  * a dead feed cannot crash analysis
-  * the brain can be restarted, redeployed or scaled without touching the
-    socket layer the mobile app depends on
+The /v1/analyze, /v1/calibration/fit and /v1/agents routes below (plus the
+BRAIN_SHARED_SECRET gate on them) are a leftover from the old two-service
+split, where a separate Node process called this brain over the network.
+They are dead code in the current single-service architecture: harmless,
+but candidates for removal rather than a boundary anything still depends on.
 
 Every route validates its body against the contracts module, so a
 frontend/backend field-name disagreement is a 422 at the boundary rather than
@@ -122,11 +124,12 @@ def require_secret(
     x_brain_secret: Annotated[str | None, Header()] = None,
     settings: Settings = Depends(get_settings),
 ) -> None:
-    """Constant-time shared-secret check.
+    """Constant-time shared-secret check, guarding the dead /v1/* routes below.
 
-    In development with no secret configured the check is skipped, and that
-    fact is logged loudly. In production, config validation has already made
-    the secret mandatory, so this can never silently no-op there.
+    Nothing in this service's own runtime sends this header — analyse() is
+    called in-process now, not over HTTP. BRAIN_SHARED_SECRET is optional
+    (config.py does not require it, unlike EA_SECRET/MONGODB_URI), so with
+    no secret configured this check no-ops rather than blocking boot.
     """
     expected = settings.BRAIN_SHARED_SECRET
     if not expected:
