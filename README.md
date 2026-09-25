@@ -16,7 +16,7 @@ OMNICEE aggregates multi-agent confluence, session/risk gates, broker-grade pric
 | **Signals** | Multi-agent ensemble (SMC, MTF, microstructure, fractal, momentum, volume/OI, sentiment, pattern) with score gates and conflict resolution |
 | **Risk** | Position sizing, drawdown circuit breaker, session filter, correlation / intermarket checks |
 | **Prices** | Prefer live **MT5 EA** bid/ask (Exness); fallbacks only when the EA is offline |
-| **Intel** | Session briefing (“What to expect”), regime/tradeability, COT positioning, economic calendar |
+| **Intel** | Session briefing (“What to expect”), regime/tradeability, COT positioning, retail long/short (Myfxbook), economic calendar |
 | **News** | Multi-source forex / gold / oil / crypto-focused headlines |
 | **Auth** | Email one-time code login (Brevo or SMTP); sessions persist on device |
 | **Execution bridge** | MT5 EA pushes prices + balance; polls **approved** signals only |

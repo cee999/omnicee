@@ -146,10 +146,29 @@ send was swallowed server-side and the UI lied with "Code sent — check inbox
 and spam". Preserved: `ALLOW_DEV_OTP` fallback and the unconfigured-provider
 fallback, both covered in `tests/test_auth.py`.
 
-Next candidate work: Myfxbook sentiment + OpenInsider feeds (keys exist in
-config), the researched API-vault candidates (Twelve Data, Tiingo, EODHD — see
-`feeds/feeds_feeds.py`), and frontend polish on the new
-engine-status endpoints (`/api/engine`, `/api/feed-health`, `/api/api-vault`).
+**2026-09-25 — Myfxbook Community Outlook wired in.** `SentimentAgent` has
+always had a contrarian retail-positioning check (`ext["lsRatio"]`,
+>=2.0 / <=0.5 thresholds) with nothing behind it. `feeds/myfxbook.py` is that
+feed: logs in with `MYFXBOOK_EMAIL`/`MYFXBOOK_PASSWORD`, polls
+`get-community-outlook.json` every 30 min, exposes `get_ratio(symbol)`.
+Wired into `Orchestrator._analyze_symbol` (new optional `myfxbook` ctor arg,
+default `None` — existing call sites untouched) and surfaced read-only on
+`GET /api/sentiment`. `api_vault.py` entry flipped to `integrated: true`.
+Feed is a no-op (`enabled=False`, excluded from `/api/feed-health` alerting)
+until both env vars are set in Render — nothing fabricated in the meantime.
+Tests: `tests/test_myfxbook.py` (ratio math, missing-data guards, the two
+contrarian branches on `SentimentAgent`). 52/52 pytest green, ruff clean.
+
+Next candidate work: OpenInsider via ParseBot (keys exist in config, `PARSE_API_KEY`),
+the remaining researched API-vault candidates (Twelve Data, Tiingo, EODHD —
+lower priority now, mostly redundant with existing price feeds), and
+frontend polish on the engine-status endpoints (`/api/engine`,
+`/api/feed-health`, `/api/api-vault`). Also worth checking directly: the
+owner reports the live app going silent — all 52 tests pass and the anti-silence
+design (`blocked_reasons`, rule 4 above) is intact in code, so this is more
+likely a live/deployment issue (Render free-tier cold start, a missing prod
+env var, unverified MongoDB Atlas connectivity — see the open infra items
+below) than a code regression. Needs live Render logs to actually diagnose.
 
 **Update this section in the same commit as your code.** Documentation that
 lags the code is worse than no documentation.

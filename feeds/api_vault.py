@@ -77,7 +77,7 @@ CATALOG: list[dict[str, Any]] = [
      "envKey": "FMP_API_KEY", "integrated": True, "note": "economic calendar fallback"},
     {"id": "myfxbook", "name": "Myfxbook Community Sentiment", "category": "positioning",
      "url": "https://www.myfxbook.com/api", "auth": "email+password", "priority": 38,
-     "envKey": "MYFXBOOK_EMAIL", "integrated": False, "note": "retail long/short, contrarian signal"},
+     "envKey": "MYFXBOOK_EMAIL", "integrated": True, "note": "retail long/short, feeds SentimentAgent lsRatio"},
     {"id": "parsebot-openinsider", "name": "OpenInsider via ParseBot", "category": "insider",
      "url": "https://api.parse.bot/v1/open-insider-scraper", "auth": "api_key", "priority": 35,
      "envKey": "PARSE_API_KEY", "integrated": False, "note": "insider cluster buys"},

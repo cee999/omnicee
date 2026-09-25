@@ -45,6 +45,7 @@ from feeds.api_vault import status_report as vault_report
 from feeds.cot import CotFeed, CotReport
 from feeds.integrity import DataIntegrityMonitor
 from feeds.manager import FeedManager
+from feeds.myfxbook import MyfxbookFeed
 from feeds.news import fetch_news
 from feeds.rest_pollers import (
     AlphaVantageSentiment,
@@ -267,10 +268,12 @@ async def news(symbol: str | None = None, limit: int = 30) -> dict[str, Any]:
 async def sentiment(request: Request) -> dict[str, Any]:
     mi = getattr(request.app.state, "market_info", None)
     cot = getattr(request.app.state, "cot_feed", None)
+    myfxbook = getattr(request.app.state, "myfxbook_feed", None)
     return {"ok": True,
             "fearGreed": mi.fear_greed if mi else None,
             "cryptoGlobal": mi.crypto_global if mi else None,
-            "cot": {sym: cot.parser.analyze(sym) for sym in (_cfg(request).symbols[:4])} if cot else {}}
+            "cot": {sym: cot.parser.analyze(sym) for sym in (_cfg(request).symbols[:4])} if cot else {},
+            "myfxbook": myfxbook.snapshot() if myfxbook and myfxbook.enabled else None}
 
 
 @router.get("/outlook")
@@ -678,12 +681,14 @@ async def start_backend(app) -> dict[str, Any]:
     cot_feed = CotFeed(cot_report)
     market_info = MarketInfoPoller()
     calendar = CalendarPoller(cfg.FINNHUB_API_KEY, cfg.FMP_API_KEY)
+    myfxbook_feed = MyfxbookFeed(cfg.MYFXBOOK_EMAIL, cfg.MYFXBOOK_PASSWORD)
     app.state.cot_feed = cot_feed
     app.state.market_info = market_info
     app.state.calendar = calendar
+    app.state.myfxbook_feed = myfxbook_feed
 
     symbols = cfg.symbols
-    engine = Orchestrator(cfg, bus, db, fm, cot_feed, market_info, calendar)
+    engine = Orchestrator(cfg, bus, db, fm, cot_feed, market_info, calendar, myfxbook_feed)
     app.state.engine = engine
 
     from services.auth import AuthService
@@ -717,6 +722,8 @@ async def start_backend(app) -> dict[str, Any]:
     spawn_feed(market_info)
     spawn_feed(calendar)
     spawn_feed(cot_feed)
+    if myfxbook_feed.enabled:
+        spawn_feed(myfxbook_feed)
     if cfg.FRED_API_KEY:
         spawn_feed(FredPoller(cfg.FRED_API_KEY, symbols, fm.on_price))
     if cfg.ALPHA_VANTAGE_API_KEY:

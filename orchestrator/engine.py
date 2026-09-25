@@ -61,7 +61,7 @@ log = logging.getLogger(__name__)
 class Orchestrator:
     def __init__(self, settings: Settings, bus: EventBus, db: Database,
                  feed_manager: Any, cot_report: Any, market_info: Any,
-                 calendar: Any) -> None:
+                 calendar: Any, myfxbook: Any = None) -> None:
         self.cfg = settings
         self.bus = bus
         self.db = db
@@ -69,6 +69,7 @@ class Orchestrator:
         self.cot = cot_report
         self.market_info = market_info
         self.calendar = calendar
+        self.myfxbook = myfxbook
         self.audit = AuditTrail(maxlen=500)
         self.agents = build_agents()
         self.calibrator = Calibrator(min_samples=settings.CALIBRATION_MIN_SAMPLES)
@@ -212,6 +213,10 @@ class Orchestrator:
             cot = None
         if cot:
             external["cot"] = cot
+        if self.myfxbook and self.myfxbook.enabled:
+            ratio = self.myfxbook.get_ratio(symbol)
+            if ratio is not None:
+                external["lsRatio"] = ratio
         events = self.calendar.upcoming(10) if self.calendar else []
         external["upcomingEvents"] = [
             {**e, "minutesAway": (float(e["time"]) - time.time() * 1000) / 60_000} for e in events]
