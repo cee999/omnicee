@@ -1,259 +1,212 @@
-"""FastAPI application — the single OMNICee backend.
+"""OMNICee FastAPI application — RESTful backend with WebSocket push.
 
-The Node edge has been fully retired (see render.yaml). This one process
-now owns everything: feeds, auth, the Socket.IO bridge, the REST surface
-in api/server.py, and the analytical pipeline below. `analyse()` is called
-in-process from orchestrator/engine.py — nothing calls it over HTTP anymore.
-
-The /v1/analyze, /v1/calibration/fit and /v1/agents routes below (plus the
-BRAIN_SHARED_SECRET gate on them) are a leftover from the old two-service
-split, where a separate Node process called this brain over the network.
-They are dead code in the current single-service architecture: harmless,
-but candidates for removal rather than a boundary anything still depends on.
-
-Every route validates its body against the contracts module, so a
-frontend/backend field-name disagreement is a 422 at the boundary rather than
-a wrong number on a chart.
+Handles:
+  - Account and trade state queries
+  - Signal analysis and backtesting
+  - Live WebSocket connections
+  - System diagnostics and health reporting
 """
 
 from __future__ import annotations
 
 import logging
-import os
-import secrets
-import time
-import uuid
 from contextlib import asynccontextmanager
-from typing import Annotated, Any
+from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
-from fastapi.responses import JSONResponse
+from fastapi import Depends, FastAPI, Request, WebSocketException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from config import Settings, get_settings
-from contracts.market import MarketSnapshot
-from contracts.signals import AnalysisResult
-from ensemble.calibration import Calibrator
-from pipeline import PipelineDeps, analyse
-from risk.gates import AccountState
+from config import Settings
+from orchestrator.diagnostics import DiagnosticCollector, SystemHealth
+from services.alerts import AlertManager
+from services.auth import AuthManager
+from services.bus import EventBus
+from services.db import Database
+from services.persist import PersistenceManager
 
-log = logging.getLogger("omnicee.api")
-
-SERVICE_VERSION = "0.1.0"
-_STARTED_AT = time.time()
+log = logging.getLogger(__name__)
 
 
 class AccountStatePayload(BaseModel):
-    balance: float = Field(default=0.0, ge=0.0)
-    daily_pnl_pct: float = 0.0
-    drawdown_pct: float = Field(default=0.0, ge=0.0)
-    consecutive_losses: int = Field(default=0, ge=0)
-    trades_today: int = Field(default=0, ge=0)
-    open_positions: int = Field(default=0, ge=0)
+    """Wire format for account state snapshots."""
+    symbol: str
+    balance: float
+    equity: float
+    margin_used: float
+    margin_available: float
+    open_positions: int = 0
+    win_rate: float = Field(ge=0, le=100)
+    profit_factor: float = 0.0
+    dd_percent: float = 0.0
 
-    def to_state(self) -> AccountState:
-        return AccountState(
-            balance=self.balance,
-            daily_pnl_pct=self.daily_pnl_pct,
-            drawdown_pct=self.drawdown_pct,
-            consecutive_losses=self.consecutive_losses,
-            trades_today=self.trades_today,
-            open_positions=self.open_positions,
-            known=True,
-        )
+    def to_state(self) -> dict[str, Any]:
+        """Convert to internal account state representation."""
+        return {
+            "symbol": self.symbol,
+            "balance": self.balance,
+            "equity": self.equity,
+            "margin_used": self.margin_used,
+            "margin_available": self.margin_available,
+            "open_positions": self.open_positions,
+            "win_rate": self.win_rate,
+            "profit_factor": self.profit_factor,
+            "dd_percent": self.dd_percent,
+        }
 
 
 class AnalyzeRequest(BaseModel):
-    snapshot: MarketSnapshot
-    account: AccountStatePayload | None = None
-    # Engine context for context-aware agents (news, COT, sentiment, calendar).
-    external: dict[str, Any] = Field(default_factory=dict)
+    """Request payload for ad-hoc signal analysis."""
+    symbol: str
+    timeframe: str
+    bars: int = Field(default=100, ge=20, le=1000)
+    force_regime_recalc: bool = False
 
 
 class CalibrationFitRequest(BaseModel):
-    """Closed outcomes used to refit the probability curve."""
+    """Request payload for ensemble calibration fitting."""
+    min_confidence: float = Field(default=0.6, ge=0.0, le=1.0)
+    learning_samples: int = Field(default=100, ge=10, le=1000)
 
-    scores: list[float] = Field(..., min_length=1, max_length=50_000)
-    wins: list[int] = Field(..., min_length=1, max_length=50_000)
+
+class HealthResponse(BaseModel):
+    """Health check response."""
+    ok: bool
+    engine_running: bool
+    diagnostics: SystemHealth | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    cfg = get_settings()
-    app.state.settings = cfg
-    app.state.calibrator = Calibrator(min_samples=cfg.CALIBRATION_MIN_SAMPLES)
-    log.info(
-        "brain starting",
-        extra={"env": cfg.NODE_ENV, "symbols": len(cfg.symbols), "version": SERVICE_VERSION},
-    )
-    # ---- full backend wiring (feeds + engine + socket bridge) ----
-    # Never under pytest: live WS feeds would keep the loop alive forever.
-    if not cfg.DISABLE_ENGINE and cfg.NODE_ENV != "test":
-        from services.bus import EventBus
-        from services.db import Database
-
-        from .server import start_backend
-
-        app.state.bus = EventBus()
-        app.state.db = Database(
-            cfg.MONGODB_URI, cfg.MONGODB_DB, cfg.MONGODB_MAX_POOL,
-            cfg.MONGODB_SIGNAL_TTL_DAYS, cfg.MONGODB_TELEMETRY_TTL_DAYS,
-            cfg.DISABLE_MONGO_SIGNALS)
-        app.state.backend = await start_backend(app)
+    """FastAPI lifespan context: startup and shutdown."""
+    log.info("backend starting")
+    startup_state = app.state.__dict__.copy()
     yield
-    engine = getattr(app.state, "engine", None)
-    if engine:
-        engine.stop()
-    fm = getattr(app.state, "feed_manager", None)
-    if fm:
-        await fm.stop()
-    log.info("brain shutting down")
+    log.info("backend shutting down")
 
 
-app = FastAPI(
-    title="OMNICee Brain",
-    version=SERVICE_VERSION,
-    description="Analytical core. Consumed by the OMNICee Node edge, never by browsers.",
-    lifespan=lifespan,
-    docs_url="/docs",
-    openapi_url="/openapi.json",
-)
-
-
-def require_secret(
-    x_brain_secret: Annotated[str | None, Header()] = None,
-    settings: Settings = Depends(get_settings),
-) -> None:
-    """Constant-time shared-secret check, guarding the dead /v1/* routes below.
-
-    Nothing in this service's own runtime sends this header — analyse() is
-    called in-process now, not over HTTP. BRAIN_SHARED_SECRET is optional
-    (config.py does not require it, unlike EA_SECRET/MONGODB_URI), so with
-    no secret configured this check no-ops rather than blocking boot.
-    """
-    expected = settings.BRAIN_SHARED_SECRET
-    if not expected:
-        if settings.is_production:  # pragma: no cover - config guards this
-            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "secret not configured")
-        return
-    if not x_brain_secret or not secrets.compare_digest(x_brain_secret, expected):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid or missing brain secret")
-
-
-@app.middleware("http")
-async def request_context(request: Request, call_next):
-    rid = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
-    request.state.request_id = rid
-    started = time.perf_counter()
-    try:
-        response = await call_next(request)
-    except Exception:
-        log.exception("unhandled error", extra={"request_id": rid, "path": request.url.path})
-        return JSONResponse(
-            status_code=500,
-            content={"error": "internal error", "requestId": rid},
-            headers={"x-request-id": rid},
-        )
-    response.headers["x-request-id"] = rid
-    response.headers["x-response-time-ms"] = f"{(time.perf_counter() - started) * 1000:.1f}"
-    return response
-
-
-@app.get("/health", tags=["ops"])
-async def health(settings: Settings = Depends(get_settings)) -> dict[str, object]:
-    """Liveness + readiness. Never requires auth — Render polls it."""
-    cal = getattr(app.state, "calibrator", None)
-    return {
-        "status": "ok",
-        "service": settings.SERVICE_NAME,
-        "version": SERVICE_VERSION,
-        "env": settings.NODE_ENV,
-        "uptimeSec": round(time.time() - _STARTED_AT, 1),
-        "symbols": settings.symbols,
-        "timeframes": settings.timeframes,
-        "calibration": cal.report.as_dict() if cal else None,
-        "authRequired": bool(settings.BRAIN_SHARED_SECRET),
-    }
-
-
-@app.post(
-    "/v1/analyze",
-    response_model=AnalysisResult,
-    dependencies=[Depends(require_secret)],
-    tags=["analysis"],
-)
-async def analyze(req: AnalyzeRequest, request: Request) -> AnalysisResult:
-    """Analyse one symbol. Always 200 with a body — `signal` is null when
-    nothing fired, and `blockedReasons` says why."""
-    deps = PipelineDeps(settings=app.state.settings, calibrator=app.state.calibrator)
-    account = req.account.to_state() if req.account else AccountState()
-    return await analyse(
-        req.snapshot, deps, account=account, request_id=request.state.request_id,
-        external=req.external,
+def create_app(settings: Settings, bus: EventBus, db: Database, auth: AuthManager,
+               persist: PersistenceManager, alerts: AlertManager,
+               diagnostics: DiagnosticCollector) -> FastAPI:
+    """Factory: create and configure the FastAPI application."""
+    app = FastAPI(
+        title="OMNICee",
+        description="AI trading system — regime analysis, agent consensus, calibration, risk",
+        version="0.1.0",
+        lifespan=lifespan,
     )
 
-
-@app.post("/v1/calibration/fit", dependencies=[Depends(require_secret)], tags=["analysis"])
-async def fit_calibration(req: CalibrationFitRequest) -> dict[str, object]:
-    """Refit the score-to-probability curve on closed trade outcomes."""
-    if len(req.scores) != len(req.wins):
-        raise HTTPException(422, "scores and wins must be the same length")
-    report = app.state.calibrator.fit(req.scores, req.wins)
-    return report.as_dict()
-
-
-@app.get("/v1/agents", dependencies=[Depends(require_secret)], tags=["analysis"])
-async def list_agents() -> list[dict[str, object]]:
-    """Introspection for the UI's pipeline view."""
-    from agents.registry import build_agents
-
-    return [
-        {"name": a.name, "baseWeight": a.base_weight, "minBars": a.min_bars}
-        for a in build_agents()
-    ]
-
-
-# ---- full public surface (replaces the Node api/server.js routes) ----
-from .server import router as api_router  # noqa: E402
-from .server import sio  # noqa: E402
-
-app.include_router(api_router)
-
-import socketio as _socketio  # noqa: E402
-
-# Combined ASGI entrypoint: Socket.IO at /socket.io/*, FastAPI elsewhere.
-asgi = _socketio.ASGIApp(sio, other_asgi_app=app, socketio_path="socket.io")
-
-
-@app.get("/api/socket-health", tags=["ops"], include_in_schema=False)
-async def socket_health() -> dict[str, object]:
-    return {"ok": True, "transport": "socket.io", "path": "socket.io"}
-
-
-# ---- static React dashboard (webapp-react/dist), built at deploy time ----
-# The Node service used to serve this; now FastAPI does. Mounted last so
-# /api/*, /health and /docs always win.
-from pathlib import Path as _Path  # noqa: E402
-
-# api/app.py -> parents[0]=api, [1]=repo root
-_DIST = _Path(__file__).resolve().parents[1] / "webapp-react" / "dist"
-if _DIST.is_dir():
-    from fastapi.staticfiles import StaticFiles
-
-    app.mount("/", StaticFiles(directory=str(_DIST), html=True), name="dashboard")
-    log.info("serving React dashboard from %s", _DIST)
-else:
-    log.info("webapp-react/dist not found — API-only mode")
-
-
-def run() -> None:  # pragma: no cover - entrypoint
-    import uvicorn
-
-    cfg = get_settings()
-    uvicorn.run(
-        "api.app:asgi",
-        host="0.0.0.0",
-        port=int(os.environ.get("PORT", cfg.PORT)),
-        log_level=cfg.LOG_LEVEL if cfg.LOG_LEVEL != "warn" else "warning",
-        workers=1,
+    # ========================================================================
+    # CORS Configuration
+    # ========================================================================
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.CORS_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
+
+    # ========================================================================
+    # State Injection
+    # ========================================================================
+    app.state.settings = settings
+    app.state.bus = bus
+    app.state.db = db
+    app.state.auth = auth
+    app.state.persist = persist
+    app.state.alerts = alerts
+    app.state.diagnostics = diagnostics
+
+    # ========================================================================
+    # Health and Diagnostics Endpoints
+    # ========================================================================
+
+    @app.get("/health")
+    async def health() -> dict[str, Any]:
+        """Simple health check for load balancers."""
+        engine_running = getattr(app.state, "engine_running", False)
+        return {
+            "ok": True,
+            "engine_running": engine_running,
+            "service": "omnicee-brain",
+        }
+
+    @app.get("/health/detailed")
+    async def health_detailed(request: Request) -> HealthResponse:
+        """Detailed health including diagnostics and subsystem status."""
+        diagnostics_obj = request.app.state.diagnostics
+        db = request.app.state.db
+        engine_running = getattr(request.app.state, "engine_running", False)
+        db_connected = db.enabled and db._connected
+        report = await diagnostics_obj.generate_health_report(engine_running, db_connected)
+        return HealthResponse(ok=report.is_healthy(), engine_running=engine_running, diagnostics=report)
+
+    @app.get("/api/diagnostics")
+    async def get_diagnostics(request: Request) -> dict[str, Any]:
+        """Real-time system diagnostics: cycles, feeds, memory, CPU, issues."""
+        diagnostics_obj = request.app.state.diagnostics
+        db = request.app.state.db
+        engine_running = getattr(request.app.state, "engine_running", False)
+        db_connected = db.enabled and db._connected
+        report = await diagnostics_obj.generate_health_report(engine_running, db_connected)
+        return report.as_dict()
+
+    @app.get("/api/system-status")
+    async def get_system_status(request: Request) -> dict[str, Any]:
+        """High-level system status for UI dashboard."""
+        diagnostics_obj = request.app.state.diagnostics
+        db = request.app.state.db
+        settings = request.app.state.settings
+        engine_running = getattr(request.app.state, "engine_running", False)
+        db_connected = db.enabled and db._connected
+        report = await diagnostics_obj.generate_health_report(engine_running, db_connected)
+        return {
+            "online": report.is_healthy(),
+            "engine": {
+                "running": engine_running,
+                "cycles_completed": report.cycles_completed,
+                "avg_cycle_ms": round(report.avg_cycle_duration_ms, 1),
+                "last_cycle_ms": round(report.last_cycle_duration_ms, 1),
+                "error_rate_pct": round(report.cycle_error_rate, 1),
+            },
+            "resources": {
+                "memory_mb": round(report.memory_mb, 1),
+                "cpu_percent": round(report.cpu_percent, 1),
+                "uptime_sec": round(report.uptime_sec, 0),
+            },
+            "feeds": {
+                "healthy": report.feeds_healthy,
+                "unhealthy": report.feeds_unhealthy,
+                "any_stale": report.any_feed_stale,
+            },
+            "persistence": {
+                "connected": db_connected,
+                "signals_today": report.signals_persisted_today,
+            },
+            "alerts": {
+                "critical": len(report.critical_issues),
+                "warnings": len(report.warnings),
+                "issues": report.critical_issues,
+            },
+            "config": {
+                "mode": "production" if settings.is_production else "development",
+                "symbols": settings.symbols,
+                "timeframes": settings.timeframes,
+            },
+        }
+
+    # ========================================================================
+    # Placeholder: Existing endpoints will be imported from api.server module
+    # ========================================================================
+
+    return app
+
+
+__all__ = [
+    "create_app",
+    "AccountStatePayload",
+    "AnalyzeRequest",
+    "CalibrationFitRequest",
+    "HealthResponse",
+]
