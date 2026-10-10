@@ -173,6 +173,8 @@ async def health(settings: Settings = Depends(get_settings)) -> dict[str, object
         "timeframes": settings.timeframes,
         "calibration": cal.report.as_dict() if cal else None,
         "authRequired": bool(settings.BRAIN_SHARED_SECRET),
+        "convexSink": (app.state.convex_sink.stats()
+                       if getattr(app.state, "convex_sink", None) else {"enabled": False}),
     }
 
 

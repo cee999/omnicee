@@ -148,6 +148,20 @@ class Settings(BaseSettings):
     MAX_TRADES_PER_DAY: int = Field(default=8, ge=1)
     KELLY_FRACTION_CAP: float = Field(default=0.25, gt=0.0, le=1.0)
 
+    # ---- edge stack: Convex (state + realtime), R2 (archive) ---------------
+    # The engine pushes signals, prices and health to Convex over an
+    # authenticated HTTP ingest route; the dashboard subscribes to Convex
+    # directly. Unset = sink disabled (and said so in /health), never faked.
+    CONVEX_SITE_URL: str = ""          # https://<deployment>.convex.site
+    CONVEX_INGEST_SECRET: str = ""     # shared secret checked by convex/http.ts
+    CONVEX_SINK_FLUSH_MS: int = Field(default=1_000, ge=100)
+    CONVEX_SINK_BUFFER: int = Field(default=2_000, ge=100)
+    R2_ACCOUNT_ID: str = ""
+    R2_ACCESS_KEY_ID: str = ""
+    R2_SECRET_ACCESS_KEY: str = ""
+    R2_BUCKET: str = ""
+    R2_ARCHIVE_INTERVAL_MIN: int = Field(default=360, ge=5)
+
     # ---- staleness -------------------------------------------------------
     # A price older than this is not a price. Never analyse on stale data.
     MAX_PRICE_AGE_MS: int = Field(default=90_000, ge=1_000)
@@ -205,11 +219,11 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _production_requirements(self) -> Settings:
         if self.NODE_ENV == "production":
-            missing = [
-                name
-                for name in ("EA_SECRET", "MONGODB_URI")
-                if not getattr(self, name)
-            ]
+            missing = [name for name in ("EA_SECRET",) if not getattr(self, name)]
+            if not (self.MONGODB_URI or self.convex_enabled):
+                missing.append("MONGODB_URI or CONVEX_SITE_URL+CONVEX_INGEST_SECRET")
+            if bool(self.CONVEX_SITE_URL) != bool(self.CONVEX_INGEST_SECRET):
+                missing.append("both CONVEX_SITE_URL and CONVEX_INGEST_SECRET")
             if missing:
                 raise ValueError(
                     "production requires these env vars to be set: "
@@ -235,6 +249,15 @@ class Settings(BaseSettings):
     @property
     def mongo_enabled(self) -> bool:
         return bool(self.MONGODB_URI)
+
+    @property
+    def convex_enabled(self) -> bool:
+        return bool(self.CONVEX_SITE_URL and self.CONVEX_INGEST_SECRET)
+
+    @property
+    def r2_enabled(self) -> bool:
+        return all((self.R2_ACCOUNT_ID, self.R2_ACCESS_KEY_ID,
+                    self.R2_SECRET_ACCESS_KEY, self.R2_BUCKET))
 
 
 @lru_cache(maxsize=1)

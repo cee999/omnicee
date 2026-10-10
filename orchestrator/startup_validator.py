@@ -27,8 +27,11 @@ class StartupValidator:
         self.checks_run: dict[str, bool] = {}
 
     def validate_configuration(self) -> bool:
-        if self.settings.is_production and not self.settings.MONGODB_URI:
-            self.issues.append("MONGODB_URI not configured in production")
+        if (self.settings.is_production and not self.settings.MONGODB_URI
+                and not self.settings.convex_enabled):
+            self.issues.append(
+                "no durable store in production: set CONVEX_SITE_URL + "
+                "CONVEX_INGEST_SECRET (or MONGODB_URI)")
         if self.settings.is_production and not self.settings.EA_SECRET:
             self.issues.append("EA_SECRET not configured in production")
         if not self.settings.symbols:
@@ -36,7 +39,7 @@ class StartupValidator:
         if not self.settings.timeframes:
             self.issues.append("TIMEFRAMES list is empty")
 
-        if not self.settings.MONGODB_URI:
+        if not self.settings.MONGODB_URI and not self.settings.convex_enabled:
             self.warnings.append("MongoDB is disabled; persistence and learning are unavailable")
         if self.settings.MAX_DAILY_LOSS_PCT > 10:
             self.warnings.append(f"Aggressive daily loss limit: {self.settings.MAX_DAILY_LOSS_PCT}%")

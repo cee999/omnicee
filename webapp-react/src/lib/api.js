@@ -1,37 +1,44 @@
-"""Enhanced API client with diagnostics endpoints."""
+import { io } from 'socket.io-client';
 
-const API_BASE = import.meta.env.VITE_API_BASE || window.location.origin;
-const SOCKET_URL = `${API_BASE.replace(/^http/, 'ws')}`;
+const APP_TOKEN = import.meta.env.VITE_APP_TOKEN || '';
 
-const get = async (path, params) => {
-  const q = new URLSearchParams(params).toString();
-  const url = q ? `${path}?${q}` : path;
-  const res = await fetch(`${API_BASE}${url}`);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+// FIX: same gap as App.jsx's omniFetch — telegramAuthMiddleware checks for x-telegram-init-data (REST) / auth.initData (socket), but this module never read window.Telegram.WebApp.initData.
+function getTelegramInitData() {
+  try { return window.Telegram?.WebApp?.initData || ''; } catch (_) { return ''; }
+}
+
+function authHeaders() {
+  const h = APP_TOKEN ? { 'x-app-token': APP_TOKEN } : {};
+  const initData = getTelegramInitData();
+  if (initData) h['x-telegram-init-data'] = initData;
+  return h;
+}
+
+async function get(path, params = {}) {
+  const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== ''));
+  const url = qs.toString() ? `${path}?${qs}` : path;
+  const res = await fetch(url, { headers: { ...authHeaders() } });
+  if (!res.ok) throw new Error(`${path} → HTTP ${res.status}`);
   return res.json();
-};
+}
 
-const post = async (path, body) => {
-  const res = await fetch(`${API_BASE}${path}`, {
+async function post(path, body) {
+  const res = await fetch(path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) throw new Error(`${path} → HTTP ${res.status}`);
   return res.json();
-};
+}
 
-export const api = {
-  // Health & Diagnostics (NEW)
+export const OmniceeAPI = {
   health: () => get('/health'),
   healthDetailed: () => get('/health/detailed'),
   diagnostics: () => get('/api/diagnostics'),
   systemStatus: () => get('/api/system-status'),
-
-  // Core Data
   market: ({ symbols } = {}) => get('/api/market', { symbols: Array.isArray(symbols) ? symbols.join(',') : symbols }),
   signals: ({ symbol, limit = 50 } = {}) => get('/api/signals', { symbol, limit }),
-  stats: () => get('/api/stats'),
   candles: ({ symbol, timeframe = 'H1', limit = 300 } = {}) => get('/api/candles', { symbol, timeframe, limit }),
   outlook: () => get('/api/outlook'),
   heatmap: ({ timeframe } = {}) => get('/api/heatmap', { timeframe }),
@@ -40,43 +47,30 @@ export const api = {
   watchlist: ({ limit, timeframe } = {}) => get('/api/watchlist', { limit, timeframe }),
   learning: ({ limit } = {}) => get('/api/learning', { limit }),
   news: ({ symbol, category } = {}) => get('/api/news', { symbol, category }),
+  stats: () => get('/api/stats'),
   equityCurve: ({ limit } = {}) => get('/api/equity-curve', { limit }),
   recordOutcome: (signalId, outcome) => post('/api/outcomes', { signalId, outcome }),
 };
 
-// WebSocket Singleton
-let socket = null;
+export function connectOmniceeSocket(handlers = {}) {
+  const socket = io('/', {
+    path: '/socket.io',
+    auth: { appToken: APP_TOKEN || undefined, initData: getTelegramInitData() || undefined },
+    transports: ['websocket', 'polling'],
+  });
 
-export const initSocket = (token) => {
-  if (socket) return socket;
-  socket = new WebSocket(`${SOCKET_URL}/ws?token=${token}`);
-  socket.handlers = {};
-  socket.on = (event, handler) => { socket.handlers[event] = handler; };
-  socket.emit = (event, payload) => { socket.send(JSON.stringify({ event, payload })); };
-  socket.onmessage = (msg) => {
-    const { event, payload } = JSON.parse(msg.data);
-    const handler = socket.handlers[event];
-    if (handler) handler(payload);
-  };
-  socket.onerror = () => { socket = null; };
-  socket.onclose = () => { socket = null; };
-  return socket;
-};
+  // FIX: this doc comment already promised feed_health/balance/watchlist_ update/abnormal_market/liquidation_cascade (api/server.js does forward() all of them), but the actual subscription list below...
+  const channels = [
+    'connected', 'signal', 'market', 'risk', 'stats', 'regime', 'telemetry',
+    'intel', 'feed_health', 'balance', 'watchlist_update', 'abnormal_market',
+    'liquidation_cascade', 'outcome_saved', 'outcome_error',
+  ];
+  channels.forEach(ch => {
+    if (handlers[ch]) socket.on(ch, handlers[ch]);
+  });
 
-export const getSocket = () => socket;
-
-export const closeSocket = () => {
-  if (socket) {
-    socket.close();
-    socket = null;
-  }
-};
-
-if (socket && socket.handlers) {
-  socket.getAccountState = (payload) => socket.emit('get_account_state', payload);
-  socket.analyzeSymbol = (payload) => socket.emit('analyze_symbol', payload);
   socket.getHistory = (payload) => socket.emit('get_history', payload);
   socket.recordOutcome = (payload) => socket.emit('record_outcome', payload);
-}
 
-export default api;
+  return socket;
+}

@@ -580,6 +580,18 @@ async def ea_prices(request: Request, body: dict[str, Any], secret: str | None =
     return {"ok": True, "accepted": accepted}
 
 
+@router.get("/api/edge-status")
+async def edge_status(request: Request) -> dict[str, Any]:
+    """Convex sink + R2 archive state. Failures are visible here, not silent."""
+    st = request.app.state
+    sink = getattr(st, "convex_sink", None)
+    r2 = getattr(st, "r2", None)
+    return {
+        "convex": sink.stats() if sink else {"enabled": False},
+        "r2": r2.stats() if r2 else {"enabled": False},
+    }
+
+
 # ------------------------------------------------------------ socket bridge
 # The React app listens on these names (the Node contract); the bus emits the
 # engine's internal names. Map at the boundary, never inside the engine.
@@ -739,9 +751,21 @@ async def start_backend(app) -> dict[str, Any]:
                 log.exception("feed health loop failed")
             await asyncio.sleep(30)
 
+    # Edge stack: Convex (system of record + realtime) and R2 (cold archive).
+    from services.convex_sink import ConvexSink
+    from services.r2 import R2Archive
+
+    sink = ConvexSink(cfg, bus)
+    archive = R2Archive(cfg)
+    app.state.convex_sink = sink
+    app.state.r2 = archive
+
     fm.spawn(engine.run())
     fm.spawn(fm.persist_loop())
     fm.spawn(feed_health_loop())
     fm.spawn(_socket_bridge(app))
+    fm.spawn(sink.run())
+    fm.spawn(archive.archive_loop(
+        lambda: {"candles": fm.store.all(), "lastPrices": fm.store.last_prices}))
     log.info("backend started: %d feeds, %d symbols", len(feeds), len(symbols))
     return {"feeds": len(feeds), "symbols": len(symbols)}
