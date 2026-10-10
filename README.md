@@ -45,7 +45,7 @@ OMNICEE aggregates multi-agent confluence, session/risk gates, broker-grade pric
 
 **One backend, one process.** The Node runtime was fully retired; every module
 was ported behaviour-for-behaviour as top-level modules at the repo root. A single
-Render service builds the React app and serves REST + Socket.IO + engine + static UI.
+Python engine serves REST + Socket.IO and pushes state to Convex; the React dashboard is hosted on Cloudflare Pages (see DEPLOY.md).
 
 ---
 
@@ -64,7 +64,7 @@ agents/  feeds/  ...  The entire backend (Python, top-level modules)
 tests/               pytest suite (29 tests)
 mt5/OmniceeEA.mq5    MetaTrader 5 bridge (prices + balance + approved trades)
 webapp-react/        Production frontend (Vite + React)
-render.yaml          Render Blueprint (single Python service)
+Dockerfile           Python engine container (Render is retired - see DEPLOY.md)
 .env.example         All environment variables documented
 ```
 
@@ -95,19 +95,17 @@ set NODE_ENV=test&& python -m pytest tests -q
 
 ---
 
-## Production (Render)
+## Production
 
-1. Connect this repo; use **Blueprint** (`render.yaml`) or a single **Web Service**.
-2. **Build:**  
-   `pip install --no-cache-dir -r requirements.txt && npm --prefix webapp-react install --include=dev && npm --prefix webapp-react run build`
-3. **Start:** `uvicorn api.app:asgi --host 0.0.0.0 --port $PORT` (working dir: repo root)
-4. **Health:** `GET /health`
+See [DEPLOY.md](DEPLOY.md): Cloudflare Pages (dashboard) + Convex (state/realtime) +
+Better Auth (login) + R2 (archive) + the Python engine container (`Dockerfile`).
 
 ### Required environment
 
 | Variable | Purpose |
 |----------|---------|
-| `MONGODB_URI` | MongoDB Atlas connection string (required in production) |
+| `CONVEX_SITE_URL` + `CONVEX_INGEST_SECRET` | Convex ingest target (required in production unless `MONGODB_URI` is set) |
+| `MONGODB_URI` | Optional legacy store |
 | `EA_SECRET` | Shared secret for MT5 EA (`/api/ea/*`), required in production |
 | `SYMBOLS` | Comma list, e.g. `BTCUSDT,ETHUSDT,XAUUSD,USOIL,UUP,EURUSD,GBPUSD,USDJPY` |
 
@@ -143,7 +141,7 @@ File: [`mt5/OmniceeEA.mq5`](mt5/OmniceeEA.mq5)
 2. **Tools → Options → Expert Advisors:** allow WebRequest for your server URL (e.g. `https://omnicee.onrender.com`).
 3. Attach to **one** chart. Inputs:
    - `InpServerURL` = public HTTPS origin  
-   - `InpEASecret` = same as Render `EA_SECRET`
+   - `InpEASecret` = same as the engine's `EA_SECRET`
 4. EA:
    - Pushes **bid/ask** on a timer (`/api/ea/prices`)
    - Syncs **balance** (`/api/ea/balance`)

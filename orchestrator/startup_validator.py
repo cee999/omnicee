@@ -67,7 +67,7 @@ class StartupValidator:
         )
         try:
             health = await asyncio.wait_for(asyncio.to_thread(db.health), timeout=5.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self.issues.append("Database health check timed out after 5 seconds")
             self.checks_run["database"] = False
             return False

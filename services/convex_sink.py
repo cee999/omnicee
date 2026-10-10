@@ -56,6 +56,7 @@ class ConvexSink:
         self.sent = 0
         self.failed_batches = 0
         self.dropped = 0
+        self.rejected = 0
         self.last_ok_at: int | None = None
         self.last_error: str | None = None
 
@@ -100,6 +101,14 @@ class ConvexSink:
                 self._url, json={"events": batch},
                 headers={"Authorization": f"Bearer {self._secret}"})
             resp.raise_for_status()
+            try:
+                rejected = resp.json().get("rejected") or []
+            except ValueError:
+                rejected = []
+            if rejected:
+                self.rejected += len(rejected)
+                self.last_error = f"convex rejected {len(rejected)} event(s): {rejected[0]}"
+                log.error("convex rejected events: %s", rejected[:3])
         finally:
             if self._client is None:
                 await client.aclose()
@@ -108,6 +117,7 @@ class ConvexSink:
         batch = self._drain()
         if not batch:
             return True
+        rejected_before = self.rejected
         try:
             await self._post(batch)
         except Exception as exc:
@@ -118,7 +128,8 @@ class ConvexSink:
             return False
         self.sent += len(batch)
         self.last_ok_at = int(time.time() * 1000)
-        self.last_error = None
+        if self.rejected == rejected_before:  # keep a rejection message visible
+            self.last_error = None
         return True
 
     async def run(self) -> None:
@@ -134,7 +145,7 @@ class ConvexSink:
                 self._accept(channel, payload)
                 while not q.empty():
                     self._accept(*q.get_nowait())
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
             ok = await self.flush_once()
             failures = 0 if ok else failures + 1
@@ -145,6 +156,7 @@ class ConvexSink:
         return {
             "enabled": self.enabled, "sent": self.sent,
             "failedBatches": self.failed_batches, "dropped": self.dropped,
+            "rejected": self.rejected,
             "pending": len(self._signals) + len(self._latest),
             "lastOkAt": self.last_ok_at, "lastError": self.last_error,
         }

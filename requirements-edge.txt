@@ -1,0 +1,2 @@
+# Edge stack extras (R2 archive). Optional: R2 reports itself disabled without it.
+boto3>=1.35,<2.0

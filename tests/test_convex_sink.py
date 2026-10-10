@@ -89,3 +89,15 @@ def test_signal_buffer_drops_oldest_loudly():
     for i in range(105):
         sink._accept("signal", {"id": str(i), "symbol": "X"})
     assert sink.dropped == 5 and sink._signals[0]["data"]["id"] == "5"
+
+
+def test_server_side_rejections_are_surfaced():
+    sink = _sink(lambda r: httpx.Response(200, json={"ok": True, "accepted": 0,
+                                                     "rejected": ["signal missing id"]}))
+
+    async def go():
+        sink._accept("signal", {"id": "a", "symbol": "X"})
+        await sink.flush_once()
+
+    asyncio.run(go())
+    assert sink.rejected == 1 and "rejected" in (sink.last_error or "")

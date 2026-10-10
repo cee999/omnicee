@@ -142,4 +142,4 @@ class DiagnosticCollector:
             log.info("system health: %s", self.last_health_report.as_dict())
 
 
-__all__ = ["DiagnosticCollector", "SystemHealth", "FeedHealth", "CycleMetrics"]
+__all__ = ["CycleMetrics", "DiagnosticCollector", "FeedHealth", "SystemHealth"]

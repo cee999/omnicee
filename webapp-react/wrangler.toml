@@ -1,0 +1,5 @@
+# Cloudflare Pages: static React dashboard. API traffic goes to the Python
+# engine (VITE_API_BASE) until the Convex cutover; live data to Convex.
+name = "omnicee"
+pages_build_output_dir = "dist"
+compatibility_date = "2026-10-01"

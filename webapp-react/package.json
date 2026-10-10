@@ -6,7 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build && node scripts/inject-sw-build-id.mjs",
-    "preview": "vite preview --port 4173"
+    "preview": "vite preview --port 4173",
+    "convex:dev": "convex dev",
+    "convex:deploy": "convex deploy",
+    "typecheck:convex": "tsc -p convex/tsconfig.json",
+    "pages:deploy": "npm run build && wrangler pages deploy dist --project-name omnicee"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.1",
@@ -18,9 +22,17 @@
     "recharts": "^2.12.7",
     "socket.io-client": "^4.7.5",
     "tailwindcss": "^3.4.4",
-    "vite": "^5.3.1"
+    "vite": "^5.3.1",
+    "convex": "^1.46.0",
+    "better-auth": "~1.6.33",
+    "@convex-dev/better-auth": "^0.12.5"
   },
   "optionalDependencies": {
     "@rollup/rollup-linux-x64-gnu": "4.24.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0",
+    "wrangler": "^4.0.0"
   }
 }

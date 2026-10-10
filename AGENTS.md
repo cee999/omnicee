@@ -170,6 +170,21 @@ likely a live/deployment issue (Render free-tier cold start, a missing prod
 env var, unverified MongoDB Atlas connectivity — see the open infra items
 below) than a code regression. Needs live Render logs to actually diagnose.
 
+**2026-10-10 - Restore + edge stack.** Commit `6d7c8f1` ("system diagnostics")
+overwrote `api/app.py` (deleting the `asgi` entrypoint, importing a
+non-existent `AlertManager`), gutted `api/server.py` (768 -> 87 lines), and
+replaced the frontend `api.js` client with one using a raw `/ws` endpoint the
+backend never had. The service could not boot and the UI could not connect:
+that was the "silent and dead" app, not Render. All three were restored from
+`6d7c8f1^` (52 tests green again). Render is retired; the deployment is now
+Cloudflare Pages + Convex + Better Auth + R2 + a Python container (see
+DEPLOY.md). New: `services/convex_sink.py`, `services/r2.py`,
+`webapp-react/convex/`. **Not done yet:** the React app still reads via
+REST/Socket.IO; moving `App.jsx` to Convex live queries
+(`convex/dashboard.ts`) is the next step. `orchestrator/diagnostics.py` is not
+yet instantiated by `start_backend`, so `/api/diagnostics` does not exist yet.
+Lesson: do not replace a working module wholesale; extend it (rule 10).
+
 **Update this section in the same commit as your code.** Documentation that
 lags the code is worse than no documentation.
 

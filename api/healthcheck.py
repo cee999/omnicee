@@ -134,7 +134,7 @@ async def deep_health_check(app: Any) -> dict[str, Any]:
                 status["diagnostics"]["collector"] = health_report.as_dict()
                 status["issues"]["critical"].extend(health_report.critical_issues)
                 status["issues"]["warnings"].extend(health_report.warnings)
-        except Exception as e:
+        except Exception:
             pass
     
     # Determine overall status

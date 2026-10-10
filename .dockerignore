@@ -1,0 +1,8 @@
+.git
+.grok
+.cache
+__pycache__
+.pytest_cache
+webapp-react/node_modules
+webapp-react/dist
+tests
