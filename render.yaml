@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: omnicee-api
+    runtime: python
+    rootDir: backend
+    # Free plans sleep after inactivity and drop the WebSocket + ingest.
+    # Use a paid always-on plan for a live signal system.
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: ALLOWED_ORIGINS
+        sync: false   # set to your Cloudflare Pages URL
+      - key: WATCHLIST
+        value: BTC,ETH,SOL,HYPE,XRP,DOGE
+      - key: SIMULATE
+        value: "0"
