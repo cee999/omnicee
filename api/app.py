@@ -13,14 +13,15 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import Depends, FastAPI, Request, WebSocketException
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from config import Settings
+from api.server import router as server_router
+from config import Settings, get_settings
 from orchestrator.diagnostics import DiagnosticCollector, SystemHealth
 from services.alerts import AlertManager
-from services.auth import AuthManager
+from services.auth import AuthService
 from services.bus import EventBus
 from services.db import Database
 from services.persist import PersistenceManager
@@ -30,6 +31,7 @@ log = logging.getLogger(__name__)
 
 class AccountStatePayload(BaseModel):
     """Wire format for account state snapshots."""
+
     symbol: str
     balance: float
     equity: float
@@ -41,7 +43,6 @@ class AccountStatePayload(BaseModel):
     dd_percent: float = 0.0
 
     def to_state(self) -> dict[str, Any]:
-        """Convert to internal account state representation."""
         return {
             "symbol": self.symbol,
             "balance": self.balance,
@@ -57,6 +58,7 @@ class AccountStatePayload(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     """Request payload for ad-hoc signal analysis."""
+
     symbol: str
     timeframe: str
     bars: int = Field(default=100, ge=20, le=1000)
@@ -65,12 +67,14 @@ class AnalyzeRequest(BaseModel):
 
 class CalibrationFitRequest(BaseModel):
     """Request payload for ensemble calibration fitting."""
+
     min_confidence: float = Field(default=0.6, ge=0.0, le=1.0)
     learning_samples: int = Field(default=100, ge=10, le=1000)
 
 
 class HealthResponse(BaseModel):
     """Health check response."""
+
     ok: bool
     engine_running: bool
     diagnostics: SystemHealth | None = None
@@ -80,14 +84,19 @@ class HealthResponse(BaseModel):
 async def lifespan(app: FastAPI):
     """FastAPI lifespan context: startup and shutdown."""
     log.info("backend starting")
-    startup_state = app.state.__dict__.copy()
     yield
     log.info("backend shutting down")
 
 
-def create_app(settings: Settings, bus: EventBus, db: Database, auth: AuthManager,
-               persist: PersistenceManager, alerts: AlertManager,
-               diagnostics: DiagnosticCollector) -> FastAPI:
+def create_app(
+    settings: Settings,
+    bus: EventBus,
+    db: Database,
+    auth: AuthService,
+    persist: PersistenceManager,
+    alerts: AlertManager,
+    diagnostics: DiagnosticCollector,
+) -> FastAPI:
     """Factory: create and configure the FastAPI application."""
     app = FastAPI(
         title="OMNICee",
@@ -96,20 +105,18 @@ def create_app(settings: Settings, bus: EventBus, db: Database, auth: AuthManage
         lifespan=lifespan,
     )
 
-    # ========================================================================
-    # CORS Configuration
-    # ========================================================================
+    origins = [origin.strip() for origin in settings.CORS_ORIGIN.split(",") if origin.strip()]
+    if not origins:
+        origins = ["*"]
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.CORS_ORIGINS,
+        allow_origins=origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
-    # ========================================================================
-    # State Injection
-    # ========================================================================
     app.state.settings = settings
     app.state.bus = bus
     app.state.db = db
@@ -117,10 +124,9 @@ def create_app(settings: Settings, bus: EventBus, db: Database, auth: AuthManage
     app.state.persist = persist
     app.state.alerts = alerts
     app.state.diagnostics = diagnostics
+    app.state.engine_running = False
 
-    # ========================================================================
-    # Health and Diagnostics Endpoints
-    # ========================================================================
+    app.include_router(server_router)
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
@@ -138,7 +144,7 @@ def create_app(settings: Settings, bus: EventBus, db: Database, auth: AuthManage
         diagnostics_obj = request.app.state.diagnostics
         db = request.app.state.db
         engine_running = getattr(request.app.state, "engine_running", False)
-        db_connected = db.enabled and db._connected
+        db_connected = bool(getattr(db, "enabled", False) and getattr(db, "_connected", False))
         report = await diagnostics_obj.generate_health_report(engine_running, db_connected)
         return HealthResponse(ok=report.is_healthy(), engine_running=engine_running, diagnostics=report)
 
@@ -148,7 +154,7 @@ def create_app(settings: Settings, bus: EventBus, db: Database, auth: AuthManage
         diagnostics_obj = request.app.state.diagnostics
         db = request.app.state.db
         engine_running = getattr(request.app.state, "engine_running", False)
-        db_connected = db.enabled and db._connected
+        db_connected = bool(getattr(db, "enabled", False) and getattr(db, "_connected", False))
         report = await diagnostics_obj.generate_health_report(engine_running, db_connected)
         return report.as_dict()
 
@@ -159,7 +165,7 @@ def create_app(settings: Settings, bus: EventBus, db: Database, auth: AuthManage
         db = request.app.state.db
         settings = request.app.state.settings
         engine_running = getattr(request.app.state, "engine_running", False)
-        db_connected = db.enabled and db._connected
+        db_connected = bool(getattr(db, "enabled", False) and getattr(db, "_connected", False))
         report = await diagnostics_obj.generate_health_report(engine_running, db_connected)
         return {
             "online": report.is_healthy(),
@@ -196,15 +202,38 @@ def create_app(settings: Settings, bus: EventBus, db: Database, auth: AuthManage
             },
         }
 
-    # ========================================================================
-    # Placeholder: Existing endpoints will be imported from api.server module
-    # ========================================================================
-
     return app
+
+
+settings = get_settings()
+bus = EventBus()
+db = Database(
+    uri=settings.MONGODB_URI,
+    db_name=settings.MONGODB_DB,
+    max_pool=settings.MONGODB_MAX_POOL,
+    signal_ttl_days=settings.MONGODB_SIGNAL_TTL_DAYS,
+    telemetry_ttl_days=settings.MONGODB_TELEMETRY_TTL_DAYS,
+    disable_signals=settings.DISABLE_MONGO_SIGNALS,
+)
+auth = AuthService(settings, db)
+persist = PersistenceManager()
+alerts = AlertManager()
+diagnostics = DiagnosticCollector()
+
+asgi = create_app(
+    settings=settings,
+    bus=bus,
+    db=db,
+    auth=auth,
+    persist=persist,
+    alerts=alerts,
+    diagnostics=diagnostics,
+)
 
 
 __all__ = [
     "create_app",
+    "asgi",
     "AccountStatePayload",
     "AnalyzeRequest",
     "CalibrationFitRequest",
