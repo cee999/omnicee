@@ -9,6 +9,7 @@ import {
   Volume2, VolumeX, Sun, Moon, Maximize2, Minimize2, Download,
 } from 'lucide-react';
 import { useIsMobile, useSwipe, cycleIndex } from './lib/mobile.js';
+import { SystemStatusPanel } from './components/SystemStatusPanel.jsx';
 
 const SYMBOLS = ['XAUUSD', 'BTCUSDT', 'ETHUSDT', 'EURUSD', 'GBPUSD', 'USDJPY', 'USOIL', 'UUP'];
 const SYMBOL_LABEL = { UUP: 'DXY', XAUUSD: 'GOLD', USOIL: 'OIL', BTCUSDT: 'BTC', ETHUSDT: 'ETH' };
@@ -3456,6 +3457,24 @@ function NewsTab({ news, mode }) {
 
 /* ── MONITOR ────────────────────────────────────────────────────────── */
 function MonitorTab({ auditLog, uptimeSec, mode, fetchErrors, analysisLive, socketLive }) {
+  // Deep health (engine / feeds / database / resources). Polled only while this tab is open.
+  const [sysStatus, setSysStatus] = useState(null);
+  const [sysError, setSysError] = useState(null);
+  useEffect(() => {
+    if (mode !== 'live') return undefined;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await omniFetch('/api/system-status');
+        if (!cancelled) { setSysStatus(r); setSysError(null); }
+      } catch (e) {
+        if (!cancelled) setSysError(e?.code === 'AUTH_REQUIRED' ? 'sign in to view' : String(e?.message || e));
+      }
+    };
+    load();
+    const id = setInterval(load, 15000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [mode]);
   const uptimeLabel = mode === 'live' && uptimeSec != null
     ? `${Math.floor(uptimeSec / 3600)}h ${Math.floor((uptimeSec % 3600) / 60)}m`
     : null;
@@ -3476,6 +3495,12 @@ function MonitorTab({ auditLog, uptimeSec, mode, fetchErrors, analysisLive, sock
           </div>
         )}
       </div>
+      {mode === 'live' && (
+        <div className="omni-panel p-4">
+          <SectionHeader icon={Database} title="Health" sub="engine · feeds · database" />
+          <SystemStatusPanel status={sysStatus} error={sysError} />
+        </div>
+      )}
       {Array.isArray(auditLog) && auditLog.length > 0 && (
         <div className="omni-panel p-4">
           <SectionHeader icon={ScrollText} title="Events" sub={`${Math.min(auditLog.length, 20)}`} />
