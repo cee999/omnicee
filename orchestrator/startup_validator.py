@@ -20,8 +20,12 @@ log = logging.getLogger(__name__)
 class StartupValidator:
     """Run inexpensive readiness checks before the live backend starts."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, db: Database | None = None) -> None:
         self.settings = settings
+        # Share the app's Database. Building a second one here would open an
+        # extra Mongo connection pool (Atlas M0 allows only 500 total) that
+        # nothing ever closes.
+        self.db = db
         self.issues: list[str] = []
         self.warnings: list[str] = []
         self.checks_run: dict[str, bool] = {}
@@ -54,17 +58,13 @@ class StartupValidator:
             self.checks_run["database"] = True
             return True
 
-        db = Database(
-            self.settings.MONGODB_URI,
-            self.settings.MONGODB_DB,
-            self.settings.MONGODB_MAX_POOL,
-            self.settings.MONGODB_SIGNAL_TTL_DAYS,
-            self.settings.MONGODB_TELEMETRY_TTL_DAYS,
-            self.settings.DISABLE_MONGO_SIGNALS,
-        )
+        if self.db is None:
+            self.warnings.append("Database check skipped: no Database instance supplied")
+            self.checks_run["database"] = True
+            return True
         try:
-            health = await asyncio.wait_for(asyncio.to_thread(db.health), timeout=5.0)
-        except asyncio.TimeoutError:
+            health = await asyncio.wait_for(asyncio.to_thread(self.db.health), timeout=5.0)
+        except TimeoutError:
             self.issues.append("Database health check timed out after 5 seconds")
             self.checks_run["database"] = False
             return False
@@ -106,10 +106,10 @@ class StartupValidator:
         self.validate_settings_consistency()
         result = {
             "passed": not self.issues,
-            "checks_run": dict(self.checks_run),
-            "checks_passed": sum(self.checks_run.values()),
-            "checks_total": len(self.checks_run),
-            "critical_issues": list(self.issues),
+            "checksRun": dict(self.checks_run),
+            "checksPassed": sum(self.checks_run.values()),
+            "checksTotal": len(self.checks_run),
+            "criticalIssues": list(self.issues),
             "warnings": list(self.warnings),
         }
         if self.issues:

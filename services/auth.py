@@ -21,6 +21,7 @@ import re
 import secrets
 import time
 import urllib.parse
+from collections.abc import Mapping
 from typing import Any
 
 import httpx
@@ -42,6 +43,19 @@ PUBLIC_GET_PATHS = {
 }
 
 
+# Routes under /api that carry their own credentials, or ARE the login flow,
+# and therefore must not be gated by the dashboard policy:
+#   /api/auth/*  — request/verify/logout/me for the email-OTP login itself
+#   /api/ea/*    — MT5 Expert Advisor bridge, every route checks EA_SECRET
+AUTH_EXEMPT_PREFIXES = ("/api/auth/", "/api/ea/")
+AUTH_EXEMPT_PATHS = frozenset({"/api/socket-health"})
+# A verified session is remembered this long so a dashboard polling ~20
+# endpoints does not turn into ~20 Mongo reads per refresh. This is also the
+# worst-case delay before a logout/revocation takes effect.
+SESSION_CACHE_TTL_S = 60.0
+SESSION_CACHE_MAX = 1000
+
+
 def timing_safe_eq(a: str, b: str) -> bool:
     return hmac.compare_digest((a or "").encode(), (b or "").encode())
 
@@ -54,6 +68,8 @@ class AuthService:
         self._otp_email_log: dict[str, list[float]] = {}
         self._otp_ip_log: dict[str, list[float]] = {}
         self._last_otp_sent: dict[str, float] = {}
+        # token -> (expires_at_monotonic, email)
+        self._session_cache: dict[str, tuple[float, str]] = {}
 
     # ------------------------------------------------------------ app token
     def check_app_token(self, token: str | None) -> bool:
@@ -195,9 +211,69 @@ class AuthService:
     def session_email(self, token: str | None) -> str | None:
         if not token:
             return None
+        now = time.monotonic()
+        hit = self._session_cache.get(token)
+        if hit and hit[0] > now:
+            return hit[1]
         row = self.db.get_session(token)
-        return row.get("email") if row else None
+        email = row.get("email") if row else None
+        if email:
+            if len(self._session_cache) >= SESSION_CACHE_MAX:
+                self._session_cache = {
+                    t: v for t, v in self._session_cache.items() if v[0] > now
+                }
+                if len(self._session_cache) >= SESSION_CACHE_MAX:
+                    self._session_cache.clear()
+            self._session_cache[token] = (now + SESSION_CACHE_TTL_S, email)
+        else:
+            self._session_cache.pop(token, None)
+        return email
 
     def logout(self, token: str | None) -> None:
         if token:
+            self._session_cache.pop(token, None)
             self.db.delete_session(token)
+
+    # ----------------------------------------------------- request policy
+    def requires_credentials(self, method: str, path: str) -> bool:
+        """Does this request need a valid credential? Pure and cheap (no I/O).
+
+        Policy, ported from the Node `dashboardReadAuth`:
+          * CORS preflight and everything outside /api (static dashboard,
+            /health, /docs, the /v1 brain routes with their own secret) is open.
+          * The login flow and the EA bridge carry their own credentials.
+          * GETs on PUBLIC_GET_PATHS are open iff PUBLIC_DASHBOARD_READ.
+          * Everything else — every mutation, every non-listed read — needs a
+            token, a session, or a verified Telegram identity.
+        Fails closed: anything not explicitly open requires credentials.
+        """
+        if method == "OPTIONS":
+            return False
+        path = re.sub(r"/{2,}", "/", path)  # //api/x must not dodge the /api check
+        if not path.startswith("/api/"):
+            return False
+        if path.startswith(AUTH_EXEMPT_PREFIXES) or path in AUTH_EXEMPT_PATHS:
+            return False
+        return not (
+            method in ("GET", "HEAD")
+            and self.cfg.PUBLIC_DASHBOARD_READ
+            and path in PUBLIC_GET_PATHS
+        )
+
+    def has_valid_credentials(self, headers: Mapping[str, str]) -> bool:
+        """Check app token, email session, then Telegram initData. May hit
+        Mongo (session lookup) — call it off the event loop."""
+        if self.check_app_token(headers.get("x-app-token")):
+            return True
+        auth_header = headers.get("authorization") or ""
+        bearer = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else None
+        if bearer and self.check_app_token(bearer):
+            return True
+        if self.session_email(headers.get("x-session-token") or bearer):
+            return True
+        init_data = headers.get("x-telegram-init-data")
+        if init_data:
+            parsed = self.validate_telegram_init_data(init_data, self.cfg.TELEGRAM_BOT_TOKEN)
+            if parsed and self.telegram_allowed(str(parsed["user"]["id"])):
+                return True
+        return False

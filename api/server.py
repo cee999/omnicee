@@ -691,8 +691,6 @@ async def start_backend(app) -> dict[str, Any]:
     engine = Orchestrator(cfg, bus, db, fm, cot_feed, market_info, calendar, myfxbook_feed)
     app.state.engine = engine
 
-    from services.auth import AuthService
-    app.state.auth = AuthService(cfg, db)
     app.state.alerts = engine.alerts
     sio.omnicee_state = app.state  # for socket handlers needing engine/db/feeds
 
@@ -740,6 +738,7 @@ async def start_backend(app) -> dict[str, Any]:
             await asyncio.sleep(30)
 
     fm.spawn(engine.run())
+    fm.spawn(app.state.diagnostics.run(bus))
     fm.spawn(fm.persist_loop())
     fm.spawn(feed_health_loop())
     fm.spawn(_socket_bridge(app))

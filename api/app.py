@@ -18,12 +18,13 @@ a wrong number on a chart.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import secrets
 import time
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
@@ -34,8 +35,12 @@ from config import Settings, get_settings
 from contracts.market import MarketSnapshot
 from contracts.signals import AnalysisResult
 from ensemble.calibration import Calibrator
+from orchestrator.diagnostics import DiagnosticCollector
+from orchestrator.startup_validator import StartupValidator
 from pipeline import PipelineDeps, analyse
 from risk.gates import AccountState
+from services.auth import AuthService
+from services.db import Database
 
 log = logging.getLogger("omnicee.api")
 
@@ -77,6 +82,19 @@ class CalibrationFitRequest(BaseModel):
     wins: list[int] = Field(..., min_length=1, max_length=50_000)
 
 
+async def _run_startup_validation(app: FastAPI) -> None:
+    """Background readiness checks. Never blocks boot (Render's health probe
+    must be answered promptly) and never kills the process: the verdict is
+    logged and exposed on /api/system-status."""
+    try:
+        app.state.startup_report = await StartupValidator(
+            app.state.settings, app.state.db).run_all_checks()
+    except Exception:
+        log.exception("startup validation crashed")
+        app.state.startup_report = {"passed": False, "criticalIssues": ["startup validation crashed"],
+                                    "warnings": []}
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cfg = get_settings()
@@ -86,21 +104,29 @@ async def lifespan(app: FastAPI):
         "brain starting",
         extra={"env": cfg.NODE_ENV, "symbols": len(cfg.symbols), "version": SERVICE_VERSION},
     )
+    # Always present, engine or not: the auth middleware and /api/system-status
+    # depend on them. Database connects lazily and is inert without MONGODB_URI.
+    app.state.diagnostics = DiagnosticCollector()
+    app.state.startup_report = None
+    app.state.db = Database(
+        cfg.MONGODB_URI, cfg.MONGODB_DB, cfg.MONGODB_MAX_POOL,
+        cfg.MONGODB_SIGNAL_TTL_DAYS, cfg.MONGODB_TELEMETRY_TTL_DAYS,
+        cfg.DISABLE_MONGO_SIGNALS)
+    app.state.auth = AuthService(cfg, app.state.db)
+    validator_task = asyncio.create_task(_run_startup_validation(app))
     # ---- full backend wiring (feeds + engine + socket bridge) ----
     # Never under pytest: live WS feeds would keep the loop alive forever.
     if not cfg.DISABLE_ENGINE and cfg.NODE_ENV != "test":
         from services.bus import EventBus
-        from services.db import Database
 
         from .server import start_backend
 
         app.state.bus = EventBus()
-        app.state.db = Database(
-            cfg.MONGODB_URI, cfg.MONGODB_DB, cfg.MONGODB_MAX_POOL,
-            cfg.MONGODB_SIGNAL_TTL_DAYS, cfg.MONGODB_TELEMETRY_TTL_DAYS,
-            cfg.DISABLE_MONGO_SIGNALS)
         app.state.backend = await start_backend(app)
     yield
+    validator_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await validator_task
     engine = getattr(app.state, "engine", None)
     if engine:
         engine.stop()
@@ -113,7 +139,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="OMNICee Brain",
     version=SERVICE_VERSION,
-    description="Analytical core. Consumed by the OMNICee Node edge, never by browsers.",
+    description="OMNICee backend: feeds, analysis engine, REST + Socket.IO, and the dashboard.",
     lifespan=lifespan,
     docs_url="/docs",
     openapi_url="/openapi.json",
@@ -141,6 +167,32 @@ def require_secret(
 
 
 @app.middleware("http")
+async def dashboard_auth(request: Request, call_next):
+    """Enforce the dashboard auth policy (see AuthService.requires_credentials).
+
+    Registered before ``request_context`` on purpose: Starlette runs the
+    last-registered middleware outermost, so a 401 from here still gets a
+    request id, timing and security headers.
+    """
+    path = request.url.path
+    auth: AuthService | None = getattr(request.app.state, "auth", None)
+    if auth is None:
+        if path.startswith("/api/"):  # lifespan has not finished: fail closed
+            return JSONResponse(status_code=503, content={"error": "service starting"})
+        return await call_next(request)
+    # Credential checks can hit Mongo (sync driver): keep them off the loop.
+    if auth.requires_credentials(request.method, path) and not await asyncio.to_thread(
+            auth.has_valid_credentials, request.headers):
+        log.info("unauthenticated request rejected",
+                 extra={"path": path, "method": request.method,
+                        "request_id": getattr(request.state, "request_id", None)})
+        return JSONResponse(status_code=401, content={
+            "error": "authentication required",
+            "requestId": getattr(request.state, "request_id", None)})
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def request_context(request: Request, call_next):
     rid = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
     request.state.request_id = rid
@@ -156,6 +208,9 @@ async def request_context(request: Request, call_next):
         )
     response.headers["x-request-id"] = rid
     response.headers["x-response-time-ms"] = f"{(time.perf_counter() - started) * 1000:.1f}"
+    # No X-Frame-Options: the dashboard runs inside Telegram's Mini App webview.
+    response.headers.setdefault("x-content-type-options", "nosniff")
+    response.headers.setdefault("referrer-policy", "strict-origin-when-cross-origin")
     return response
 
 
@@ -218,6 +273,10 @@ from .server import router as api_router  # noqa: E402
 from .server import sio  # noqa: E402
 
 app.include_router(api_router)
+
+from .system import router as system_router  # noqa: E402
+
+app.include_router(system_router)
 
 import socketio as _socketio  # noqa: E402
 
